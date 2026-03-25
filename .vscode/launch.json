@@ -2,15 +2,17 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug AliceViewer",
-            "type": "cppvsdbg",
+            "name": "Clang-LLD Build and Debug",
+            "type": "cppdbg",
             "request": "launch",
-            "program": "${command:cmake.launchTargetPath}",
+            "program": "${workspaceFolder}/build/AliceViewer.exe",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [],
-            "console": "externalTerminal"
+            "externalConsole": false,
+            "MIMode": "lldb",
+            "miDebuggerPath": "lldb.exe"
         }
     ]
 }

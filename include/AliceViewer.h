@@ -130,7 +130,7 @@ public:
     unsigned int vao, vbo;
     int gridVertexCount;
 
-    void init();
+    int init();
     void run();
     void cleanup();
 };

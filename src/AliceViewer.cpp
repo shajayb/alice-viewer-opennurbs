@@ -6,6 +6,8 @@
 #include <imgui_impl_opengl3.h>
 #include <vector>
 #include <algorithm>
+#include <iostream>
+#include <cstdlib>
 
 static const char* vertexShaderSource = R"(#version 410 core
 layout(location = 0) in vec3 position;
@@ -39,16 +41,34 @@ M4 ArcballCamera::getViewMatrix() const
     return lookAt(eye, focusPoint, { 0.0f, 0.0f, 1.0f });
 }
 
-void AliceViewer::init()
+int AliceViewer::init()
 {
-    glfwInit();
+    if (!glfwInit())
+    {
+        return EXIT_FAILURE;
+    }
+    
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
     
     window = glfwCreateWindow(1280, 720, "AliceViewer - CAD Engine", nullptr, nullptr);
+    if (window == nullptr)
+    {
+        std::cerr << "ERROR: glfwCreateWindow returned NULL" << std::endl;
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+
     glfwMakeContextCurrent(window);
-    gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+    {
+        std::cerr << "ERROR: gladLoadGLLoader returned NULL" << std::endl;
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
     
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -57,7 +77,7 @@ void AliceViewer::init()
 
     camera.focusPoint = { 0.0f, 0.0f, 0.0f };
     camera.distance = 20.0f;
-    camera.yaw = 0.785f; // 45 degrees
+    camera.yaw = 0.785f; 
     camera.pitch = 0.6f;
     camera.lastMouseX = 0.0f;
     camera.lastMouseY = 0.0f;
@@ -78,7 +98,9 @@ void AliceViewer::init()
     glDeleteShader(vs);
     glDeleteShader(fs);
 
+    // Contiguous memory for high performance and instruction density
     std::vector<float> gridData;
+    gridData.reserve(41 * 4 * 3);
     for (int i = -20; i <= 20; ++i)
     {
         gridData.push_back((float)i); gridData.push_back(-20.0f); gridData.push_back(0.0f);
@@ -87,7 +109,7 @@ void AliceViewer::init()
         gridData.push_back(-20.0f); gridData.push_back((float)i); gridData.push_back(0.0f);
         gridData.push_back(20.0f); gridData.push_back((float)i); gridData.push_back(0.0f);
     }
-    gridVertexCount = (int)(gridData.size() / 3);
+    gridVertexCount = static_cast<int>(gridData.size() / 3);
 
     glGenVertexArrays(1, &vao);
     glGenBuffers(1, &vbo);
@@ -96,6 +118,8 @@ void AliceViewer::init()
     glBufferData(GL_ARRAY_BUFFER, gridData.size() * sizeof(float), gridData.data(), GL_STATIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
+
+    return EXIT_SUCCESS;
 }
 
 void AliceViewer::run()
@@ -112,20 +136,20 @@ void AliceViewer::run()
         
         double mouseX, mouseY;
         glfwGetCursorPos(window, &mouseX, &mouseY);
-        float dx = (float)mouseX - camera.lastMouseX;
-        float dy = (float)mouseY - camera.lastMouseY;
-        camera.lastMouseX = (float)mouseX;
-        camera.lastMouseY = (float)mouseY;
+        float dx = static_cast<float>(mouseX) - camera.lastMouseX;
+        float dy = static_cast<float>(mouseY) - camera.lastMouseY;
+        camera.lastMouseX = static_cast<float>(mouseX);
+        camera.lastMouseY = static_cast<float>(mouseY);
 
         if (!io.WantCaptureMouse)
         {
-            // Left Mouse Button: Orbit / Tumble
+            // Left Mouse Button: Orbit
             if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS)
             {
                 camera.yaw -= dx * 0.005f;
                 camera.pitch += dy * 0.005f;
             }
-            // Middle Mouse Button: Track / Pan
+            // Middle Mouse Button: Pan (CAD Mapping 1:1)
             else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS)
             {
                 float cosPitch = cosf(camera.pitch);
@@ -147,13 +171,12 @@ void AliceViewer::run()
                 camera.focusPoint = add(camera.focusPoint, mul(right, -dx * panScale));
                 camera.focusPoint = add(camera.focusPoint, mul(up, dy * panScale));
             }
-            // Right Mouse Button: Dolly / Smooth Zoom
+            // Right Mouse Button: Dolly (CAD Mapping 1:1)
             else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
             {
                 camera.distance += dy * 0.1f;
             }
 
-            // Scroll Wheel: Stepped Zoom
             if (io.MouseWheel != 0.0f)
             {
                 if (io.MouseWheel > 0.0f)
@@ -167,42 +190,35 @@ void AliceViewer::run()
             }
         }
 
-        // Constraints
-        camera.pitch = std::max(-1.55f, std::min(1.55f, camera.pitch)); // approx -89 to 89 degrees
-        if (camera.distance < 0.1f)
-        {
-            camera.distance = 0.1f;
-        }
+        camera.pitch = std::clamp(camera.pitch, -1.55f, 1.55f);
+        camera.distance = std::max(0.1f, camera.distance);
 
         int width, height;
         glfwGetFramebufferSize(window, &width, &height);
-        if (width <= 0 || height <= 0)
+        if (width > 0 && height > 0)
         {
-            continue;
+            glViewport(0, 0, width, height);
+            glClearColor(0.85f, 0.85f, 0.85f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glEnable(GL_DEPTH_TEST);
+
+            float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
+            M4 projection = perspective(0.785f, aspectRatio, 0.1f, 1000.0f);
+            M4 view = camera.getViewMatrix();
+            M4 mvp = mult(projection, view);
+
+            glUseProgram(shaderProgram);
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "mvp"), 1, GL_FALSE, mvp.m);
+            
+            glBindVertexArray(vao);
+            glDrawArrays(GL_LINES, 0, gridVertexCount);
         }
-        
-        glViewport(0, 0, width, height);
-        glClearColor(0.85f, 0.85f, 0.85f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glEnable(GL_DEPTH_TEST);
 
-        float aspectRatio = (float)width / (float)height;
-        M4 projection = perspective(0.785f, aspectRatio, 0.1f, 1000.0f);
-        M4 view = camera.getViewMatrix();
-        M4 mvp = mult(projection, view);
-
-        glUseProgram(shaderProgram);
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "mvp"), 1, GL_FALSE, mvp.m);
-        
-        glBindVertexArray(vao);
-        glDrawArrays(GL_LINES, 0, gridVertexCount);
-
-        ImGui::Begin("Camera Debug");
+        ImGui::Begin("CAD Engine Performance");
         ImGui::Text("Yaw: %.3f", camera.yaw);
         ImGui::Text("Pitch: %.3f", camera.pitch);
         ImGui::Text("Distance: %.3f", camera.distance);
-        ImGui::Text("Focus: %.2f, %.2f, %.2f", camera.focusPoint.x, camera.focusPoint.y, camera.focusPoint.z);
-        if (ImGui::Button("Reset Camera"))
+        if (ImGui::Button("Reset View"))
         {
             camera.focusPoint = { 0.0f, 0.0f, 0.0f };
             camera.distance = 20.0f;

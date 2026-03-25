@@ -1,0 +1,11 @@
+{
+    "cmake.generator": "Ninja",
+    "cmake.configureOnOpen": true,
+    "C_Cpp.default.compilerPath": "clang-cl.exe",
+    "cmake.configureArgs": [
+        "-DCMAKE_TOOLCHAIN_FILE=C:/Users/shajay.b.ZAHA-HADID/source/repos/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "-DCMAKE_C_COMPILER=clang-cl",
+        "-DCMAKE_CXX_COMPILER=clang-cl",
+        "-DCMAKE_MT=C:/Program Files/LLVM/bin/llvm-mt.exe"
+    ]
+}

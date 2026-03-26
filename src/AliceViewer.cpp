@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <vector>
 #include <chrono>
+#include <cstddef>
 
 #define MAX_PRIMITIVE_BATCH 16384
 
@@ -71,7 +72,7 @@ extern "C"
 // --- Internal State ---
 static AliceViewer* g_instance = nullptr;
 static M4 g_currentMVP;
-static float g_currentColor[3] = { 0.17f, 0.17f, 0.17f };
+static V3 g_currentVertexColor = { 0.5f, 0.5f, 0.5f };
 
 // --- PerfTuner Implementation ---
 void AliceViewer::PerfTuner::tune(float dt, double flushUs)
@@ -85,7 +86,7 @@ void AliceViewer::PerfTuner::tune(float dt, double flushUs)
     }
 
     const float budgetMs = 16.66f;
-    if (frameDeltaMs > budgetMs || flushUs > 5000.0) // If frame is slow or flush takes > 5ms
+    if (frameDeltaMs > budgetMs || flushUs > 5000.0)
     {
         currentBatchThreshold = std::max(1024, currentBatchThreshold - 1024);
         printf("[TUNER] FrameTime: %.2f ms | FlushTime: %.2f us | Adjusted Batch Limit: %d\n", frameDeltaMs, (float)lastFlushTimeUs, currentBatchThreshold);
@@ -100,7 +101,7 @@ void AliceViewer::PerfTuner::tune(float dt, double flushUs)
 struct PrimitiveBatch
 {
     unsigned int vao, vbo;
-    V3 vertices[MAX_PRIMITIVE_BATCH];
+    Vertex vertices[MAX_PRIMITIVE_BATCH];
     int count;
     int type;
 
@@ -113,8 +114,15 @@ struct PrimitiveBatch
         glBindVertexArray(vao);
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), nullptr, GL_STREAM_DRAW);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        
+        // Location 0: Position
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
         glEnableVertexAttribArray(0);
+        
+        // Location 1: Color
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, color));
+        glEnableVertexAttribArray(1);
+        
         glBindVertexArray(0);
     }
 
@@ -132,16 +140,15 @@ struct PrimitiveBatch
             glBindVertexArray(vao);
             glBindBuffer(GL_ARRAY_BUFFER, vbo);
             
-            void* ptr = glMapBufferRange(GL_ARRAY_BUFFER, 0, count * sizeof(V3), GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
+            void* ptr = glMapBufferRange(GL_ARRAY_BUFFER, 0, count * sizeof(Vertex), GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
             if (ptr)
             {
-                memcpy(ptr, vertices, count * sizeof(V3));
+                memcpy(ptr, vertices, count * sizeof(Vertex));
                 glUnmapBuffer(GL_ARRAY_BUFFER);
             }
 
             glUseProgram(g_instance->shaderProgram);
             glUniformMatrix4fv(glGetUniformLocation(g_instance->shaderProgram, "mvp"), 1, 0, g_currentMVP.m);
-            glUniform3fv(glGetUniformLocation(g_instance->shaderProgram, "uColor"), 1, g_currentColor);
             glDrawArrays(type, 0, count);
             count = 0;
 
@@ -155,14 +162,16 @@ struct PrimitiveBatch
         }
     }
 
-    void add(V3 p)
+    void add(V3 p, V3 c)
     {
         int threshold = g_instance ? g_instance->tuner.currentBatchThreshold : MAX_PRIMITIVE_BATCH;
         if (count >= threshold - 1) 
         {
             flush();
         }
-        vertices[count++] = p;
+        vertices[count].pos = p;
+        vertices[count].color = c;
+        count++;
     }
 };
 
@@ -190,11 +199,7 @@ void V3::normalise()
 
 void aliceColor3f(float r, float g, float b) 
 { 
-    g_lineBatch.flush(); 
-    g_pointBatch.flush();
-    g_currentColor[0] = r; 
-    g_currentColor[1] = g; 
-    g_currentColor[2] = b; 
+    g_currentVertexColor = { r, g, b }; 
 }
 
 void backGround(float grey) 
@@ -211,33 +216,35 @@ void backGround(float r, float g, float b)
 
 void drawLine(V3 a, V3 b) 
 { 
-    g_lineBatch.add(a); 
-    g_lineBatch.add(b); 
+    g_lineBatch.add(a, g_currentVertexColor); 
+    g_lineBatch.add(b, g_currentVertexColor); 
 }
 
 void drawPoint(V3 p) 
 { 
-    g_pointBatch.add(p); 
+    g_pointBatch.add(p, g_currentVertexColor); 
 }
 
 void drawGrid(float size)
 {
-    float old[3] = { g_currentColor[0], g_currentColor[1], g_currentColor[2] };
+    V3 oldColor = g_currentVertexColor;
+    
     for (int i = (int)-size; i <= (int)size; ++i) 
     {
-        // Deep Charcoal #2D2D2D
         if (i == 0) 
         {
-            aliceColor3f(0.176f, 0.176f, 0.176f);
+            g_currentVertexColor = { 0.2f, 0.2f, 0.2f };
         }
         else 
         {
-            aliceColor3f(0.4f, 0.4f, 0.4f);
+            g_currentVertexColor = { 0.5f, 0.5f, 0.5f };
         }
+        
         drawLine({ (float)i, -size, 0 }, { (float)i, size, 0 });
         drawLine({ -size, (float)i, 0 }, { size, (float)i, 0 });
     }
-    aliceColor3f(old[0], old[1], old[2]);
+    
+    g_currentVertexColor = oldColor;
 }
 
 void alicePointSize(float size) 
@@ -306,12 +313,12 @@ static M4 mult(M4 a, M4 b)
     R[3] = A[3]*B[0] + A[7]*B[1] + A[11]*B[2] + A[15]*B[3];
 
     R[4] = A[0]*B[4] + A[4]*B[5] + A[8]*B[6] + A[12]*B[7];
-    R[5] = A[1]*B[4] + A[5]*B[5] + A[9]*B[6] + A[13]*B[7];
-    R[6] = A[2]*B[4] + A[6]*B[5] + A[10]*B[6] + A[14]*B[7];
+    R[5] = A[1]*B[4] + A[5]*B[5] + A[9]*B[2] + A[13]*B[3];
+    R[6] = A[2]*B[4] + A[6]*B[5] + A[10]*B[6] + A[14]*B[3];
     R[7] = A[3]*B[4] + A[7]*B[5] + A[11]*B[6] + A[15]*B[7];
 
     R[8] = A[0]*B[8] + A[4]*B[9] + A[8]*B[10] + A[12]*B[11];
-    R[9] = A[1]*B[8] + A[5]*B[9] + A[9]*B[10] + A[13]*B[11];
+    R[9] = A[1]*B[8] + A[5]*B[9] + A[9]*B[2] + A[13]*B[3];
     R[10] = A[2]*B[8] + A[6]*B[9] + A[10]*B[10] + A[14]*B[11];
     R[11] = A[3]*B[8] + A[7]*B[9] + A[11]*B[10] + A[15]*B[11];
 
@@ -557,18 +564,41 @@ int AliceViewer::init()
     glfwGetCursorPos(window, &mx, &my);
     camera.lastMouseX = (float)mx; 
     camera.lastMouseY = (float)my;
-    const char* vsSrc = "#version 400 core\nlayout(location=0) in vec3 pos; uniform mat4 mvp; void main(){gl_Position=mvp*vec4(pos,1.0);}";
-    const char* fsSrc = "#version 400 core\nuniform vec3 uColor; out vec4 color; void main(){color=vec4(uColor,1.0);}";
+    
+    const char* vsSrc = 
+        "#version 400 core\n"
+        "layout(location=0) in vec3 pos;\n"
+        "layout(location=1) in vec3 inColor;\n"
+        "uniform mat4 mvp;\n"
+        "out vec3 fragColor;\n"
+        "void main()\n"
+        "{\n"
+        "    gl_Position = mvp * vec4(pos, 1.0);\n"
+        "    fragColor = inColor;\n"
+        "}";
+        
+    const char* fsSrc = 
+        "#version 400 core\n"
+        "in vec3 fragColor;\n"
+        "out vec4 color;\n"
+        "void main()\n"
+        "{\n"
+        "    color = vec4(fragColor, 1.0);\n"
+        "}";
+
     unsigned int vs = glCreateShader(GL_VERTEX_SHADER); 
     glShaderSource(vs, 1, &vsSrc, 0); 
     glCompileShader(vs);
+    
     unsigned int fs = glCreateShader(GL_FRAGMENT_SHADER); 
     glShaderSource(fs, 1, &fsSrc, 0); 
     glCompileShader(fs);
+    
     shaderProgram = glCreateProgram(); 
     glAttachShader(shaderProgram, vs); 
     glAttachShader(shaderProgram, fs); 
     glLinkProgram(shaderProgram);
+    
     g_pointBatch.init(GL_POINTS); 
     g_lineBatch.init(GL_LINES);
     setup(); 
@@ -623,12 +653,11 @@ void AliceViewer::run()
 #endif
             g_lineBatch.flush(); 
             g_pointBatch.flush();
-            }
+        }
 
-            tuner.tune(dt, tuner.lastFlushTimeUs);
+        tuner.tune(dt, tuner.lastFlushTimeUs);
 
-            ImGui::Render(); 
- 
+        ImGui::Render(); 
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
     }
@@ -698,9 +727,9 @@ void aliceTestDraw()
 
     drawGrid(50);
     
-    // Stress Test: 1,000,000 Points
+    // Stress Test: Points
     aliceColor3f(1.0f, 0.5f, 0.0f);
-    for (int i = 0; i < 100000; ++i) // Reduced for interactive stability, but enough to trigger tuner
+    for (int i = 0; i < 100000; ++i)
     {
         float x = (float)(i % 1000) - 500.0f;
         float y = (float)(i / 1000) - 500.0f;

@@ -54,6 +54,12 @@ struct V3
     void normalise();
 };
 
+struct Vertex
+{
+    V3 pos;
+    V3 color;
+};
+
 struct alignas(16) V4
 {
     float x, y, z, w;

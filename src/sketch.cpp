@@ -9,7 +9,7 @@ static float rotation = 0.0f;
 void setup()
 {
     printf("-------------------------------------------\n");
-    printf("Alice CAD Framework - Sketch Version 2.0.1\n");
+    printf("Alice CAD Framework - Sketch Version 2.0.2\n");
     printf("Controls:\n");
     printf("  Alt + LMB: Orbit\n");
     printf("  MMB: Pan\n");

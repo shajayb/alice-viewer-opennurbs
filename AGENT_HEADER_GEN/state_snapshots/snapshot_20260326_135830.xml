@@ -1,0 +1,57 @@
+<state_snapshot>
+    <overall_goal>
+        Enhance the AliceViewer framework (v2.0.1) with CAD-style camera interaction, UI control panels, camera bookmarks, and a robust, cross-platform CMake build system.
+    </overall_goal>
+
+    <active_constraints>
+        - **Build Tools:** Use CMake (`C:/Program Files/CMake/bin/cmake.exe`) and Ninja.
+        - **Toolchain:** Integrate vcpkg via `-DCMAKE_TOOLCHAIN_FILE="C:\Users\shajay.b.ZAHA-HADID\source\repos\vcpkg\scripts\buildsystems\vcpkg.cmake"`.
+        - **Compiler Requirement:** MSVC 19.29+ is MANDATORY to avoid STL version errors (`yvals_core.h`); use path `C:/Program Files (x86)/Microsoft Visual Studio/2019/Professional/VC/Tools/MSVC/14.29.30133/bin/HostX64/x64/cl.exe`.
+        - **Include Order:** In all `.cpp` files, `glad/glad.h` and `GLFW/glfw3.h` MUST be included BEFORE `AliceViewer.h` to prevent linkage redefinition errors (C2375).
+        - **Linker Rules:** Use the cross-platform `OpenGL::GL` target; do not hardcode `opengl32`.
+        - **UI Parity:** Framework internal callbacks and `sketch.cpp` must respect `ImGui::GetIO().WantCaptureMouse` to prevent click-through.
+        - **Interaction Safety:** `mousePress` in `sketch.cpp` must ignore `LMB` if `ALT` is held to separate point creation from camera orbiting.
+        - **Macro Discipline:** Internal framework files (e.g., `AliceViewer.cpp`) MUST define `#define ALICE_FRAMEWORK` before including `AliceViewer.h` to disable the shorthand macros that conflict with OpenGL loaders.
+    </active_constraints>
+
+    <key_knowledge>
+        - **Environment Setup:** Build environment must be initialized via `C:\Program Files (x86)\Microsoft Visual Studio\2019\Professional\VC\Auxiliary\Build\vcvars64.bat` to locate `kernel32.lib`.
+        - **Macro vs Namespace Collision:** Modern GL loaders (glad) often implement functions like `glPointSize` as macros. Consequently, calling `::glPointSize` fails on Linux/GCC because macros do not exist in the global namespace. Removing the `::` prefix allows the macro to expand correctly to the loader's internal symbol (e.g., `glad_glPointSize`).
+        - **Macro Redefinition Warnings:** Using `#undef` followed by `#define` in `AliceViewer.h` (guarded by `ALICE_FRAMEWORK`) allows the framework to provide shorthand aliases to the user while remaining compatible with standard GL headers included in other translation units.
+        - **Framework Versioning:** `AliceViewer::init()` emits ">>> AliceViewer Framework v2.0.1 Loaded <<<".
+        - **Camera Bookmarks (Radians):** Top (1.57, 0.0), Front (0.0, 0.0), Back (0.0, 3.14159), Left (0.0, -1.5708), Right (0.0, 1.5708), Perspective (0.6, 0.8).
+        - **Projection Math:** `screenToWorld` performs NDC unprojection via `invert(Projection * View)` and calculates a Ray-Plane intersection at the $Z=0$ plane.
+    </key_knowledge>
+
+    <artifact_trail>
+        - `include/AliceViewer.h`: Wrapped shorthand macros (`glColor3f`, `glPointSize`, `glLineWidth`) in an `#ifndef ALICE_FRAMEWORK` guard. Added pre-emptive `#undef` calls to prevent C4005 redefinition warnings in user code.
+        - `src/AliceViewer.cpp`: 
+            - Added `#define ALICE_FRAMEWORK` to isolate framework internals from user-facing macros.
+            - Removed `::` prefix from `glPointSize` and `glLineWidth` calls to fix compilation on Ubuntu/GitHub Actions.
+            - Removed manual `#undef` for GL macros as they are now handled in the header.
+        - `src/sketch.cpp`: Reordered headers; updated `setup()` help text; added `ALT` key guard to `mousePress()`.
+        - `CMakeLists.txt`: Configured for cross-platform OpenGL linking via `OpenGL::GL` and ensured correct toolchain usage.
+    </artifact_trail>
+
+    <file_system_state>
+        - CWD: `C:\Users\shajay.b.ZAHA-HADID\source\repos\AliceViewer_Scaffold`
+        - BUILD_DIR: `build/` (Target: `AliceViewer.exe`)
+        - RELEVANT_FILES: `include/AliceViewer.h`, `src/AliceViewer.cpp`, `src/sketch.cpp`, `CMakeLists.txt`, `vcpkg.json`.
+    </file_system_state>
+
+    <recent_actions>
+        - FIXED: Resolved Ubuntu/GitHub Actions build failure where `::glPointSize` caused compilation errors (Macros cannot be namespace-qualified).
+        - FIXED: Eliminated "macro redefinition" warnings (C4005) on Windows by introducing the `ALICE_FRAMEWORK` guard in the header.
+        - REFACTORED: Updated `AliceViewer.h` and `.cpp` to provide a clean separation between framework implementation and user-level shorthand API.
+    </recent_actions>
+
+    <task_state>
+        1. [DONE] Re-map Camera Interaction (Alt+LMB Orbit, MMB Pan, Alt+RMB Zoom).
+        2. [DONE] Implement Camera Bookmarks (Top, Front, Perspective, etc.).
+        3. [DONE] Add real-time UI for Camera stats and dynamic FoV slider.
+        4. [DONE] Fix Grid origin axis highlighting (X=0, Y=0).
+        5. [DONE] Resolve Cross-Platform Linker failure (`OpenGL::GL`).
+        6. [DONE] Correct Header/Macro collisions for Windows (MSVC) and Linux (GCC).
+        7. [READY] Framework stabilized and ready for multi-platform distribution.
+    </task_state>
+</state_snapshot>

@@ -1,11 +1,13 @@
-#include "AliceViewer.h"
+#define ALICE_FRAMEWORK
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include "AliceViewer.h"
 #include <cstdio>
 #include <iostream>
+#include <string>
 
 // --- MVC Weak Symbols ---
 #ifdef _MSC_VER
@@ -86,6 +88,7 @@ static PrimitiveBatch g_pointBatch;
 static PrimitiveBatch g_lineBatch;
 
 // --- Alice API Implementations ---
+
 void aliceColor3f(float r, float g, float b) 
 { 
     g_lineBatch.flush(); g_pointBatch.flush();
@@ -98,15 +101,16 @@ void drawPoint(V3 p) { g_pointBatch.add(p); }
 void drawGrid(float size)
 {
     float old[3] = { g_currentColor[0], g_currentColor[1], g_currentColor[2] };
-    aliceColor3f(0.5f, 0.5f, 0.5f);
     for (int i = (int)-size; i <= (int)size; ++i) {
+        if (i == 0) aliceColor3f(0.2f, 0.2f, 0.2f);
+        else aliceColor3f(0.5f, 0.5f, 0.5f);
         drawLine({ (float)i, -size, 0 }, { (float)i, size, 0 });
         drawLine({ -size, (float)i, 0 }, { size, (float)i, 0 });
     }
     aliceColor3f(old[0], old[1], old[2]);
 }
-void alicePointSize(float size) { ::glPointSize(size); }
-void aliceLineWidth(float width) { ::glLineWidth(width); }
+void alicePointSize(float size) { glPointSize(size); }
+void aliceLineWidth(float width) { glLineWidth(width); }
 
 // --- Internal Math ---
 static V3 nrm_v(V3 v) { v.normalise(); return v; }
@@ -167,6 +171,17 @@ M4 ArcballCamera::getViewMatrix() const
     V3 eye; float cp = cosf(pitch), sp = sinf(pitch), cy = cosf(yaw), sy = sinf(yaw);
     eye.x = focusPoint.x + distance * cp * sy; eye.y = focusPoint.y - distance * cp * cy; eye.z = focusPoint.z + distance * sp;
     return lookAt(eye, focusPoint, { 0, 0, 1 });
+}
+
+void ArcballCamera::setBookmark(const char* name)
+{
+    std::string s = name;
+    if (s == "Top") { pitch = 1.57f; yaw = 0.0f; }
+    else if (s == "Front") { pitch = 0.0f; yaw = 0.0f; }
+    else if (s == "Back") { pitch = 0.0f; yaw = 3.14159f; }
+    else if (s == "Left") { pitch = 0.0f; yaw = -1.5708f; }
+    else if (s == "Right") { pitch = 0.0f; yaw = 1.5708f; }
+    else if (s == "Perspective") { pitch = 0.6f; yaw = 0.8f; }
 }
 
 void ArcballCamera::update(GLFWwindow* window, float deltaTime)
@@ -237,7 +252,7 @@ V3 AliceViewer::screenToWorld(int x, int y, float planeZ)
     int w, h; glfwGetFramebufferSize(window, &w, &h);
     float nx = (2.0f * (float)x) / (float)w - 1.0f;
     float ny = 1.0f - (2.0f * (float)y) / (float)h;
-    M4 proj = perspective(0.8f, (float)w / (float)h, 0.1f, 1000.0f);
+    M4 proj = perspective(fov, (float)w / (float)h, 0.1f, 1000.0f);
     M4 view = camera.getViewMatrix();
     M4 invVP = invert(mult(proj, view));
     auto unproj = [&](float ndcX, float ndcY, float ndcZ) {
@@ -286,11 +301,30 @@ void AliceViewer::run()
         glfwPollEvents();
         float now = (float)glfwGetTime(), dt = now - lastTime; lastTime = now;
         ImGui_ImplOpenGL3_NewFrame(); ImGui_ImplGlfw_NewFrame(); ImGui::NewFrame();
+        
+        {
+            ImGui::Begin("Camera Controls");
+            if (ImGui::Button("Perspective")) camera.setBookmark("Perspective"); ImGui::SameLine();
+            if (ImGui::Button("Top")) camera.setBookmark("Top"); ImGui::SameLine();
+            if (ImGui::Button("Front")) camera.setBookmark("Front");
+            if (ImGui::Button("Back")) camera.setBookmark("Back"); ImGui::SameLine();
+            if (ImGui::Button("Left")) camera.setBookmark("Left"); ImGui::SameLine();
+            if (ImGui::Button("Right")) camera.setBookmark("Right");
+            
+            ImGui::Separator();
+            ImGui::Text("Stats:");
+            ImGui::Text("LookAt: %.2f, %.2f, %.2f", camera.focusPoint.x, camera.focusPoint.y, camera.focusPoint.z);
+            ImGui::Text("Yaw: %.2f, Pitch: %.2f", camera.yaw, camera.pitch);
+            ImGui::Text("Distance: %.2f", camera.distance);
+            ImGui::SliderFloat("FoV", &fov, 0.1f, 2.0f);
+            ImGui::End();
+        }
+
         update(dt); backGround(0.9f); camera.update(window, dt);
         int w, h; glfwGetFramebufferSize(window, &w, &h);
         if (w > 0 && h > 0) {
             glViewport(0, 0, w, h);
-            g_currentMVP = mult(perspective(0.8f, (float)w / h, 0.1f, 1000.0f), camera.getViewMatrix());
+            g_currentMVP = mult(perspective(fov, (float)w / h, 0.1f, 1000.0f), camera.getViewMatrix());
             glEnable(GL_DEPTH_TEST); draw();
             g_lineBatch.flush(); g_pointBatch.flush();
         }

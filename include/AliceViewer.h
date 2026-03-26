@@ -107,9 +107,22 @@ extern "C" {
 void backGround(float grey);
 void backGround(float r, float g, float b);
 
-#define glColor3f aliceColor3f
-#define glPointSize alicePointSize
-#define glLineWidth aliceLineWidth
+#ifndef ALICE_FRAMEWORK
+    #ifdef glColor3f
+        #undef glColor3f
+    #endif
+    #define glColor3f aliceColor3f
+
+    #ifdef glPointSize
+        #undef glPointSize
+    #endif
+    #define glPointSize alicePointSize
+
+    #ifdef glLineWidth
+        #undef glLineWidth
+    #endif
+    #define glLineWidth aliceLineWidth
+#endif
 
 // --- Math Utilities ---
 inline V3 nrm(V3 v) { v.normalise(); return v; }

@@ -1,3 +1,4 @@
+#define ALICE_FRAMEWORK
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -87,9 +88,6 @@ static PrimitiveBatch g_pointBatch;
 static PrimitiveBatch g_lineBatch;
 
 // --- Alice API Implementations ---
-#undef glColor3f
-#undef glPointSize
-#undef glLineWidth
 
 void aliceColor3f(float r, float g, float b) 
 { 
@@ -111,8 +109,8 @@ void drawGrid(float size)
     }
     aliceColor3f(old[0], old[1], old[2]);
 }
-void alicePointSize(float size) { ::glPointSize(size); }
-void aliceLineWidth(float width) { ::glLineWidth(width); }
+void alicePointSize(float size) { glPointSize(size); }
+void aliceLineWidth(float width) { glLineWidth(width); }
 
 // --- Internal Math ---
 static V3 nrm_v(V3 v) { v.normalise(); return v; }

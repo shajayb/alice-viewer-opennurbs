@@ -17,6 +17,7 @@ add_executable(AliceViewer
 # Assuming vcpkg is used for dependencies
 find_package(glad CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
+find_package(OpenGL REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 
 # Link the required libraries (OpenGL, GLFW, GLAD, ImGui)
@@ -24,10 +25,10 @@ target_link_libraries(AliceViewer PRIVATE
     glad::glad
     glfw
     imgui::imgui
-    opengl32
+    OpenGL::GL
 )
 
 # If ImGui does not export imgui::imgui target with bindings, you may need to add them.
 # vcpkg's imgui provides imgui::imgui, imgui::imgui_impl_glfw, imgui::imgui_impl_opengl3
 # If so, uncomment the following instead:
-# target_link_libraries(AliceViewer PRIVATE glad::glad glfw imgui::imgui imgui::imgui_impl_glfw imgui::imgui_impl_opengl3 opengl32)
+# target_link_libraries(AliceViewer PRIVATE glad::glad glfw imgui::imgui imgui::imgui_impl_glfw imgui::imgui_impl_opengl3 OpenGL::GL)

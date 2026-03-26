@@ -1,9 +1,9 @@
-#include "AliceViewer.h"
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include "AliceViewer.h"
 #include <cstdio>
 #include <iostream>
 #include <string>
@@ -87,6 +87,10 @@ static PrimitiveBatch g_pointBatch;
 static PrimitiveBatch g_lineBatch;
 
 // --- Alice API Implementations ---
+#undef glColor3f
+#undef glPointSize
+#undef glLineWidth
+
 void aliceColor3f(float r, float g, float b) 
 { 
     g_lineBatch.flush(); g_pointBatch.flush();

@@ -1,7 +1,7 @@
-#include "AliceViewer.h"
 #include <vector>
 #include <cstdio>
 #include <GLFW/glfw3.h>
+#include "AliceViewer.h"
 
 static std::vector<V3> points;
 static float rotation = 0.0f;

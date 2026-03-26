@@ -14,36 +14,15 @@ struct V3
     V3() : x(0), y(0), z(0) {}
     V3(float _x, float _y, float _z) : x(_x), y(_y), z(_z) {}
     
-    V3 operator+(const V3& v) const 
-    { 
-        return { x + v.x, y + v.y, z + v.z }; 
-    }
-    V3 operator-(const V3& v) const 
-    { 
-        return { x - v.x, y - v.y, z - v.z }; 
-    }
-    V3 operator*(float s) const 
-    { 
-        return { x * s, y * s, z * s }; 
-    }
-    V3 operator/(float s) const 
-    { 
-        return { x / s, y / s, z / s }; 
-    }
+    V3 operator+(const V3& v) const { return { x + v.x, y + v.y, z + v.z }; }
+    V3 operator-(const V3& v) const { return { x - v.x, y - v.y, z - v.z }; }
+    V3 operator*(float s) const { return { x * s, y * s, z * s }; }
+    V3 operator/(float s) const { return { x / s, y / s, z / s }; }
     
-    V3& operator+=(const V3& v) 
-    { 
-        x += v.x; y += v.y; z += v.z; return *this; 
-    }
-    V3& operator-=(const V3& v) 
-    { 
-        x -= v.x; y -= v.y; z -= v.z; return *this; 
-    }
+    V3& operator+=(const V3& v) { x += v.x; y += v.y; z += v.z; return *this; }
+    V3& operator-=(const V3& v) { x -= v.x; y -= v.y; z -= v.z; return *this; }
     
-    float length() const 
-    { 
-        return sqrtf(x * x + y * y + z * z); 
-    }
+    float length() const { return sqrtf(x * x + y * y + z * z); }
     void normalise() 
     { 
         float l = length(); 
@@ -51,17 +30,7 @@ struct V3
     }
 };
 
-struct V4
-{
-    float x, y, z, w;
-    V4() : x(0), y(0), z(0), w(0) {}
-    V4(float _x, float _y, float _z, float _w) : x(_x), y(_y), z(_z), w(_w) {}
-};
-
-namespace Alice 
-{ 
-    using vec = V3; 
-}
+namespace Alice { using vec = V3; }
 
 struct M4
 {
@@ -78,14 +47,13 @@ struct ArcballCamera
     float lastMouseY;
 
     M4 getViewMatrix() const;
+    M4 getProjectionMatrix(float aspect) const;
     void update(struct GLFWwindow* window, float deltaTime);
-    void setBookmark(const char* name);
 };
 
 #pragma pack(pop)
 
 // --- MVC "Sketch" Interface (Weak Symbols / Externs) ---
-// ... (rest of extern "C" remains the same)
 extern "C" {
     void setup();
     void update(float deltaTime);
@@ -94,7 +62,7 @@ extern "C" {
     void mousePress(int button, int state, int x, int y);
     void mouseMotion(int x, int y);
 
-    // --- Alice CAD Framework Primitive API (C-Linkage compatible) ---
+    // --- Alice CAD Framework Primitive API ---
     void drawGrid(float size);
     void drawPoint(V3 pt);
     void drawLine(V3 a, V3 b);
@@ -103,9 +71,10 @@ extern "C" {
     void aliceLineWidth(float width);
 }
 
-// C++ Overloads (Not in extern "C")
+// C++ Overloads
 void backGround(float grey);
 void backGround(float r, float g, float b);
+V3 screenToWorld(int x, int y);
 
 #define glColor3f aliceColor3f
 #define glPointSize alicePointSize
@@ -124,14 +93,10 @@ public:
     GLFWwindow* window;
     ArcballCamera camera;
     unsigned int shaderProgram;
-    float fov = 0.8f;
 
     int init();
     void run();
     void cleanup();
-    
-    // Utility for coordinate space transformation
-    V3 screenToWorld(int screenX, int screenY, float planeZ = 0.0f);
     
     static AliceViewer* instance();
 };

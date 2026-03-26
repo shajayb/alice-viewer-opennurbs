@@ -1,27 +1,33 @@
-cmake_minimum_required(VERSION 3.20)
-project(AliceViewer LANGUAGES CXX C)
+cmake_minimum_required(VERSION 3.15)
+project(AliceViewer)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(glfw3 CONFIG REQUIRED)
-find_package(imgui CONFIG REQUIRED)
-find_package(glad CONFIG REQUIRED)
+# Include directories (assuming you move 'include' to the root)
+include_directories(include)
 
+# Add the executable with the new sketch paradigm files
 add_executable(AliceViewer
     src/main.cpp
     src/AliceViewer.cpp
-    include/AliceViewer.h
+    src/sketch.cpp
 )
 
-target_include_directories(AliceViewer PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
+# Assuming vcpkg is used for dependencies
+find_package(glad CONFIG REQUIRED)
+find_package(glfw3 CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
-find_package(OpenGL REQUIRED)
+# Link the required libraries (OpenGL, GLFW, GLAD, ImGui)
 target_link_libraries(AliceViewer PRIVATE
+    glad::glad
     glfw
     imgui::imgui
-    glad::glad
-    OpenGL::GL
+    opengl32
 )
+
+# If ImGui does not export imgui::imgui target with bindings, you may need to add them.
+# vcpkg's imgui provides imgui::imgui, imgui::imgui_impl_glfw, imgui::imgui_impl_opengl3
+# If so, uncomment the following instead:
+# target_link_libraries(AliceViewer PRIVATE glad::glad glfw imgui::imgui imgui::imgui_impl_glfw imgui::imgui_impl_opengl3 opengl32)

@@ -4,7 +4,7 @@
 int main()
 {
     AliceViewer viewer;
-    if (viewer.init() != EXIT_SUCCESS)
+    if (viewer.init() != 0)
     {
         return EXIT_FAILURE;
     }

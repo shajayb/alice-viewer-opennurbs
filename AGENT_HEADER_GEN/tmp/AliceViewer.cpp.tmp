@@ -113,21 +113,27 @@ static V3 nrm_v(V3 v) { v.normalise(); return v; }
 static float dot_v(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 static V3 crs_v(V3 a, V3 b) { return { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x }; }
 
-static M4 lookAt(V3 eye, V3 target, V3 up)
+M4 lookAt(V3 eye, V3 target, V3 up)
 {
-    V3 f = nrm_v(target - eye), s = nrm_v(crs_v(f, up)), v = crs_v(s, f);
+    V3 f = nrm_v(target - eye);
+    V3 worldUp = up;
+    if (std::abs(dot_v(f, worldUp)) > 0.99f) worldUp = {0, 1, 0}; // Fix singularity
+    V3 s = nrm_v(crs_v(f, worldUp));
+    V3 v = crs_v(s, f);
     M4 r = { 0 };
-    r.m[0] = s.x; r.m[4] = s.y; r.m[8] = s.z; r.m[1] = v.x; r.m[5] = v.y; r.m[9] = v.z;
-    r.m[2] = -f.x; r.m[6] = -f.y; r.m[10] = -f.z; r.m[12] = -dot_v(s, eye); r.m[13] = -dot_v(v, eye);
-    r.m[14] = dot_v(f, eye); r.m[15] = 1.0f; return r;
+    r.m[0] = s.x; r.m[4] = s.y; r.m[8] = s.z;
+    r.m[1] = v.x; r.m[5] = v.y; r.m[9] = v.z;
+    r.m[2] = -f.x; r.m[6] = -f.y; r.m[10] = -f.z;
+    r.m[12] = -dot_v(s, eye); r.m[13] = -dot_v(v, eye); r.m[14] = dot_v(f, eye); r.m[15] = 1.0f;
+    return r;
 }
-static M4 perspective(float fov, float asp, float n, float f)
+M4 perspective(float fov, float asp, float n, float f)
 {
     float tn = tanf(fov * 0.5f); M4 r = { 0 };
     r.m[0] = 1.0f / (asp * tn); r.m[5] = 1.0f / tn; r.m[10] = -(f + n) / (f - n);
     r.m[11] = -1.0f; r.m[14] = -(2.0f * f * n) / (f - n); return r;
 }
-static M4 mult(M4 a, M4 b)
+M4 mult(M4 a, M4 b)
 {
     M4 r = { 0 };
     for (int j = 0; j < 4; ++j) for (int i = 0; i < 4; ++i) for (int k = 0; k < 4; ++k)
@@ -135,38 +141,18 @@ static M4 mult(M4 a, M4 b)
     return r;
 }
 
-static M4 invert(const M4& m)
-{
-    float inv[16], det;
-    const float* m_ = m.m;
-    inv[0] = m_[5]*m_[10]*m_[15] - m_[5]*m_[11]*m_[14] - m_[9]*m_[6]*m_[15] + m_[9]*m_[7]*m_[14] + m_[13]*m_[6]*m_[11] - m_[13]*m_[7]*m_[10];
-    inv[4] = -m_[4]*m_[10]*m_[15] + m_[4]*m_[11]*m_[14] + m_[8]*m_[6]*m_[15] - m_[8]*m_[7]*m_[14] - m_[12]*m_[6]*m_[11] + m_[12]*m_[7]*m_[10];
-    inv[8] = m_[4]*m_[9]*m_[15] - m_[4]*m_[11]*m_[13] - m_[8]*m_[5]*m_[15] + m_[8]*m_[7]*m_[13] + m_[12]*m_[5]*m_[11] - m_[12]*m_[7]*m_[9];
-    inv[12] = -m_[4]*m_[9]*m_[14] + m_[4]*m_[10]*m_[13] + m_[8]*m_[5]*m_[14] - m_[8]*m_[6]*m_[13] - m_[12]*m_[5]*m_[10] + m_[12]*m_[6]*m_[9];
-    inv[1] = -m_[1]*m_[10]*m_[15] + m_[1]*m_[11]*m_[14] + m_[9]*m_[2]*m_[15] - m_[9]*m_[3]*m_[14] - m_[13]*m_[2]*m_[11] + m_[13]*m_[3]*m_[10];
-    inv[5] = m_[0]*m_[10]*m_[15] - m_[0]*m_[11]*m_[14] - m_[8]*m_[2]*m_[15] + m_[8]*m_[3]*m_[14] + m_[12]*m_[2]*m_[11] - m_[12]*m_[3]*m_[10];
-    inv[9] = -m_[0]*m_[9]*m_[15] + m_[0]*m_[11]*m_[13] + m_[8]*m_[1]*m_[15] - m_[8]*m_[3]*m_[13] - m_[12]*m_[1]*m_[11] + m_[12]*m_[3]*m_[9];
-    inv[13] = m_[0]*m_[9]*m_[14] - m_[0]*m_[10]*m_[13] - m_[8]*m_[1]*m_[14] + m_[8]*m_[2]*m_[13] + m_[12]*m_[1]*m_[10] - m_[12]*m_[2]*m_[9];
-    inv[2] = m_[1]*m_[6]*m_[15] - m_[1]*m_[7]*m_[14] - m_[5]*m_[2]*m_[15] + m_[5]*m_[3]*m_[14] + m_[13]*m_[2]*m_[7] - m_[13]*m_[3]*m_[6];
-    inv[6] = -m_[0]*m_[6]*m_[15] + m_[0]*m_[7]*m_[14] + m_[4]*m_[2]*m_[15] - m_[4]*m_[3]*m_[14] - m_[12]*m_[2]*m_[7] + m_[12]*m_[3]*m_[6];
-    inv[10] = m_[0]*m_[5]*m_[15] - m_[0]*m_[7]*m_[13] - m_[4]*m_[1]*m_[15] + m_[4]*m_[3]*m_[13] + m_[12]*m_[1]*m_[7] - m_[12]*m_[3]*m_[5];
-    inv[14] = -m_[0]*m_[5]*m_[14] + m_[0]*m_[6]*m_[13] + m_[4]*m_[1]*m_[14] - m_[4]*m_[2]*m_[13] - m_[12]*m_[1]*m_[6] + m_[12]*m_[2]*m_[5];
-    inv[3] = -m_[1]*m_[6]*m_[11] + m_[1]*m_[7]*m_[10] + m_[5]*m_[2]*m_[11] - m_[5]*m_[3]*m_[10] - m_[9]*m_[2]*m_[7] + m_[9]*m_[3]*m_[6];
-    inv[7] = m_[0]*m_[6]*m_[11] - m_[0]*m_[7]*m_[10] - m_[4]*m_[2]*m_[11] + m_[4]*m_[3]*m_[10] + m_[8]*m_[2]*m_[7] - m_[8]*m_[3]*m_[6];
-    inv[11] = -m_[0]*m_[5]*m_[11] + m_[0]*m_[7]*m_[9] + m_[4]*m_[1]*m_[11] - m_[4]*m_[3]*m_[9] - m_[8]*m_[1]*m_[7] + m_[8]*m_[3]*m_[5];
-    inv[15] = m_[0]*m_[5]*m_[10] - m_[0]*m_[6]*m_[9] - m_[4]*m_[1]*m_[10] + m_[4]*m_[2]*m_[9] + m_[8]*m_[1]*m_[6] - m_[8]*m_[2]*m_[5];
-    det = m_[0] * inv[0] + m_[1] * inv[4] + m_[2] * inv[8] + m_[3] * inv[12];
-    if (det == 0) return m;
-    det = 1.0f / det;
-    M4 res; for (int i = 0; i < 16; i++) res.m[i] = inv[i] * det;
-    return res;
-}
-
 M4 ArcballCamera::getViewMatrix() const
 {
     V3 eye; float cp = cosf(pitch), sp = sinf(pitch), cy = cosf(yaw), sy = sinf(yaw);
-    eye.x = focusPoint.x + distance * cp * sy; eye.y = focusPoint.y - distance * cp * cy; eye.z = focusPoint.z + distance * sp;
+    eye.x = focusPoint.x + distance * cp * sy;
+    eye.y = focusPoint.y - distance * cp * cy;
+    eye.z = focusPoint.z + distance * sp;
     return lookAt(eye, focusPoint, { 0, 0, 1 });
+}
+
+M4 ArcballCamera::getProjectionMatrix(float aspect) const
+{
+    return perspective(0.8f, aspect, 0.1f, 1000.0f);
 }
 
 void ArcballCamera::update(GLFWwindow* window, float deltaTime)
@@ -178,39 +164,55 @@ void ArcballCamera::update(GLFWwindow* window, float deltaTime)
 
     if (!io.WantCaptureMouse)
     {
-        bool isAlt = (glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS);
-        bool isLMB = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        bool isMMB = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
-        bool isRMB = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+        bool mmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+        bool lmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        bool alt = glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
+        bool shift = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
 
-        // Orbit: ALT + LMB
-        if (isAlt && isLMB)
+        // Orbit: MMB or ALT+LMB
+        if (mmb && !shift || (alt && lmb))
         {
             yaw -= dx * 0.005f;
             pitch += dy * 0.005f;
         }
-
-        // Pan: MMB
-        if (isMMB)
+        // Pan: SHIFT+MMB
+        else if (mmb && shift)
         {
             float cp = cosf(pitch), sp = sinf(pitch), cy = cosf(yaw), sy = sinf(yaw);
             V3 eye = { focusPoint.x + distance * cp * sy, focusPoint.y - distance * cp * cy, focusPoint.z + distance * sp };
             V3 f = nrm_v(focusPoint - eye), r = nrm_v(crs_v(f, { 0, 0, 1 })), u = crs_v(r, f);
             focusPoint -= (r * (dx * 0.02f)) + (u * (dy * 0.02f));
         }
-
-        // Zoom: ALT + RMB Drag
-        if (isAlt && isRMB)
-        {
-            distance += dy * 0.1f;
-        }
-
-        // Zoom: Scroll
-        distance -= io.MouseWheel * 1.5f;
-
-        pitch = std::clamp(pitch, -1.5f, 1.5f);
+        
+        distance -= io.MouseWheel * 2.0f;
+        pitch = std::clamp(pitch, -1.55f, 1.55f);
         distance = std::max(1.0f, distance);
     }
+}
+
+V3 screenToWorld(int x, int y)
+{
+    AliceViewer* app = AliceViewer::instance();
+    int w, h; glfwGetFramebufferSize(app->window, &w, &h);
+    float aspect = (float)w / h;
+    float nx = (2.0f * x) / w - 1.0f;
+    float ny = 1.0f - (2.0f * y) / h;
+
+    ArcballCamera& cam = app->camera;
+    float cp = cosf(cam.pitch), sp = sinf(cam.pitch), cy = cosf(cam.yaw), sy = sinf(cam.yaw);
+    V3 eye = { cam.focusPoint.x + cam.distance * cp * sy, cam.focusPoint.y - cam.distance * cp * cy, cam.focusPoint.z + cam.distance * sp };
+    V3 f = nrm_v(cam.focusPoint - eye);
+    V3 worldUp = {0,0,1}; if (std::abs(dot_v(f, worldUp)) > 0.99f) worldUp = {0,1,0};
+    V3 r = nrm_v(crs_v(f, worldUp));
+    V3 u = crs_v(r, f);
+
+    float fov = 0.8f;
+    float tanHalfFov = tanf(fov * 0.5f);
+    V3 dir = nrm_v(f + r * (nx * tanHalfFov * aspect) + u * (ny * tanHalfFov));
+
+    if (std::abs(dir.z) < 1e-6f) return {0,0,0};
+    float t = -eye.z / dir.z;
+    return eye + dir * t;
 }
 
 // --- Callback Routing ---
@@ -232,33 +234,13 @@ static void scroll_cb(GLFWwindow* w, double x, double y) {
 
 AliceViewer* AliceViewer::instance() { return g_instance; }
 
-V3 AliceViewer::screenToWorld(int x, int y, float planeZ)
-{
-    int w, h; glfwGetFramebufferSize(window, &w, &h);
-    float nx = (2.0f * (float)x) / (float)w - 1.0f;
-    float ny = 1.0f - (2.0f * (float)y) / (float)h;
-    M4 proj = perspective(0.8f, (float)w / (float)h, 0.1f, 1000.0f);
-    M4 view = camera.getViewMatrix();
-    M4 invVP = invert(mult(proj, view));
-    auto unproj = [&](float ndcX, float ndcY, float ndcZ) {
-        float v[4] = { ndcX, ndcY, ndcZ, 1.0f };
-        float r[4] = { 0 };
-        for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) r[i] += invVP.m[j * 4 + i] * v[j];
-        return V3(r[0] / r[3], r[1] / r[3], r[2] / r[3]);
-    };
-    V3 p0 = unproj(nx, ny, -1.0f); V3 p1 = unproj(nx, ny, 1.0f);
-    V3 D = p1 - p0; if (fabsf(D.z) < 1e-6f) return p0;
-    float t = (planeZ - p0.z) / D.z; return p0 + D * t;
-}
-
 int AliceViewer::init()
 {
     g_instance = this;
-    printf(">>> AliceViewer Framework v2.0.1 Loaded <<<\n");
     if (!glfwInit()) return 1;
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4); glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    window = glfwCreateWindow(1280, 720, "Alice CAD Framework", 0, 0);
+    window = glfwCreateWindow(1280, 720, "Alice CAD Framework v1.3", 0, 0);
     if (!window) return 1;
     glfwMakeContextCurrent(window); gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
     IMGUI_CHECKVERSION(); ImGui::CreateContext();
@@ -286,11 +268,19 @@ void AliceViewer::run()
         glfwPollEvents();
         float now = (float)glfwGetTime(), dt = now - lastTime; lastTime = now;
         ImGui_ImplOpenGL3_NewFrame(); ImGui_ImplGlfw_NewFrame(); ImGui::NewFrame();
+        
+        // Debug Overlay
+        ImGui::SetNextWindowPos(ImVec2(10, 10));
+        ImGui::Begin("Debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration);
+        ImGui::Text("Camera: yaw=%.2f pitch=%.2f dist=%.2f", camera.yaw, camera.pitch, camera.distance);
+        ImGui::Text("Mouse Capture: %s", ImGui::GetIO().WantCaptureMouse ? "YES" : "NO");
+        ImGui::End();
+
         update(dt); backGround(0.9f); camera.update(window, dt);
         int w, h; glfwGetFramebufferSize(window, &w, &h);
         if (w > 0 && h > 0) {
             glViewport(0, 0, w, h);
-            g_currentMVP = mult(perspective(0.8f, (float)w / h, 0.1f, 1000.0f), camera.getViewMatrix());
+            g_currentMVP = mult(camera.getProjectionMatrix((float)w/h), camera.getViewMatrix());
             glEnable(GL_DEPTH_TEST); draw();
             g_lineBatch.flush(); g_pointBatch.flush();
         }

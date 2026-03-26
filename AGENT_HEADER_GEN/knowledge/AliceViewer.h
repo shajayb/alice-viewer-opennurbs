@@ -79,13 +79,11 @@ struct ArcballCamera
 
     M4 getViewMatrix() const;
     void update(struct GLFWwindow* window, float deltaTime);
-    void setBookmark(const char* name);
 };
 
 #pragma pack(pop)
 
 // --- MVC "Sketch" Interface (Weak Symbols / Externs) ---
-// ... (rest of extern "C" remains the same)
 extern "C" {
     void setup();
     void update(float deltaTime);
@@ -124,7 +122,6 @@ public:
     GLFWwindow* window;
     ArcballCamera camera;
     unsigned int shaderProgram;
-    float fov = 0.8f;
 
     int init();
     void run();

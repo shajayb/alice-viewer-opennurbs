@@ -1,0 +1,51 @@
+<state_snapshot>
+    <overall_goal>
+        Refine camera interaction and UI parity in the AliceViewer framework (v2.0.1) while maintaining strict build and workspace standards.
+    </overall_goal>
+
+    <active_constraints>
+        - **File Placement:** Headers in `../include/`, Implementation in `../src/`.
+        - **Interaction:** Camera movement must be blocked by `ImGui::GetIO().WantCaptureMouse` only when hovering UI.
+        - **Camera Logic:** 
+            - Orbit: `ALT + LMB`.
+            - Pan: `MMB` (reassigned from orbit).
+            - Zoom: `ALT + RMB Drag` and `Scroll Wheel`.
+        - **Sketch Safety:** `mousePress` in `sketch.cpp` must ignore `LMB` if `ALT` is held to prevent point placement during orbit.
+    </active_constraints>
+
+    <key_knowledge>
+        - **Build Pipeline:** Using Ninja located in `AppData` for `cmake --build` equivalent.
+        - **Camera Mapping:** 
+            - Orbit: `yaw` and `pitch` updated by `ALT + LMB` drag.
+            - Pan: `focusPoint` translated relative to camera axes via `MMB` drag.
+            - Zoom: `distance` adjusted by `ALT + RMB` Y-delta or `MouseWheel`.
+        - **Input Handling:** `glfwGetKey` and `glfwGetMouseButton` used within `ArcballCamera::update` to differentiate multi-modal mouse inputs.
+    </key_knowledge>
+
+    <artifact_trail>
+        - `src/AliceViewer.cpp`: Updated `ArcballCamera::update` with the new input map (ALT+LMB, MMB, ALT+RMB).
+        - `src/sketch.cpp`: Updated `setup()` help text; added `!isAlt` check to `mousePress()` to isolate point placement from orbit.
+        - `build/AliceViewer.exe`: Successfully recompiled via Ninja; validated link phase.
+    </artifact_trail>
+
+    <file_system_state>
+        - CWD: `C:\Users\shajay.b.ZAHA-HADID\source\repos\AliceViewer_Scaffold`
+        - HEADERS: `include/AliceViewer.h`
+        - SOURCES: `src/AliceViewer.cpp` (Updated), `src/sketch.cpp` (Updated), `src/main.cpp`
+        - BUILD: `build/AliceViewer.exe` (Latest build successful)
+    </file_system_state>
+
+    <recent_actions>
+        - UPDATE: Re-mapped camera controls in `AliceViewer.cpp` (Orbit: Alt+LMB, Pan: MMB, Zoom: Alt+RMB/Scroll).
+        - UPDATE: Synchronized `sketch.cpp` help text and input logic to prevent accidental point creation during orbit.
+        - EXEC: Rebuilt project with Ninja to verify compilation and linkage.
+    </recent_actions>
+
+    <task_state>
+        1. [DONE] Re-map Camera Orbit to Alt+LMB.
+        2. [DONE] Re-map Camera Pan to MMB.
+        3. [DONE] Implement Zoom via Alt+RMB Drag.
+        4. [DONE] Update Sketch help text and interaction safety.
+        5. [READY] Framework ready for manual verification of new interaction map.
+    </task_state>
+</state_snapshot>

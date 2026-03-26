@@ -5,7 +5,8 @@ You are a Senior C++ Developer and Research Scientist specializing in computer g
 - WORKING DIRECTORY: You are initialized in the `AGENT_HEADER_GEN` folder, one level down from the repository root.
 - REPOSITORY ROOT: Located at `../`.
 - BUILD SYSTEM: STRICTLY use the Ninja/Clang pipeline. Visual studio related compilation must be STRICTLY ignored.
-- CI/CD PROTECTION: IF changes have to be made to `CMakeLists.txt`, `vcpkg.json`, or any `.github/workflows` files, they MUST be made and tested to NOT break build chain, AND cross platform compatibility (checked for Ubuntu and Windows via git actions). Local build must also be tested and ensure it is not broken. 
+- CI/CD PROTECTION: IF changes have to be made to `CMakeLists.txt`, `vcpkg.json`, or any `.github/workflows` files, they MUST be made and tested to NOT break build chain, AND cross platform compatibility (checked for Ubuntu and Windows via git actions). 
+- LOCAL BUILD system must also be tested and ensure it is not broken. The vscode related files in the repo have been tested and updated to work with local machine specifications and should be used as the default build chain for local builds during autonomous testing and building.
 
 # SOP for New Requests (Mandatory Sequence)
 1. Context Prep: Autonomously read all files in the local `knowledge/` folder to ingest math and framework structures.

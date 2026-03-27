@@ -9,6 +9,7 @@
 #include <GLFW/glfw3.h>
 #include "AliceViewer.h"
 #include "AliceMemory.h"
+#include "SpatialGrid.h"
 
 #ifndef ALICE_FRAMEWORK
 #define ALICE_FRAMEWORK
@@ -24,6 +25,9 @@ struct SelectionContext
     Alice::Buffer<int> selectedIndices;
     Alice::Buffer<int> scratchBufferA;
     Alice::Buffer<int> scratchBufferB;
+    Alice::Buffer<int> candidateIndices;
+    Alice::SpatialGrid grid;
+
     V3 dragStart; // Screen Space Pixels (x, y, 0)
     V3 dragEnd;   // Screen Space Pixels (x, y, 0)
     bool isMarqueeActive = false;
@@ -38,6 +42,8 @@ struct SelectionContext
         selectedIndices.init(Alice::g_Arena, 1000000);
         scratchBufferA.init(Alice::g_Arena, 1000000);
         scratchBufferB.init(Alice::g_Arena, 1000000);
+        candidateIndices.init(Alice::g_Arena, 1000000);
+        grid.init(Alice::g_Arena, 64, 1000000);
     }
 
     void clearSelection()
@@ -87,6 +93,12 @@ struct SelectionContext
             return;
         }
 
+        // Rebuild grid if cloud size changed or grid is empty
+        if (grid.pointIndices.count != cloud.size())
+        {
+            grid.build(cloud);
+        }
+
         int w, h;
         glfwGetFramebufferSize(viewer->window, &w, &h);
         if (w <= 0 || h <= 0) return;
@@ -100,13 +112,38 @@ struct SelectionContext
         float minY = dragStart.y < dragEnd.y ? dragStart.y : dragEnd.y;
         float maxY = dragStart.y > dragEnd.y ? dragStart.y : dragEnd.y;
 
+        // Calculate 3D AABB from marquee
+        V3 corners[8];
+        corners[0] = viewer->screenToWorld((int)minX, (int)minY, 0.0f);
+        corners[1] = viewer->screenToWorld((int)maxX, (int)minY, 0.0f);
+        corners[2] = viewer->screenToWorld((int)maxX, (int)maxY, 0.0f);
+        corners[3] = viewer->screenToWorld((int)minX, (int)maxY, 0.0f);
+        corners[4] = viewer->screenToWorld((int)minX, (int)minY, 1.0f);
+        corners[5] = viewer->screenToWorld((int)maxX, (int)minY, 1.0f);
+        corners[6] = viewer->screenToWorld((int)maxX, (int)maxY, 1.0f);
+        corners[7] = viewer->screenToWorld((int)minX, (int)maxY, 1.0f);
+
+        V3 qMin = corners[0], qMax = corners[0];
+        for (int i = 1; i < 8; ++i)
+        {
+            if (corners[i].x < qMin.x) qMin.x = corners[i].x;
+            if (corners[i].y < qMin.y) qMin.y = corners[i].y;
+            if (corners[i].z < qMin.z) qMin.z = corners[i].z;
+            if (corners[i].x > qMax.x) qMax.x = corners[i].x;
+            if (corners[i].y > qMax.y) qMax.y = corners[i].y;
+            if (corners[i].z > qMax.z) qMax.z = corners[i].z;
+        }
+
+        candidateIndices.clear();
+        grid.queryAABB(qMin, qMax, candidateIndices);
+
         scratchBufferA.clear();
         const float* m = mvp.m;
-        const size_t nPoints = cloud.size();
         const V3* pData = cloud.data;
 
-        for (size_t i = 0; i < nPoints; ++i)
+        for (size_t k = 0; k < candidateIndices.size(); ++k)
         {
+            int i = candidateIndices[k];
             const V3& p = pData[i];
             float xw = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];
             float yw = m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13];
@@ -127,7 +164,7 @@ struct SelectionContext
 
             if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY)
             {
-                scratchBufferA.push_back((int)i);
+                scratchBufferA.push_back(i);
             }
         }
 

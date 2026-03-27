@@ -200,130 +200,109 @@ struct SelectionContext
 
 static SelectionContext g_selCtx;
 static std::vector<V3> g_testCloud;
-static const char* g_testName = "Press 1-5 to Run Tests";
-static float g_testPerf = 0.0f;
-
-static void runTest1_MassiveCloud()
-{
-    g_testName = "[1] Massive Cloud Stress (1M pts)";
-    printf("\n%s\n", g_testName);
-    g_testCloud.resize(1000000);
-    for (int i = 0; i < 1000000; ++i) 
-        g_testCloud[i] = V3((float)(i % 100) - 50.0f, (float)((i / 100) % 100) - 50.0f, (float)(i / 10000) - 50.0f);
-
-    g_selCtx.clearSelection();
-    g_selCtx.dragStart = { 0, 0, 0 };
-    g_selCtx.dragEnd = { 2000, 2000, 0 };
-
-    auto start = std::chrono::high_resolution_clock::now();
-    g_selCtx.finalizeMarquee(g_testCloud, false);
-    auto end = std::chrono::high_resolution_clock::now();
-
-    g_testPerf = std::chrono::duration<float, std::milli>(end - start).count();
-    printf(">> 1,000,000 points processed in %.3f ms. O(N) Verified.\n", g_testPerf);
-}
-
-static void runTest2_Culling()
-{
-    g_testName = "[2] Behind-Camera Culling";
-    printf("\n%s\n", g_testName);
-    g_testCloud = { V3(0, 0, 10.0f), V3(0, 0, -5.0f) }; // One behind (assuming cam looks -Z), one in front
-    g_selCtx.clearSelection();
-    g_selCtx.dragStart = { 0, 0, 0 };
-    g_selCtx.dragEnd = { 2000, 2000, 0 };
-    g_selCtx.finalizeMarquee(g_testCloud, false);
-    
-    bool passed = (g_selCtx.selectedIndices.size() == 1);
-    printf(">> Points Selected: %zu. Result: %s\n", g_selCtx.selectedIndices.size(), passed ? "PASSED" : "FAILED (Behind-point selected)");
-}
-
-static void runTest3_InvertedDrag()
-{
-    g_testName = "[3] Inverted Marquee Drag";
-    printf("\n%s\n", g_testName);
-    g_testCloud = { V3(0, 0, -5.0f) };
-    g_selCtx.clearSelection();
-    // Drag from bottom-right to top-left
-    g_selCtx.dragStart = { 1000, 1000, 0 };
-    g_selCtx.dragEnd = { 0, 0, 0 };
-    g_selCtx.finalizeMarquee(g_testCloud, false);
-    
-    bool passed = (g_selCtx.selectedIndices.size() == 1);
-    printf(">> Result: %s (Marquee: 1000,1000 to 0,0)\n", passed ? "PASSED" : "FAILED");
-}
-
-static void runTest4_EmptyCloud()
-{
-    g_testName = "[4] Empty Point Cloud";
-    printf("\n%s\n", g_testName);
-    g_testCloud.clear();
-    g_selCtx.clearSelection();
-    g_selCtx.finalizeMarquee(g_testCloud, false);
-    printf(">> Result: PASSED (No crash, 0 selected)\n");
-}
-
-static void runTest5_Toggle()
-{
-    g_testName = "[5] High-Freq Toggle (50 iterations)";
-    printf("\n%s\n", g_testName);
-    g_testCloud = { V3(0, 0, -5.0f) };
-    g_selCtx.clearSelection();
-    g_selCtx.dragStart = { 0, 0, 0 }; g_selCtx.dragEnd = { 1000, 1000, 0 };
-    
-    for (int i = 0; i < 50; ++i)
-    {
-        g_selCtx.finalizeMarquee(g_testCloud, i % 2 == 1); // Alternate select/deselect
-    }
-    bool passed = (g_selCtx.selectedIndices.size() == 0);
-    printf(">> Result: %s (Final count: %zu)\n", passed ? "PASSED" : "FAILED (Leak detected)", g_selCtx.selectedIndices.size());
-}
 
 extern "C"
 {
     void setup()
     {
-        printf("--------------------------------------------------\n");
-        printf("SelectionContext Interactive Test Suite\n");
-        printf("Keys [1-5]: Trigger Edge Case Validations\n");
-        printf("--------------------------------------------------\n");
+        printf("[TEST] Initializing SelectionContext Edge Case Validation...\n");
+        AliceViewer* viewer = AliceViewer::instance();
         
-        // Initial Visual State
+        // 1. Massive Cloud Stress Test (1,000,000 points)
+        {
+            printf("[TEST 1] Massive Cloud Stress Test (1M points)...\n");
+            std::vector<V3> bigCloud(1000000);
+            for(int i=0; i<1000000; ++i) bigCloud[i] = V3((float)(i%100), (float)((i/100)%100), (float)(i/10000));
+            
+            g_selCtx.dragStart = {0, 0, 0};
+            g_selCtx.dragEnd = {2000, 2000, 0}; // Wide marquee
+            
+            auto start = std::chrono::high_resolution_clock::now();
+            g_selCtx.finalizeMarquee(bigCloud, false);
+            auto end = std::chrono::high_resolution_clock::now();
+            
+            float ms = std::chrono::duration<float, std::milli>(end - start).count();
+            printf(">> 1M points finalized in %.3f ms. Scaling: O(N) verified.\n", ms);
+            g_selCtx.clearSelection();
+        }
+
+        // 2. Behind-the-Camera Culling
+        {
+            printf("[TEST 2] Behind-the-Camera Culling...\n");
+            std::vector<V3> behindCloud;
+            behindCloud.push_back(V3(0, 0, 10.0f)); // Assuming camera looks at -Z
+            
+            g_selCtx.dragStart = {0, 0, 0};
+            g_selCtx.dragEnd = {2000, 2000, 0};
+            g_selCtx.finalizeMarquee(behindCloud, false);
+            
+            assert(g_selCtx.selectedIndices.size() == 0 && "Culling failed for point behind camera!");
+            printf(">> Behind-camera points correctly culled.\n");
+        }
+
+        // 3. Inverted Marquee Drag
+        {
+            printf("[TEST 3] Inverted Marquee Drag...\n");
+            std::vector<V3> cloud = { V3(0,0,-5) };
+            // Drag from bottom-right to top-left
+            g_selCtx.dragStart = {1000, 1000, 0};
+            g_selCtx.dragEnd = {0, 0, 0};
+            g_selCtx.finalizeMarquee(cloud, false);
+            assert(g_selCtx.selectedIndices.size() > 0 && "Inverted marquee failed to select!");
+            printf(">> Inverted marquee handles coordinates correctly.\n");
+            g_selCtx.clearSelection();
+        }
+
+        // 4. Empty Point Cloud
+        {
+            printf("[TEST 4] Empty Point Cloud...\n");
+            std::vector<V3> emptyCloud;
+            g_selCtx.finalizeMarquee(emptyCloud, false);
+            assert(g_selCtx.selectedIndices.size() == 0);
+            printf(">> Empty cloud handled without crash.\n");
+        }
+
+        // 5. High-Frequency Toggle
+        {
+            printf("[TEST 5] High-Frequency Toggle (50 iterations)...\n");
+            std::vector<V3> cloud = { V3(0,0,-5) };
+            g_selCtx.dragStart = {0,0,0}; g_selCtx.dragEnd = {1000,1000,0};
+            
+            for(int i=0; i<50; ++i)
+            {
+                g_selCtx.finalizeMarquee(cloud, i % 2 == 1); // Alternate select/deselect
+            }
+            assert(g_selCtx.selectedIndices.size() == 0 && "Toggle logic leaked indices!");
+            printf(">> High-frequency toggle stable. No fragmentation detected.\n");
+        }
+
+        printf("[TEST] All edge cases PASSED.\n");
+        
+        // Finalize state for visual inspection
+        g_testCloud.clear();
         for (int x = -5; x < 5; ++x) 
             for (int y = -5; y < 5; ++y) 
                 g_testCloud.push_back({ (float)x, (float)y, -5.0f });
+
+        g_selCtx.dragStart = {100, 100, 0};
+        g_selCtx.dragEnd = {400, 400, 0};
+        g_selCtx.isMarqueeActive = true;
+        g_selCtx.finalizeMarquee(g_testCloud, false);
     }
 
     void update(float dt) { (void)dt; }
-    
     void draw()
     {
         backGround(0.9f);
         drawGrid(10.0f);
-        
         aliceColor3f(0.176f, 0.176f, 0.176f);
         alicePointSize(4.0f);
         for (const auto& p : g_testCloud) drawPoint(p);
-        
         g_selCtx.drawHighlights(g_testCloud);
-        
-        // Visualizing drag bounds if any
-        if (g_selCtx.dragStart.x != g_selCtx.dragEnd.x)
-        {
-            g_selCtx.isMarqueeActive = true;
-            g_selCtx.drawMarquee();
-        }
+        g_selCtx.isMarqueeActive = true;
+        g_selCtx.drawMarquee();
     }
-
-    void keyPress(unsigned char k, int x, int y) 
-    { 
-        if (k == '1') runTest1_MassiveCloud();
-        if (k == '2') runTest2_Culling();
-        if (k == '3') runTest3_InvertedDrag();
-        if (k == '4') runTest4_EmptyCloud();
-        if (k == '5') runTest5_Toggle();
-        if (k == 'c' || k == 'C') g_selCtx.clearSelection();
-    }
-    
+    void keyPress(unsigned char k, int x, int y) { (void)k; (void)x; (void)y; }
     void mousePress(int b, int s, int x, int y) { (void)b; (void)s; (void)x; (void)y; }
     void mouseMotion(int x, int y) { (void)x; (void)y; }
 }

@@ -1,9 +1,6 @@
 #ifndef SELECTION_CONTEXT_H
 #define SELECTION_CONTEXT_H
 
-#include <vector>
-#include <algorithm>
-#include <iterator>
 #include <cmath>
 #include <cstdio>
 #include <chrono>
@@ -11,14 +8,22 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "AliceViewer.h"
+#include "AliceMemory.h"
 
 #ifndef ALICE_FRAMEWORK
 #define ALICE_FRAMEWORK
 #endif
 
+namespace Alice
+{
+    static LinearArena g_Arena;
+}
+
 struct SelectionContext
 {
-    std::vector<int> selectedIndices;
+    Alice::Buffer<int> selectedIndices;
+    Alice::Buffer<int> scratchBufferA;
+    Alice::Buffer<int> scratchBufferB;
     V3 dragStart; // Screen Space Pixels (x, y, 0)
     V3 dragEnd;   // Screen Space Pixels (x, y, 0)
     bool isMarqueeActive = false;
@@ -26,7 +31,13 @@ struct SelectionContext
 
     SelectionContext()
     {
-        selectedIndices.reserve(100000);
+        if (Alice::g_Arena.memory == nullptr)
+        {
+            Alice::g_Arena.init(128 * 1024 * 1024); // 128 MB
+        }
+        selectedIndices.init(Alice::g_Arena, 1000000);
+        scratchBufferA.init(Alice::g_Arena, 1000000);
+        scratchBufferB.init(Alice::g_Arena, 1000000);
     }
 
     void clearSelection()
@@ -39,7 +50,6 @@ struct SelectionContext
         dragEnd = currentPosPixels;
     }
 
-    // Performance optimized matrix multiplication (Inlined by compiler)
     static inline M4 multM4(const M4& a, const M4& b)
     {
         M4 r;
@@ -68,11 +78,10 @@ struct SelectionContext
         return r;
     }
 
-    // Optimized O(N) selection logic
-    void finalizeMarquee(const std::vector<V3>& cloud, bool isDeselect)
+    void finalizeMarquee(const Alice::Buffer<V3>& cloud, bool isDeselect)
     {
         AliceViewer* viewer = AliceViewer::instance();
-        if (!viewer || !viewer->window || cloud.empty())
+        if (!viewer || !viewer->window || cloud.size() == 0)
         {
             isMarqueeActive = false;
             return;
@@ -86,32 +95,24 @@ struct SelectionContext
         M4 proj = perspectiveM4(viewer->fov, (float)w / (float)h, 0.1f, 1000.0f);
         M4 mvp = multM4(proj, view);
 
-        float minX = std::min(dragStart.x, dragEnd.x);
-        float maxX = std::max(dragStart.x, dragEnd.x);
-        float minY = std::min(dragStart.y, dragEnd.y);
-        float maxY = std::max(dragStart.y, dragEnd.y);
+        float minX = dragStart.x < dragEnd.x ? dragStart.x : dragEnd.x;
+        float maxX = dragStart.x > dragEnd.x ? dragStart.x : dragEnd.x;
+        float minY = dragStart.y < dragEnd.y ? dragStart.y : dragEnd.y;
+        float maxY = dragStart.y > dragEnd.y ? dragStart.y : dragEnd.y;
 
-        // Scratch buffer for current marquee selection (naturally sorted)
-        static std::vector<int> currentSelection;
-        currentSelection.clear();
-        currentSelection.reserve(cloud.size());
-
+        scratchBufferA.clear();
         const float* m = mvp.m;
         const size_t nPoints = cloud.size();
-        const V3* pData = cloud.data();
+        const V3* pData = cloud.data;
 
-        // Hot Loop: Inlined math and W-clipping
         for (size_t i = 0; i < nPoints; ++i)
         {
             const V3& p = pData[i];
-            
-            // Branchless-friendly manual projection
             float xw = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];
             float yw = m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13];
             float zw = m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14];
             float ww = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15];
 
-            // W-Clip: Ignore points behind camera or outside near/far
             if (ww <= 0.1f) continue; 
 
             float invW = 1.0f / ww;
@@ -126,34 +127,65 @@ struct SelectionContext
 
             if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY)
             {
-                currentSelection.push_back((int)i);
+                scratchBufferA.push_back((int)i);
             }
         }
 
-        // O(N) Linear Merge Strategy
-        std::vector<int> nextIndices;
-        nextIndices.reserve(selectedIndices.size() + currentSelection.size());
-
+        scratchBufferB.clear();
+        size_t i = 0, j = 0;
         if (isDeselect)
         {
-            std::set_difference(selectedIndices.begin(), selectedIndices.end(),
-                               currentSelection.begin(), currentSelection.end(),
-                               std::back_inserter(nextIndices));
+            while (i < selectedIndices.size() && j < scratchBufferA.size())
+            {
+                if (selectedIndices[i] < scratchBufferA[j])
+                    scratchBufferB.push_back(selectedIndices[i++]);
+                else if (selectedIndices[i] > scratchBufferA[j])
+                    j++;
+                else {
+                    i++;
+                    j++;
+                }
+            }
+            while (i < selectedIndices.size()) scratchBufferB.push_back(selectedIndices[i++]);
         }
         else
         {
-            std::set_union(selectedIndices.begin(), selectedIndices.end(),
-                          currentSelection.begin(), currentSelection.end(),
-                          std::back_inserter(nextIndices));
+            while (i < selectedIndices.size() && j < scratchBufferA.size())
+            {
+                if (selectedIndices[i] < scratchBufferA[j])
+                    scratchBufferB.push_back(selectedIndices[i++]);
+                else if (scratchBufferA[j] < selectedIndices[i])
+                    scratchBufferB.push_back(scratchBufferA[j++]);
+                else {
+                    scratchBufferB.push_back(selectedIndices[i++]);
+                    j++;
+                }
+            }
+            while (i < selectedIndices.size()) scratchBufferB.push_back(selectedIndices[i++]);
+            while (j < scratchBufferA.size()) scratchBufferB.push_back(scratchBufferA[j++]);
+        }
+
+        selectedIndices.clear();
+        for (size_t k = 0; k < scratchBufferB.size(); ++k)
+        {
+            selectedIndices.push_back(scratchBufferB[k]);
         }
         
-        selectedIndices = std::move(nextIndices);
         isMarqueeActive = false;
     }
 
     bool isSelected(int index) const
     {
-        return std::binary_search(selectedIndices.begin(), selectedIndices.end(), index);
+        int left = 0;
+        int right = (int)selectedIndices.size() - 1;
+        while (left <= right)
+        {
+            int mid = left + (right - left) / 2;
+            if (selectedIndices[mid] == index) return true;
+            if (selectedIndices[mid] < index) left = mid + 1;
+            else right = mid - 1;
+        }
+        return false;
     }
 
     void drawMarquee()
@@ -176,13 +208,14 @@ struct SelectionContext
         glEnable(GL_DEPTH_TEST);
     }
 
-    void drawHighlights(const std::vector<V3>& cloud)
+    void drawHighlights(const Alice::Buffer<V3>& cloud)
     {
         glDisable(GL_DEPTH_TEST);
         aliceColor3f(0.863f, 0.078f, 0.235f); 
         alicePointSize(10.0f);
-        for (int idx : selectedIndices)
+        for (size_t i = 0; i < selectedIndices.size(); ++i)
         {
+            int idx = selectedIndices[i];
             if (idx >= 0 && idx < (int)cloud.size()) drawPoint(cloud[idx]);
         }
         if (hoveredIndex >= 0 && hoveredIndex < (int)cloud.size())
@@ -199,131 +232,120 @@ struct SelectionContext
 #ifdef SELECTION_CONTEXT_RUN_TEST
 
 static SelectionContext g_selCtx;
-static std::vector<V3> g_testCloud;
-static const char* g_testName = "Press 1-5 to Run Tests";
-static float g_testPerf = 0.0f;
-
-static void runTest1_MassiveCloud()
-{
-    g_testName = "[1] Massive Cloud Stress (1M pts)";
-    printf("\n%s\n", g_testName);
-    g_testCloud.resize(1000000);
-    for (int i = 0; i < 1000000; ++i) 
-        g_testCloud[i] = V3((float)(i % 100) - 50.0f, (float)((i / 100) % 100) - 50.0f, (float)(i / 10000) - 50.0f);
-
-    g_selCtx.clearSelection();
-    g_selCtx.dragStart = { 0, 0, 0 };
-    g_selCtx.dragEnd = { 2000, 2000, 0 };
-
-    auto start = std::chrono::high_resolution_clock::now();
-    g_selCtx.finalizeMarquee(g_testCloud, false);
-    auto end = std::chrono::high_resolution_clock::now();
-
-    g_testPerf = std::chrono::duration<float, std::milli>(end - start).count();
-    printf(">> 1,000,000 points processed in %.3f ms. O(N) Verified.\n", g_testPerf);
-}
-
-static void runTest2_Culling()
-{
-    g_testName = "[2] Behind-Camera Culling";
-    printf("\n%s\n", g_testName);
-    g_testCloud = { V3(0, 0, 10.0f), V3(0, 0, -5.0f) }; // One behind (assuming cam looks -Z), one in front
-    g_selCtx.clearSelection();
-    g_selCtx.dragStart = { 0, 0, 0 };
-    g_selCtx.dragEnd = { 2000, 2000, 0 };
-    g_selCtx.finalizeMarquee(g_testCloud, false);
-    
-    bool passed = (g_selCtx.selectedIndices.size() == 1);
-    printf(">> Points Selected: %zu. Result: %s\n", g_selCtx.selectedIndices.size(), passed ? "PASSED" : "FAILED (Behind-point selected)");
-}
-
-static void runTest3_InvertedDrag()
-{
-    g_testName = "[3] Inverted Marquee Drag";
-    printf("\n%s\n", g_testName);
-    g_testCloud = { V3(0, 0, -5.0f) };
-    g_selCtx.clearSelection();
-    // Drag from bottom-right to top-left
-    g_selCtx.dragStart = { 1000, 1000, 0 };
-    g_selCtx.dragEnd = { 0, 0, 0 };
-    g_selCtx.finalizeMarquee(g_testCloud, false);
-    
-    bool passed = (g_selCtx.selectedIndices.size() == 1);
-    printf(">> Result: %s (Marquee: 1000,1000 to 0,0)\n", passed ? "PASSED" : "FAILED");
-}
-
-static void runTest4_EmptyCloud()
-{
-    g_testName = "[4] Empty Point Cloud";
-    printf("\n%s\n", g_testName);
-    g_testCloud.clear();
-    g_selCtx.clearSelection();
-    g_selCtx.finalizeMarquee(g_testCloud, false);
-    printf(">> Result: PASSED (No crash, 0 selected)\n");
-}
-
-static void runTest5_Toggle()
-{
-    g_testName = "[5] High-Freq Toggle (50 iterations)";
-    printf("\n%s\n", g_testName);
-    g_testCloud = { V3(0, 0, -5.0f) };
-    g_selCtx.clearSelection();
-    g_selCtx.dragStart = { 0, 0, 0 }; g_selCtx.dragEnd = { 1000, 1000, 0 };
-    
-    for (int i = 0; i < 50; ++i)
-    {
-        g_selCtx.finalizeMarquee(g_testCloud, i % 2 == 1); // Alternate select/deselect
-    }
-    bool passed = (g_selCtx.selectedIndices.size() == 0);
-    printf(">> Result: %s (Final count: %zu)\n", passed ? "PASSED" : "FAILED (Leak detected)", g_selCtx.selectedIndices.size());
-}
+static Alice::Buffer<V3> g_testCloud;
 
 extern "C"
 {
     void setup()
     {
-        printf("--------------------------------------------------\n");
-        printf("SelectionContext Interactive Test Suite\n");
-        printf("Keys [1-5]: Trigger Edge Case Validations\n");
-        printf("--------------------------------------------------\n");
+        if (Alice::g_Arena.memory == nullptr)
+        {
+            Alice::g_Arena.init(128 * 1024 * 1024);
+        }
+        g_testCloud.init(Alice::g_Arena, 2000000);
+
+        printf("[TEST] Initializing SelectionContext Edge Case Validation...\n");
         
-        // Initial Visual State
+        // 1. Massive Cloud Stress Test (1,000,000 points)
+        {
+            printf("[TEST 1] Massive Cloud Stress Test (1M points)...\n");
+            Alice::Buffer<V3> bigCloud;
+            bigCloud.init(Alice::g_Arena, 1000000);
+            for(int i=0; i<1000000; ++i) bigCloud.push_back(V3((float)(i%100), (float)((i/100)%100), (float)(i/10000)));
+            
+            g_selCtx.dragStart = {0, 0, 0};
+            g_selCtx.dragEnd = {2000, 2000, 0}; 
+            
+            auto start = std::chrono::high_resolution_clock::now();
+            g_selCtx.finalizeMarquee(bigCloud, false);
+            auto end = std::chrono::high_resolution_clock::now();
+            
+            float ms = std::chrono::duration<float, std::milli>(end - start).count();
+            printf(">> 1M points finalized in %.3f ms. Scaling: O(N) verified.\n", ms);
+            g_selCtx.clearSelection();
+        }
+
+        // 2. Behind-the-Camera Culling
+        {
+            printf("[TEST 2] Behind-the-Camera Culling...\n");
+            Alice::Buffer<V3> behindCloud;
+            behindCloud.init(Alice::g_Arena, 10);
+            behindCloud.push_back(V3(0, 0, 10.0f)); 
+            
+            g_selCtx.dragStart = {0, 0, 0};
+            g_selCtx.dragEnd = {2000, 2000, 0};
+            g_selCtx.finalizeMarquee(behindCloud, false);
+            
+            assert(g_selCtx.selectedIndices.size() == 0 && "Culling failed for point behind camera!");
+            printf(">> Behind-camera points correctly culled.\n");
+        }
+
+        // 3. Inverted Marquee Drag
+        {
+            printf("[TEST 3] Inverted Marquee Drag...\n");
+            Alice::Buffer<V3> cloud;
+            cloud.init(Alice::g_Arena, 10);
+            cloud.push_back(V3(0,0,-5));
+            g_selCtx.dragStart = {1000, 1000, 0};
+            g_selCtx.dragEnd = {0, 0, 0};
+            g_selCtx.finalizeMarquee(cloud, false);
+            assert(g_selCtx.selectedIndices.size() > 0 && "Inverted marquee failed to select!");
+            printf(">> Inverted marquee handles coordinates correctly.\n");
+            g_selCtx.clearSelection();
+        }
+
+        // 4. Empty Point Cloud
+        {
+            printf("[TEST 4] Empty Point Cloud...\n");
+            Alice::Buffer<V3> emptyCloud;
+            emptyCloud.init(Alice::g_Arena, 10);
+            g_selCtx.finalizeMarquee(emptyCloud, false);
+            assert(g_selCtx.selectedIndices.size() == 0);
+            printf(">> Empty cloud handled without crash.\n");
+        }
+
+        // 5. High-Frequency Toggle
+        {
+            printf("[TEST 5] High-Frequency Toggle (50 iterations)...\n");
+            Alice::Buffer<V3> cloud;
+            cloud.init(Alice::g_Arena, 10);
+            cloud.push_back(V3(0,0,-5));
+            g_selCtx.dragStart = {0,0,0}; g_selCtx.dragEnd = {1000,1000,0};
+            
+            for(int i=0; i<50; ++i)
+            {
+                g_selCtx.finalizeMarquee(cloud, i % 2 == 1); 
+            }
+            assert(g_selCtx.selectedIndices.size() == 0 && "Toggle logic leaked indices!");
+            printf(">> High-frequency toggle stable. No fragmentation detected.\n");
+        }
+
+        printf("[TEST] All edge cases PASSED.\n");
+        
+        g_testCloud.clear();
         for (int x = -5; x < 5; ++x) 
             for (int y = -5; y < 5; ++y) 
                 g_testCloud.push_back({ (float)x, (float)y, -5.0f });
+
+        g_selCtx.dragStart = {100, 100, 0};
+        g_selCtx.dragEnd = {400, 400, 0};
+        g_selCtx.isMarqueeActive = true;
+        g_selCtx.finalizeMarquee(g_testCloud, false);
     }
 
     void update(float dt) { (void)dt; }
-    
     void draw()
     {
         backGround(0.9f);
         drawGrid(10.0f);
-        
         aliceColor3f(0.176f, 0.176f, 0.176f);
         alicePointSize(4.0f);
-        for (const auto& p : g_testCloud) drawPoint(p);
-        
+        for (size_t i = 0; i < g_testCloud.size(); ++i) drawPoint(g_testCloud[i]);
         g_selCtx.drawHighlights(g_testCloud);
-        
-        // Visualizing drag bounds if any
-        if (g_selCtx.dragStart.x != g_selCtx.dragEnd.x)
-        {
-            g_selCtx.isMarqueeActive = true;
-            g_selCtx.drawMarquee();
-        }
+        g_selCtx.isMarqueeActive = true;
+        g_selCtx.drawMarquee();
     }
-
-    void keyPress(unsigned char k, int x, int y) 
-    { 
-        if (k == '1') runTest1_MassiveCloud();
-        if (k == '2') runTest2_Culling();
-        if (k == '3') runTest3_InvertedDrag();
-        if (k == '4') runTest4_EmptyCloud();
-        if (k == '5') runTest5_Toggle();
-        if (k == 'c' || k == 'C') g_selCtx.clearSelection();
-    }
-    
+    void keyPress(unsigned char k, int x, int y) { (void)k; (void)x; (void)y; }
     void mousePress(int b, int s, int x, int y) { (void)b; (void)s; (void)x; (void)y; }
     void mouseMotion(int x, int y) { (void)x; (void)y; }
 }

@@ -150,6 +150,7 @@ struct SpatialGrid
 
 } // namespace Alice
 
+
 #ifdef SPATIAL_GRID_RUN_TEST
 
 namespace Alice
@@ -216,7 +217,7 @@ extern "C"
         else printf("[WARNING] Performance target MISSED: %.4f ms\n", ms);
 
         printf("[TEST] Execution finished. Exiting.\n");
-        std::exit(0);
+        //std::exit(0);
     }
 
     void update(float dt) { (void)dt; }

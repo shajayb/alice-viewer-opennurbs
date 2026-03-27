@@ -89,7 +89,7 @@ void AliceViewer::PerfTuner::tune(float dt, double flushUs)
     if (frameDeltaMs > budgetMs || flushUs > 5000.0)
     {
         currentBatchThreshold = std::max(1024, currentBatchThreshold - 1024);
-        printf("[TUNER] FrameTime: %.2f ms | FlushTime: %.2f us | Adjusted Batch Limit: %d\n", frameDeltaMs, (float)lastFlushTimeUs, currentBatchThreshold);
+       //printf("[TUNER] FrameTime: %.2f ms | FlushTime: %.2f us | Adjusted Batch Limit: %d\n", frameDeltaMs, (float)lastFlushTimeUs, currentBatchThreshold);
     }
     else if (frameDeltaMs < budgetMs * 0.5f && currentBatchThreshold < MAX_PRIMITIVE_BATCH)
     {

@@ -12,7 +12,6 @@ add_executable(AliceViewer
     src/main.cpp
     src/AliceViewer.cpp
     src/sketch.cpp
-    include/SelectionContext.h
 )
 
 # Assuming vcpkg is used for dependencies

@@ -1,5 +1,15 @@
-#define SELECTION_CONTEXT_RUN_TEST
-#include "SelectionContext.h"
+#include <cstdio>
+#include <cstdlib>
+
+#include "AliceMemory.h"
+namespace Alice { LinearArena g_Arena; }
+
+//#define SELECTION_CONTEXT_RUN_TEST
+#include "SelectionContext.h"//
+#define SPATIAL_GRID_RUN_TEST
+#include "SpatialGrid.h"
+
+
 
 /*
 // #include <vector>

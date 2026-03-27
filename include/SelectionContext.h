@@ -15,10 +15,10 @@
 #define ALICE_FRAMEWORK
 #endif
 
-namespace Alice
-{
-    inline static LinearArena g_Arena;
-}
+// namespace Alice
+// {
+//     inline static LinearArena g_Arena;
+// }
 
 struct SelectionContext
 {
@@ -262,7 +262,7 @@ struct SelectionContext
     }
 };
 
-#define SELECTION_CONTEXT_RUN_TEST
+
 #ifdef SELECTION_CONTEXT_RUN_TEST
 
 static SelectionContext g_selCtx;

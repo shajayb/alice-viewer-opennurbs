@@ -1,89 +1,74 @@
-#include <vector>
-#include <cstdio>
-#include <cmath>
-#include <GLFW/glfw3.h>
-#include "AliceViewer.h"
+#define SELECTION_CONTEXT_RUN_TEST
+#include "SelectionContext.h"
 
-static std::vector<V3> points;
-static float rotation = 0.0f;
+/*
+// #include <vector>
+// #include <cstdio>
+// #include <cmath>
+// #include <GLFW/glfw3.h>
+// #include "AliceViewer.h"
 
-void setup()
-{
-    printf("-------------------------------------------\n");
-    printf("Alice CAD Framework - Sketch Version 2.0.7\n");
-    printf("Controls:\n");
-    printf("  Alt + LMB: Orbit\n");
-    printf("  MMB: Pan\n");
-    printf("  Alt + RMB Drag or Scroll: Zoom\n");
-    printf("  LMB: Add Point\n");
-    printf("  'C': Clear Sketch\n");
-    printf("-------------------------------------------\n");
-    
-    // Initial dummy points
-    for(int i=-10; i<=10; ++i) 
-    {
-        points.push_back({(float)i, sinf((float)i * 0.5f)*5.0f, 0.0f});
-    }
-}
+// static std::vector<V3> points;
+// static float rotation = 0.0f;
 
-void update(float dt)
-{
-    rotation += dt;
-}
+// void setup()
+// {
+//     printf("--------------------------------------------------------------------------------\n");
+//     printf("AliceViewer Framework v2.0.2 Optimized\n");
+//     printf("--------------------------------------------------------------------------------\n");
+//     printf("Controls:\n");
+//     printf(" - Mouse Left: Add point\n");
+//     printf(" - Mouse Middle: Orbit\n");
+//     printf(" - Mouse Right: Pan\n");
+//     printf(" - Scroll: Zoom\n");
+//     printf("--------------------------------------------------------------------------------\n");
+// }
 
-void draw()
-{
-    drawGrid(20.0f);
+// void update(float dt)
+// {
+//     rotation += dt * 0.1f;
+// }
 
-    // Highlighted curve
-    aliceColor3f(0.8f, 0.2f, 0.3f);
-    glPointSize(8.0f);
-    glLineWidth(2.5f);
-    
-    if (points.size() > 1)
-    {
-        for(size_t i = 0; i + 1 < points.size(); ++i) 
-        {
-            drawLine(points[i], points[i+1]);
-            drawPoint(points[i]);
-        }
-        drawPoint(points.back());
-    }
-    else if (points.size() == 1)
-    {
-        drawPoint(points[0]);
-    }
+// void draw()
+// {
+//     backGround(0.9f);
+//     drawGrid(10.0f);
 
-    // Rotating pointer
-    aliceColor3f(0.1f, 0.6f, 0.9f);
-    drawLine({0,0,0}, {cosf(rotation)*10.0f, sinf(rotation)*10.0f, 0});
-}
+//     aliceColor3f(0.2f, 0.2f, 0.2f);
+//     alicePointSize(4.0f);
+//     for (const auto& p : points)
+//     {
+//         drawPoint(p);
+//     }
 
-void keyPress(unsigned char key, int x, int y)
-{
-    if(key == 'C' || key == 'c') 
-    {
-        points.clear();
-        printf("Sketch cleared.\n");
-    }
-}
+//     aliceColor3f(0.1f, 0.4f, 0.8f);
+//     aliceLineWidth(2.0f);
+//     for (int i = 0; i < (int)points.size() - 1; ++i)
+//     {
+//         drawLine(points[i], points[i+1]);
+//     }
+// }
 
-void mousePress(int button, int state, int x, int y)
-{
-    GLFWwindow* window = AliceViewer::instance()->window;
-    bool isAlt = (glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS);
+// void keyPress(unsigned char key, int x, int y)
+// {
+//     if (key == 27) // ESC
+//     {
+//         exit(0);
+//     }
+// }
 
-    // button 0 = LMB, state 1 = PRESS
-    if(button == 0 && state == 1 && !isAlt) 
-    {
-        // Use the new screenToWorld utility for accurate coordinate space transformation
-        V3 worldPos = AliceViewer::instance()->screenToWorld(x, y);
-        points.push_back(worldPos);
+// void mousePress(int button, int state, int x, int y)
+// {
+//     if (button == GLFW_MOUSE_BUTTON_LEFT && state == GLFW_PRESS)
+//     {
+//         V3 worldPos = AliceViewer::instance()->screenToWorld(x, y);
+//         points.push_back(worldPos);
         
-        printf("Point added at: %.2f, %.2f, %.2f\n", worldPos.x, worldPos.y, worldPos.z);
-    }
-}
+//         printf("Point added at: %.2f, %.2f, %.2f\n", worldPos.x, worldPos.y, worldPos.z);
+//     }
+// }
 
-void mouseMotion(int x, int y)
-{
-}
+// void mouseMotion(int x, int y)
+// {
+// }
+*/

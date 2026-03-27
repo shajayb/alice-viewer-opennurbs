@@ -1,69 +1,84 @@
 #pragma once
 
-#include <cmath>
-#include <algorithm>
-#include <vector>
-#include <cstdio>
-
 #pragma pack(push, 1)
 
 struct V3
 {
     float x, y, z;
-    
-    V3() : x(0), y(0), z(0) {}
-    V3(float _x, float _y, float _z) : x(_x), y(_y), z(_z) {}
-    
-    V3 operator+(const V3& v) const 
-    { 
-        return { x + v.x, y + v.y, z + v.z }; 
+
+    V3() : x(0), y(0), z(0) 
+    {
     }
-    V3 operator-(const V3& v) const 
-    { 
-        return { x - v.x, y - v.y, z - v.z }; 
+
+    V3(float _x, float _y, float _z) : x(_x), y(_y), z(_z) 
+    {
     }
-    V3 operator*(float s) const 
-    { 
-        return { x * s, y * s, z * s }; 
+
+    V3 operator+(const V3& v) const
+    {
+        return { x + v.x, y + v.y, z + v.z };
     }
-    V3 operator/(float s) const 
-    { 
-        return { x / s, y / s, z / s }; 
+
+    V3 operator-(const V3& v) const
+    {
+        return { x - v.x, y - v.y, z - v.z };
     }
-    
-    V3& operator+=(const V3& v) 
-    { 
-        x += v.x; y += v.y; z += v.z; return *this; 
+
+    V3 operator*(float s) const
+    {
+        return { x * s, y * s, z * s };
     }
-    V3& operator-=(const V3& v) 
-    { 
-        x -= v.x; y -= v.y; z -= v.z; return *this; 
+
+    V3 operator/(float s) const
+    {
+        return { x / s, y / s, z / s };
     }
-    
-    float length() const 
-    { 
-        return sqrtf(x * x + y * y + z * z); 
+
+    V3& operator+=(const V3& v)
+    {
+        x += v.x; 
+        y += v.y; 
+        z += v.z; 
+        return *this;
     }
-    void normalise() 
-    { 
-        float l = length(); 
-        if (l > 1e-9f) { x /= l; y /= l; z /= l; } 
+
+    V3& operator-=(const V3& v)
+    {
+        x -= v.x; 
+        y -= v.y; 
+        z -= v.z; 
+        return *this;
     }
+
+    float length() const;
+    void normalise();
 };
 
-struct V4
+struct Vertex
+{
+    V3 pos;
+    V3 color;
+};
+
+struct alignas(16) V4
 {
     float x, y, z, w;
-    V4() : x(0), y(0), z(0), w(0) {}
-    V4(float _x, float _y, float _z, float _w) : x(_x), y(_y), z(_z), w(_w) {}
+
+    V4() : x(0), y(0), z(0), w(0) 
+    {
+    }
+
+    V4(float _x, float _y, float _z, float _w) : x(_x), y(_y), z(_z), w(_w) 
+    {
+    }
 };
 
-namespace Alice 
-{ 
-    using vec = V3; 
+namespace Alice
+{
+    using vec = V3;
 }
 
-struct M4
+struct alignas(16) M4
 {
     float m[16];
 };
@@ -84,9 +99,8 @@ struct ArcballCamera
 
 #pragma pack(pop)
 
-// --- MVC "Sketch" Interface (Weak Symbols / Externs) ---
-// ... (rest of extern "C" remains the same)
-extern "C" {
+extern "C" 
+{
     void setup();
     void update(float deltaTime);
     void draw();
@@ -94,7 +108,6 @@ extern "C" {
     void mousePress(int button, int state, int x, int y);
     void mouseMotion(int x, int y);
 
-    // --- Alice CAD Framework Primitive API (C-Linkage compatible) ---
     void drawGrid(float size);
     void drawPoint(V3 pt);
     void drawLine(V3 a, V3 b);
@@ -103,7 +116,6 @@ extern "C" {
     void aliceLineWidth(float width);
 }
 
-// C++ Overloads (Not in extern "C")
 void backGround(float grey);
 void backGround(float r, float g, float b);
 
@@ -124,27 +136,90 @@ void backGround(float r, float g, float b);
     #define glLineWidth aliceLineWidth
 #endif
 
-// --- Math Utilities ---
-inline V3 nrm(V3 v) { v.normalise(); return v; }
-inline float dot(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
-inline V3 crs(V3 a, V3 b) { return { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x }; }
+inline V3 nrm(V3 v) 
+{ 
+    v.normalise(); 
+    return v; 
+}
+
+inline float dot(V3 a, V3 b) 
+{ 
+    return a.x * b.x + a.y * b.y + a.z * b.z; 
+}
+
+inline V3 crs(V3 a, V3 b) 
+{ 
+    return { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x }; 
+}
 
 struct GLFWwindow;
 
 class AliceViewer
 {
 public:
+    struct PerfTuner
+    {
+        double lastFlushTimeUs = 0.0;
+        double frameDeltaMs = 0.0;
+        int currentBatchThreshold = 8192;
+        bool enabled = true;
+
+        void tune(float dt, double flushUs);
+    };
+
     GLFWwindow* window;
     ArcballCamera camera;
     unsigned int shaderProgram;
     float fov = 0.8f;
+    PerfTuner tuner;
 
     int init();
     void run();
     void cleanup();
-    
-    // Utility for coordinate space transformation
+
     V3 screenToWorld(int screenX, int screenY, float planeZ = 0.0f);
-    
+
     static AliceViewer* instance();
 };
+
+// #define ALICE_VIEWER_RUN_TEST
+
+#ifdef ALICE_VIEWER_RUN_TEST
+#include <cstdio>
+#include <cmath>
+#include <chrono>
+
+#define ALICE_ASSERT(cond) \
+    if (!(cond)) { printf("[FAIL] ASSERT: %s at %s:%d\n", #cond, __FILE__, __LINE__); }
+
+#define ALICE_EXPECT_NEAR(a, b, eps) \
+    if (std::abs((a) - (b)) > (eps)) { printf("[FAIL] EXPECT_NEAR: %f != %f (eps %f) at %s:%d\n", (float)(a), (float)(b), (float)(eps), __FILE__, __LINE__); }
+
+struct ScopedProfiler
+{
+    const char* name;
+    std::chrono::high_resolution_clock::time_point start;
+    double* outUs;
+
+    ScopedProfiler(const char* n, double* out = nullptr) : name(n), outUs(out)
+    {
+        start = std::chrono::high_resolution_clock::now();
+    }
+
+    ~ScopedProfiler()
+    {
+        auto end = std::chrono::high_resolution_clock::now();
+        double dur = std::chrono::duration<double, std::micro>(end - start).count();
+        if (outUs)
+        {
+            *outUs = dur;
+        }
+        else
+        {
+            printf("[PROFILE] %s: %.2f us\n", name, dur);
+        }
+    }
+};
+
+void runAliceTests();
+#endif

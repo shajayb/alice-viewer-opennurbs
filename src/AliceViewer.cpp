@@ -671,6 +671,7 @@ void AliceViewer::cleanup()
     glfwTerminate(); 
 }
 
+
 #ifdef ALICE_VIEWER_RUN_TEST
 void runAliceTests()
 {

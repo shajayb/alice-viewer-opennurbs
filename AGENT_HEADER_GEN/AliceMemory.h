@@ -64,6 +64,21 @@ struct Buffer
         count = 0;
     }
 
+    void swap(Buffer<T>& other)
+    {
+        T* temp_data = data;
+        size_t temp_count = count;
+        size_t temp_capacity = capacity;
+
+        data = other.data;
+        count = other.count;
+        capacity = other.capacity;
+
+        other.data = temp_data;
+        other.count = temp_count;
+        other.capacity = temp_capacity;
+    }
+
     T* begin() { return data; }
     T* end() { return data + count; }
     const T* begin() const { return data; }

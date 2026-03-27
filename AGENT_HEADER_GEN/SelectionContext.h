@@ -16,7 +16,7 @@
 
 namespace Alice
 {
-    static LinearArena g_Arena;
+    inline static LinearArena g_Arena;
 }
 
 struct SelectionContext
@@ -165,11 +165,8 @@ struct SelectionContext
             while (j < scratchBufferA.size()) scratchBufferB.push_back(scratchBufferA[j++]);
         }
 
-        selectedIndices.clear();
-        for (size_t k = 0; k < scratchBufferB.size(); ++k)
-        {
-            selectedIndices.push_back(scratchBufferB[k]);
-        }
+        selectedIndices.swap(scratchBufferB);
+        scratchBufferB.clear();
         
         isMarqueeActive = false;
     }

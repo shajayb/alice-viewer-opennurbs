@@ -36,11 +36,16 @@ jobs:
       shell: bash
       run: cmake --build build --config ${{ matrix.build_type }}
 
+    - name: Post-Build (Linux Strip)
+      if: runner.os == 'Linux'
+      run: strip build/bin/AliceViewer
+
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: AliceViewer-${{ matrix.os }}
+        # Pointing to the standardized bin directory defined in CMake
         path: |
-          build/AliceViewer.exe
-          build/AliceViewer
-        if-no-files-found: ignore
+          build/bin/AliceViewer
+          build/bin/AliceViewer.exe
+        if-no-files-found: error

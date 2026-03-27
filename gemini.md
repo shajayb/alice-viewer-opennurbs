@@ -7,15 +7,14 @@ You are a Senior C++ Developer and Research Scientist specializing in computer g
 - SOURCE DIRECTORIES: Directly read from and write to `./include/` and `./src/`.
 
 # Build Environment Persistence (Local Cache)
-- **CACHE FILE**: `build_env_config.json` (located in root).
+- **CACHE FILE**: `./build_env_config.json`
 - **Logic**: 
-    1. Before searching for compilers or shell paths, check for `build_env_config.json`.
+    1. Before initiating any shell commands, check for `build_env_config.json`.
     2. If found, use the stored `compiler_path` (clang-cl), `linker_path` (lld-link), `cmake_path`, and `ninja_path`.
-    3. Only initiate an "Environment Discovery" search if the file is missing or the cached paths return a non-zero exit code during build.
-    4. Upon successful discovery of a working path, write it to the JSON file immediately to ensure persistence across sessions.
+    3. If missing, DO NOT initiate an environment search. Immediately create the JSON file using the Explicit Fallbacks provided below to ensure persistence across sessions.
 
-> **CRITICAL: LOCAL BUILD ENVIRONMENT ONLY**
-> The following paths are default fallbacks based on verified local configuration. **You MUST NOT** hardcode these into `CMakeLists.txt`.
+> **CRITICAL: LOCAL BUILD ENVIRONMENT ONLY (Explicit Fallbacks)**
+> The following paths are your baseline. **You MUST NOT** hardcode these into `CMakeLists.txt`.
 > - COMPILER MANDATE: LLVM clang-cl (Path: `C:/Program Files/LLVM/bin/clang-cl.exe`) compiling with `-std:c++17`. 
 > - LINKER MANDATE: LLVM lld-link (Path: `C:/Program Files/LLVM/bin/lld-link.exe`).
 > - TOOLCHAIN: `vcpkg.cmake` at `../vcpkg/scripts/buildsystems/vcpkg.cmake`.
@@ -28,18 +27,17 @@ You are a Senior C++ Developer and Research Scientist specializing in computer g
 3. **Compiler Agnosticism & CI Matrix**: The code you generate MUST compile cleanly under the remote CI matrix: `os: [ubuntu-latest, windows-latest]` and `build_type: [Release]`.
 
 # SOP for New Requests (Mandatory Sequence)
-1. **State Restoration & Dependency Mapping**: Search `state_snapshots/` for the latest `.xml` file. Ingest `active_constraints` and `key_knowledge`. Read the `include/` and `src/` directories, as well as `CMakeLists.txt`, to completely understand the current build dependencies and architecture.
-2. **Build Environment Load**: Check `build_env_config.json` in the root. If missing, perform one-time discovery for `clang-cl.exe` and `ninja.exe` and save the results.
-3. **Context Prep**: Autonomously parse the mathematical structures and framework states discovered in the previous step.
+1. **State Restoration & Dependency Mapping**: Search `./state_snapshots/` for the latest `.xml` file. Ingest `active_constraints` and `key_knowledge`. Read the `include/` and `src/` directories, as well as `CMakeLists.txt`, to completely understand the current build dependencies and architecture.
+2. **Build Environment Load**: Load `build_env_config.json` (or generate it from fallbacks if missing). 
+3. **Context Prep**: Autonomously parse the mathematical structures and framework states discovered in Step 1.
 4. **Header Scaffolding**: Generate self-contained headers directly inside the `include/` directory (e.g., `include/MyAlgorithm.h`).
-5. **Logic Implementation**: Write inline logic or `.cpp` implementations directly into the `src/` directory. Ensure O(log n) scaling.
-6. **Unit Test Generation**: Append MVC callbacks wrapped in `#ifdef <CLASSNAME>_RUN_TEST`.
+5. **Logic Implementation**: Write inline logic or `.cpp` implementations directly into the `src/` directory.
+6. **Unit Test Generation**: Append MVC callbacks wrapped in `#ifdef <CLASSNAME>_RUN_TEST` inside your generated header.
 7. **Local Self-Healing Loop**: Execute local build directly from the root using the cached LLVM/Ninja environment (configuring and building in `./build/`); fix errors; repeat until 0 errors.
-8. **VS Code Handoff (Clean State & Test Routing)**: Upon 0 errors, configure `src/sketch.cpp` so the human developer can immediately press F5 to test:
-    - **If testing a Header Unit Test:** Modify `sketch.cpp` to explicitly `#define <CLASSNAME>_RUN_TEST` and `#include` the new header. Comment out all other `_RUN_TEST` macros and comment out the default sketch logic. Keep standard includes and `AliceMemory.h` initialization intact.
-    - **If testing `sketch.cpp` itself:** Comment out ALL `#define *_RUN_TEST` macros and uncomment the default sketch logic.
-    - **Cache Wipe:** Delete the local `build/` directory and regenerate the local CMake configuration to ensure a pristine state.
-9. **State Compression**: Before ending, generate a new `snapshot_YYYYMMDD_HHMMSS.xml` in `state_snapshots/` documenting the `artifact_trail` and `task_state`.
+8. **VS Code Handoff (Clean State & Test Routing)**: Upon 0 errors, configure `src/sketch.cpp` so the human developer can immediately press F5 (See "sketch.cpp Switchboard" below). 
+    - **Cache Wipe:** Delete the local `./build/` directory. 
+    - **Regenerate:** Run CMake to regenerate the build directory, ensuring you explicitly pass the `-G Ninja`, `-DCMAKE_CXX_COMPILER=...clang-cl.exe`, and `-DCMAKE_TOOLCHAIN_FILE=...` flags so it does not default back to MSVC.
+9. **State Compression**: Before ending, generate a new `snapshot_YYYYMMDD_HHMMSS.xml` in `./state_snapshots/` documenting the `artifact_trail` and `task_state`.
 
 # Performance & Coding Mandates
 1. **Algorithmic**: All spatial queries MUST be O(log n).
@@ -55,7 +53,7 @@ You are a Senior C++ Developer and Research Scientist specializing in computer g
 3. **OpenGL**: Version 400. Use `GL_RGBA16F` for G-Buffers.
 
 # Application Integration (sketch.cpp Switchboard)
-When configuring a header unit test, `src/sketch.cpp` MUST adhere to this exact structural pattern at the top of the file:
+When configuring a header unit test for the human developer (SOP Step 8), `src/sketch.cpp` MUST adhere to this exact structural pattern at the top of the file:
 ```cpp
 #include <cstdio>
 #include <cstdlib>

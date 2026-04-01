@@ -18,6 +18,8 @@ jobs:
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
+      with:
+        submodules: false
 
     - name: Install Linux Dependencies
       if: runner.os == 'Linux'
@@ -27,16 +29,34 @@ jobs:
 
     - name: Install Windows Dependencies
       if: runner.os == 'Windows'
-      run: choco install ninja
+      run: |
+        choco install ninja llvm
+        # Add LLVM to path for clang-cl
+        echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
+        # Ensure Ninja is in path
+        echo "C:\ProgramData\chocolatey\bin" >> $GITHUB_PATH
 
     - name: Configure CMake
       shell: bash
-      run: >
-        cmake -B build -S . -G Ninja
-        -DCMAKE_C_COMPILER=clang
-        -DCMAKE_CXX_COMPILER=clang++
-        -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} 
-        -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+      run: |
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          # On Windows, explicitly point to ninja and use clang-cl
+          cmake -B build -S . -G Ninja \
+          -DCMAKE_C_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" \
+          -DCMAKE_CXX_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" \
+          -DCMAKE_MAKE_PROGRAM="C:/ProgramData/chocolatey/bin/ninja.exe" \
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static \
+          -DVCPKG_OVERLAY_PORTS="${GITHUB_WORKSPACE}/vcpkg-overlay-ports/ports"
+        else
+          cmake -B build -S . -G Ninja \
+          -DCMAKE_C_COMPILER=clang \
+          -DCMAKE_CXX_COMPILER=clang++ \
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
+          -DVCPKG_OVERLAY_PORTS="${GITHUB_WORKSPACE}/vcpkg-overlay-ports/ports"
+        fi
 
     - name: Build
       shell: bash
@@ -50,7 +70,6 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: AliceViewer-${{ matrix.os }}
-        # Pointing to the standardized bin directory defined in CMake
         path: |
           build/bin/AliceViewer
           build/bin/AliceViewer.exe

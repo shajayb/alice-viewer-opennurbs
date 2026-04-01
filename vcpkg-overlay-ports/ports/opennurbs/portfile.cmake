@@ -14,9 +14,8 @@ vcpkg_cmake_configure(
 
 vcpkg_cmake_install()
 
-# Ensure all headers are installed to include/ root
-file(GLOB HEADERS "${SOURCE_PATH}/*.h")
-file(INSTALL ${HEADERS} DESTINATION "${CURRENT_PACKAGES_DIR}/include")
+# Ensure all headers are installed to include/ root, preserving structure
+file(COPY "${SOURCE_PATH}/" DESTINATION "${CURRENT_PACKAGES_DIR}/include" FILES_MATCHING PATTERN "*.h")
 
 # Clean up any nested include folders
 file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/include/OpenNURBS")

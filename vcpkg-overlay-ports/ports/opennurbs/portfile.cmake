@@ -42,7 +42,7 @@ set_target_properties(opennurbs::opennurbs PROPERTIES
 if(WIN32)
     string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"shlwapi.lib;\${CMAKE_CURRENT_LIST_DIR}/../../lib/zlib.lib\"\n")
 else()
-    string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"z\"\n")
+    string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"z;uuid\"\n")
 endif()
 
 string(APPEND CONFIG_CONTENT ")\n")
@@ -54,7 +54,7 @@ string(APPEND CONFIG_CONTENT "        IMPORTED_LOCATION_DEBUG \"\${CMAKE_CURRENT
 if(WIN32)
     string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"shlwapi.lib;\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/zlib.lib\"\n")
 else()
-    string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"z\"\n")
+    string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"z;uuid\"\n")
 endif()
 
 string(APPEND CONFIG_CONTENT "    )\n")

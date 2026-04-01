@@ -1,11 +1,15 @@
-# CMake
-build/
+/vcpkg_installed/
+/vcpkg_packages/
+/build/
+.vs/
+build_env_config.json
+*.obj
+*.exe
+*.pdb
+*.log
 CMakeFiles/
 CMakeCache.txt
 *.cmake
-
-# Visual Studio
-.vs/
 *.sln
 *.vcxproj
 *.user
@@ -13,12 +17,3 @@ CMakeCache.txt
 x64/
 Debug/
 Release/
-
-# vcpkg
-vcpkg_installed/
-
-# Other artifacts
-*.obj
-*.exe
-*.pdb
-*.log

@@ -541,7 +541,7 @@ int AliceViewer::init()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4); 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    window = glfwCreateWindow(1280, 720, "Alice CAD Framework", 0, 0);
+    window = glfwCreateWindow(1280, 720, "ALICE CAD ON FRAMEWORK", 0, 0);
     if (!window) 
     {
         return 1;

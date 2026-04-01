@@ -1,0 +1,16 @@
+SYSTEM INITIATION TASK: ENVIRONMENT VALIDATION & SELF-HEALING TEST
+
+Execute your mandatory SOP as defined in your role constraints. Do not output conversational filler. 
+
+Objective: Implement a high-performance, branchless 2D Axis-Aligned Bounding Box (AABB) intersection algorithm to validate the local LLVM/Ninja build pipeline and your self-healing compilation loop.
+
+Specifications:
+1. Target File: Generate a self-contained header at include/FastAABB.h.
+2. Architecture: Use strict Data-Oriented Design (DOD). Define a minimal, cache-friendly AABB struct (e.g., using std::array<float, 4> or raw floats for min/max extents). 
+3. Performance: The intersection function MUST be 100% branchless. Rely on bitwise operations or fmin/fmax intrinsics. Enforce zero heap allocations. Mark pure functions as constexpr or inline where optimal.
+4. Unit Test: Append a standalone unit test inside FastAABB.h wrapped in #ifdef FASTAABB_RUN_TEST. The test should initialize two overlapping AABBs and two non-overlapping AABBs, executing the intersection logic.
+5. Integration: Modify src/sketch.cpp to activate #define FASTAABB_RUN_TEST at the top of the switchboard, ensuring all other tests are commented out.
+6. Execution: Run your local self-healing loop. Verify build_env_config.json is loaded (or generated via fallback mandates: clang-cl, lld-link, ninja). Run CMake with the strict Ninja generator and LLVM flags. Fix any compilation errors locally until you reach 0 errors.
+7. Snapshot: Upon successful compilation and workspace prep, generate the required snapshot_YYYYMMDD_HHMMSS.xml state file.
+
+Report back only when the sketch.cpp switchboard is configured, the local build is clean, and the workspace is ready for the human developer to press F5.

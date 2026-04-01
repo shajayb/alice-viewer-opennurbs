@@ -1,0 +1,14 @@
+{
+  "default-registry": {
+    "kind": "builtin",
+    "baseline": "a9f0cd0345fb29cd227d802f1fd1917c28f8e5a3"
+  },
+  "registries": [
+    {
+      "kind": "git",
+      "repository": "C:/Users/shajay.b/Documents/REPOS/alice-viewer - openNurbs/vcpkg-overlay-ports",
+      "baseline": "7a73df26b1b459d037aacf2942b6a70d28fada81",
+      "packages": [ "opennurbs" ]
+    }
+  ]
+}

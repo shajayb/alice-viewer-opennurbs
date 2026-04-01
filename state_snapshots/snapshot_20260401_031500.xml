@@ -1,0 +1,26 @@
+<snapshot>
+  <active_constraints>
+    LLVM clang-cl, Ninja, vcpkg, C++17, DOD, Branchless, Zero Heap, Static Runtime (/MT).
+  </active_constraints>
+  <key_knowledge>
+    - openNURBS 8.x integrated via custom vcpkg git registry.
+    - Overlay port pulls from mcneel/opennurbs branch 8.x.
+    - portfile.cmake handles manual header installation and transitive linkage (shlwapi, zlib).
+    - RhinoIO.cpp uses ONX_Model for modern high-level 3DM I/O.
+    - Build pipeline verified with static triplet and forced /MT runtime.
+  </key_knowledge>
+  <artifact_trail>
+    - vcpkg-overlay-ports/: Custom git registry for openNURBS.
+    - vcpkg-configuration.json: Configured to use the local git registry.
+    - include/RhinoIO.h: Quarantined header (No opennurbs.h include).
+    - src/RhinoIO.cpp: Translation logic using ONX_Model and LinearArena.
+    - CMakeLists.txt: Updated for find_package(opennurbs) and /MT linkage.
+    - src/sketch.cpp: Switchboard configured for RHINO_IO_RUN_TEST.
+  </artifact_trail>
+  <task_state>
+    OPENNURBS INTEGRATION COMPLETED.
+    Local build is clean (0 errors).
+    Executable generated at build/bin/AliceViewer.exe.
+    Workspace ready for F5 verification.
+  </task_state>
+</snapshot>

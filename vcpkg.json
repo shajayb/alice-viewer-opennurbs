@@ -1,5 +1,5 @@
 {
-  "name": "aliceviewer-scaffold",
+  "name": "alice-viewer-opennurbs",
   "version": "0.1.0",
   "dependencies": [
     "glfw3",
@@ -10,6 +10,7 @@
         "glfw-binding",
         "opengl3-binding"
       ]
-    }
+    },
+    "opennurbs"
   ]
 }

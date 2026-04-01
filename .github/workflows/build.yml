@@ -26,6 +26,10 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y libxinerama-dev libxcursor-dev xorg-dev libgl1-mesa-dev pkg-config ninja-build clang lld
+        # Try to update vcpkg baseline cache if needed
+        cd "$VCPKG_INSTALLATION_ROOT"
+        git fetch --unshallow || true
+        git fetch origin master
 
     - name: Install Windows Dependencies
       if: runner.os == 'Windows'
@@ -35,12 +39,18 @@ jobs:
         echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
         # Ensure Ninja is in path
         echo "C:\ProgramData\chocolatey\bin" >> $GITHUB_PATH
+        # Try to update vcpkg baseline cache
+        cd "$VCPKG_INSTALLATION_ROOT"
+        git fetch --unshallow || true
+        git fetch origin master
 
     - name: Configure CMake
       shell: bash
       run: |
+        # Ensure Ninja is findable by setting it in the environment as well
+        export CMAKE_MAKE_PROGRAM=$(which ninja 2>/dev/null || echo "C:/ProgramData/chocolatey/bin/ninja.exe")
+        
         if [[ "${{ runner.os }}" == "Windows" ]]; then
-          # On Windows, explicitly point to ninja and use clang-cl
           cmake -B build -S . -G Ninja \
           -DCMAKE_C_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" \
           -DCMAKE_CXX_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" \

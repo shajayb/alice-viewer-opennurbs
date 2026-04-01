@@ -23,24 +23,31 @@ file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/include/opennurbsStatic")
 file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include")
 
 # Manual config file with transitive dependencies
-set(LIB_NAME "opennurbsStatic")
 if(WIN32)
     set(LIB_EXT ".lib")
-    set(ZLIB_NAME "zlib.lib")
+    set(LIB_PREFIX "")
 else()
     set(LIB_EXT ".a")
-    set(LIB_NAME "libopennurbsStatic")
-    # Detect zlib name on Linux (McNeel's zlib built with Z_PREFIX)
-    if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/libzlib.a")
-        set(ZLIB_NAME "libzlib.a")
-    elseif(EXISTS "${CURRENT_PACKAGES_DIR}/lib/libopennurbs_zlib.a")
-        set(ZLIB_NAME "libopennurbs_zlib.a")
-    elseif(EXISTS "${CURRENT_PACKAGES_DIR}/lib/libopennurbs_public_zlib.a")
-        set(ZLIB_NAME "libopennurbs_public_zlib.a")
-    elseif(EXISTS "${CURRENT_PACKAGES_DIR}/lib/libz.a")
-        set(ZLIB_NAME "libz.a")
-    else()
-        set(ZLIB_NAME "libzlib.a") # Fallback
+    set(LIB_PREFIX "lib")
+endif()
+
+set(MAIN_LIB "${LIB_PREFIX}opennurbsStatic${LIB_EXT}")
+set(ZLIB_NAME "${LIB_PREFIX}zlib${LIB_EXT}")
+
+# Check for alternative names if defaults don't exist
+if(NOT EXISTS "${CURRENT_PACKAGES_DIR}/lib/${ZLIB_NAME}")
+    if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/${LIB_PREFIX}opennurbs_zlib${LIB_EXT}")
+        set(ZLIB_NAME "${LIB_PREFIX}opennurbs_zlib${LIB_EXT}")
+    elseif(EXISTS "${CURRENT_PACKAGES_DIR}/lib/${LIB_PREFIX}opennurbs_public_zlib${LIB_EXT}")
+        set(ZLIB_NAME "${LIB_PREFIX}opennurbs_public_zlib${LIB_EXT}")
+    elseif(EXISTS "${CURRENT_PACKAGES_DIR}/lib/${LIB_PREFIX}z${LIB_EXT}")
+        set(ZLIB_NAME "${LIB_PREFIX}z${LIB_EXT}")
+    endif()
+endif()
+
+if(NOT EXISTS "${CURRENT_PACKAGES_DIR}/lib/${MAIN_LIB}")
+    if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/${LIB_PREFIX}OpenNURBS${LIB_EXT}")
+        set(MAIN_LIB "${LIB_PREFIX}OpenNURBS${LIB_EXT}")
     endif()
 endif()
 
@@ -48,26 +55,26 @@ set(CONFIG_CONTENT "
 add_library(opennurbs::opennurbs STATIC IMPORTED)
 set_target_properties(opennurbs::opennurbs PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES \"\${CMAKE_CURRENT_LIST_DIR}/../../include\"
-    IMPORTED_LOCATION \"\${CMAKE_CURRENT_LIST_DIR}/../../lib/${LIB_NAME}${LIB_EXT}\"
+    IMPORTED_LOCATION \"\${CMAKE_CURRENT_LIST_DIR}/../../lib/${MAIN_LIB}\"
 ")
 
 if(WIN32)
     string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"shlwapi.lib;\${CMAKE_CURRENT_LIST_DIR}/../../lib/${ZLIB_NAME}\"\n")
 else()
-    string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"uuid;pthread;dl;\${CMAKE_CURRENT_LIST_DIR}/../../lib/${ZLIB_NAME}\"\n")
+    # Use grouping for static libraries on Linux to resolve circular dependencies
+    string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"uuid;pthread;dl;-Wl,--start-group;\${CMAKE_CURRENT_LIST_DIR}/../../lib/${MAIN_LIB};\${CMAKE_CURRENT_LIST_DIR}/../../lib/${ZLIB_NAME};-Wl,--end-group\"\n")
 endif()
 
 string(APPEND CONFIG_CONTENT ")\n")
 
-string(APPEND CONFIG_CONTENT "if(EXISTS \"\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${LIB_NAME}${LIB_EXT}\")\n")
+string(APPEND CONFIG_CONTENT "if(EXISTS \"\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${MAIN_LIB}\")\n")
 string(APPEND CONFIG_CONTENT "    set_target_properties(opennurbs::opennurbs PROPERTIES\n")
-string(APPEND CONFIG_CONTENT "        IMPORTED_LOCATION_DEBUG \"\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${LIB_NAME}${LIB_EXT}\"\n")
+string(APPEND CONFIG_CONTENT "        IMPORTED_LOCATION_DEBUG \"\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${MAIN_LIB}\"\n")
 
 if(WIN32)
     string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"shlwapi.lib;\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${ZLIB_NAME}\"\n")
 else()
-    # In debug config, the zlib name might be the same or have a 'd' suffix, but openNURBS usually keeps it same for static
-    string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"uuid;pthread;dl;\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${ZLIB_NAME}\"\n")
+    string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"uuid;pthread;dl;-Wl,--start-group;\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${MAIN_LIB};\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${ZLIB_NAME};-Wl,--end-group\"\n")
 endif()
 
 string(APPEND CONFIG_CONTENT "    )\n")

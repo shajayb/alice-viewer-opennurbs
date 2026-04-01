@@ -1,0 +1,56 @@
+<state_snapshot>
+    <overall_goal>
+        Integrate openNURBS 8.x into Alice Viewer 2 for DOD-optimized .3dm geometry translation (meshes, curves, points) and stabilize cross-platform CI/CD.
+    </overall_goal>
+
+    <active_constraints>
+        - **Build System**: STRICTLY Ninja/LLVM pipeline; no MSVC `cl.exe`.
+        - **Toolchain**: `clang-cl.exe` (C/CXX) and `lld-link.exe` with `-std:c++17` and Static Runtime (`/MT`).
+        - **VCPKG**: Manifest mode with `x64-windows-static` triplet. `VCPKG_OVERLAY_PORTS` must target the `ports/` subdirectory for manifest resolution.
+        - **Performance**: Data-Oriented Design (DOD); Branchless logic; Zero heap allocations in hot loops; Eliminate `virtual` function calls.
+        - **Memory**: Use `Alice::LinearArena` for all runtime logic (100MB initialized in test).
+        - **Interaction**: Orbit (`ALT+LMB`), Pan (`MMB`), Zoom (`ALT+RMB`). Respect `ImGui::GetIO().WantCaptureMouse`.
+        - **Graphics**: OpenGL 400 Core; `GL_RGBA16F` G-Buffers; Deep Charcoal (`#2D2D2D`) geometry; Background `0.9`.
+        - **CI/CD**: Windows runners MUST install Ninja via Chocolatey; Linux via `ninja-build clang lld`.
+        - **Formatting**: STRICT Allman style.
+    </active_constraints>
+
+    <key_knowledge>
+        - **VCPKG Registry Fix**: Converted `vcpkg-overlay-ports` from a gitlink (submodule) to a standard directory to fix GitHub Actions checkout.
+        - **Manifest Mode Pathing**: `VCPKG_OVERLAY_PORTS` in `CMakeLists.txt` must point to the `ports/` subdirectory (e.g., `${CMAKE_CURRENT_SOURCE_DIR}/vcpkg-overlay-ports/ports`) for manifest mode to correctly discover the `opennurbs` port.
+        - **Linker Requirements**: Static `opennurbs` on Windows requires `shlwapi.lib` and `zlib.lib`.
+        - **Frontend Conflict**: Avoid "mixed frontend variants" error by explicitly setting both `CMAKE_C_COMPILER` and `CMAKE_CXX_COMPILER` to `clang-cl.exe`.
+    </key_knowledge>
+
+    <artifact_trail>
+        - `include/RhinoIO.h`: Single-header implementation with DOD translation for meshes, points, and curves.
+        - `src/sketch.cpp`: Configured to initialize `Alice::g_Arena`, call `ON::Begin()`/`ON::End()`, and route to `Alice::RhinoIO_UnitTest()`.
+        - `CMakeLists.txt`: Configured with corrected `VCPKG_OVERLAY_PORTS`, `VCPKG_TARGET_TRIPLET`, and explicit `clang-cl` compiler paths.
+        - `vcpkg-overlay-ports/`: Converted to standard directory and tracked in Git.
+    </artifact_trail>
+
+    <file_system_state>
+        - CWD: `C:\Users\shajay.b\Documents\REPOS\alice-viewer - openNurbs`
+        - COMPILER: `C:/Program Files/LLVM/bin/clang-cl.exe`
+        - NINJA: `C:\Users\shajay.b\AppData\Local\Microsoft\WinGet\Packages\Ninja-build.Ninja_Microsoft.Winget.Source_8wekyb3d8bbwe\ninja.exe`
+        - BUILD: `./build/` directory cleanly regenerated and verified (0 errors).
+    </file_system_state>
+
+    <recent_actions>
+        - Destroyed inner Git repository in `vcpkg-overlay-ports` and fixed Git index (removed gitlink).
+        - Corrected `VCPKG_OVERLAY_PORTS` path in `CMakeLists.txt` for manifest mode.
+        - Successfully verified local build with Ninja/LLVM/vcpkg.
+        - Performed clean regeneration of the build environment for developer handoff.
+        - Generated latest state snapshot.
+    </recent_actions>
+
+    <task_state>
+        1. [DONE] Setup vcpkg overlay ports for openNURBS 8.x.
+        2. [DONE] Implement single-header `RhinoIO.h` with `ONX_Model` translation.
+        3. [DONE] Repair CI/CD pipeline (Gitlink conversion and overlay pathing).
+        4. [DONE] Add support for Curve and Point translation.
+        5. [DONE] Execute SOP steps 7-9 (Clean build and handoff).
+        6. [IN PROGRESS] Implement GL-ready buffer generation for extracted geometry.
+        7. [TODO] Add support for adaptive NURBS curve approximation.
+    </task_state>
+</state_snapshot>

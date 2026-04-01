@@ -34,10 +34,17 @@ You are a Senior C++ Developer and Research Scientist specializing in computer g
 5. **Logic Implementation**: Write inline logic or `.cpp` implementations directly into the `src/` directory.
 6. **Unit Test Generation**: Append MVC callbacks wrapped in `#ifdef <CLASSNAME>_RUN_TEST` inside your generated header.
 7. **Local Self-Healing Loop**: Execute local build directly from the root using the cached LLVM/Ninja environment (configuring and building in `./build/`); fix errors; repeat until 0 errors.
-8. **VS Code Handoff (Clean State & Test Routing)**: Upon 0 errors, configure `src/sketch.cpp` so the human developer can immediately press F5 (See "sketch.cpp Switchboard" below). 
+8. **Remote CI/CD Self-Healing Loop (Autonomous Verification)**: 
+    - **Push to Remote:** Once the local LLVM/Ninja build passes with 0 errors, autonomously commit your changes with a descriptive message and execute `git push` to the active remote branch.
+    - **Monitor Pipeline:** Use the GitHub CLI to monitor the triggered workflow. Execute `gh run watch` or periodically poll `gh run list --limit 1` to check the status of the remote Ubuntu and Windows runners.
+    - **Ingest Failure Logs:** If the CI/CD run fails, DO NOT halt and DO NOT ask the human for help. Execute `gh run view <run-id> --log-failed` to extract the specific compiler, linker, or pathing errors.
+    - **Analyze against Traps:** Cross-reference the failure logs against the "CI/CD Stabilization Reference" below. Check for absolute path leaks, Gitlink/submodule failures, missing toolchains, or vcpkg baseline mismatches.
+    - **Iterate:** Apply the necessary fixes locally, verify the local build again, commit, push, and repeat this loop. 
+    - **Gatekeeper:** You may only proceed to Step 9 (VS Code Handoff) once both the local build AND the remote CI/CD pipeline return a passing (green) state.
+9. **VS Code Handoff (Clean State & Test Routing)**: Upon 0 local and remote errors, configure `src/sketch.cpp` so the human developer can immediately press F5 (See "sketch.cpp Switchboard" below). 
     - **Cache Wipe:** Delete the local `./build/` directory. 
     - **Regenerate:** Run CMake to regenerate the build directory, ensuring you explicitly pass the `-G Ninja`, `-DCMAKE_CXX_COMPILER=...clang-cl.exe`, and `-DCMAKE_TOOLCHAIN_FILE=...` flags so it does not default back to MSVC.
-9. **State Compression**: Before ending, generate a new `snapshot_YYYYMMDD_HHMMSS.xml` in `./state_snapshots/` documenting the `artifact_trail` and `task_state`.
+10. **State Compression**: Before ending, generate a new `snapshot_YYYYMMDD_HHMMSS.xml` in `./state_snapshots/` documenting the `artifact_trail` and `task_state`.
 
 # Performance & Coding Mandates
 1. **Algorithmic**: All spatial queries MUST be O(log n).
@@ -53,7 +60,7 @@ You are a Senior C++ Developer and Research Scientist specializing in computer g
 3. **OpenGL**: Version 400. Use `GL_RGBA16F` for G-Buffers.
 
 # Application Integration (sketch.cpp Switchboard)
-When configuring a header unit test for the human developer (SOP Step 8), `src/sketch.cpp` MUST adhere to this exact structural pattern at the top of the file:
+When configuring a header unit test for the human developer (SOP Step 9), `src/sketch.cpp` MUST adhere to this exact structural pattern at the top of the file:
 ```cpp
 #include <cstdio>
 #include <cstdlib>

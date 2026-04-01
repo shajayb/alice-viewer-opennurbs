@@ -1,0 +1,35 @@
+<state_snapshot>
+    <overall_goal>
+        Integrate openNURBS 8.x into Alice Viewer 2 for DOD-optimized .3dm geometry translation and stabilize cross-platform CI/CD infrastructure for Windows and Ubuntu.
+    </overall_goal>
+
+    <active_constraints>
+        - **Build System**: STRICTLY Ninja/LLVM pipeline (`clang-cl.exe`, `lld-link.exe`) in `./build/`.
+        - **Compiler Mandate**: `-std:c++17`, Static Runtime (`/MT`). NO MSVC `cl.exe`.
+        - **VCPKG**: Manifest mode with `x64-windows-static` on Windows; overlay ports targeting `${CMAKE_CURRENT_SOURCE_DIR}/vcpkg-overlay-ports/ports`.
+        - **CI/CD Enforcements**: Windows runners use `clang-cl` and `ninja` from Chocolatey. Ubuntu runners use `clang/lld` and `ninja-build`.
+        - **Coding Mandates**: STRICT Allman style; Data-Oriented Design (DOD); Branchless logic; Zero heap allocations in hot loops; Restrict STL.
+    </active_constraints>
+
+    <key_knowledge>
+        - **CI/CD Failure (Ubuntu)**: Identified potential causes as missing system library linkage (`uuid`, `pthread`, `dl`) and incorrect `zlib` name detection for the openNURBS overlay port.
+        - **Portfile Hardening**: Updated `vcpkg-overlay-ports/ports/opennurbs/portfile.cmake` to explicitly link `uuid`, `pthread`, and `dl` on Linux and added detection for multiple `zlib` naming conventions used by McNeel's build system.
+        - **Git Ignore Fix**: Modified `.gitignore` to ensure `portfile.cmake` in overlay ports is never ignored, preventing CI/CD checkout issues.
+    </key_knowledge>
+
+    <artifact_trail>
+        - `.gitignore`: Updated to allow `.cmake` files within `vcpkg-overlay-ports`.
+        - `vcpkg-overlay-ports/ports/opennurbs/portfile.cmake`: Hardened for Linux linkage and `zlib` detection.
+        - `build/`: Verified local build with updated overlay configuration.
+    </artifact_trail>
+
+    <task_state>
+        1. [DONE] Setup vcpkg overlay ports for openNURBS 8.x.
+        2. [DONE] Implement single-header `RhinoIO.h` with DOD translation.
+        3. [DONE] Resolve vcpkg registry and baseline conflicts.
+        4. [DONE] Flatten overlay directory for CI visibility.
+        5. [DONE] Stabilize CI/CD pipeline (Git ignore and Linux linkage fixes).
+        6. [TODO] Implement GL-ready buffer generation for extracted geometry.
+        7. [TODO] Add support for adaptive NURBS curve approximation.
+    </task_state>
+</state_snapshot>

@@ -10,6 +10,7 @@ build_env_config.json
 CMakeFiles/
 CMakeCache.txt
 *.cmake
+!vcpkg-overlay-ports/**/*.cmake
 *.sln
 *.vcxproj
 *.user

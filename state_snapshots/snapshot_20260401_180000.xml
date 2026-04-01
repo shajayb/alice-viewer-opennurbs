@@ -1,0 +1,37 @@
+<state_snapshot>
+    <overall_goal>
+        Integrate openNURBS 8.x into Alice Viewer 2 for DOD-optimized .3dm geometry translation (meshes, curves, points) and stabilize cross-platform CI/CD infrastructure for Windows and Ubuntu.
+    </overall_goal>
+
+    <active_constraints>
+        - **Build System**: STRICTLY Ninja/LLVM pipeline (`clang-cl.exe`, `lld-link.exe`) in `./build/`.
+        - **Compiler Mandate**: `-std:c++17`, Static Runtime (`/MT`). NO MSVC `cl.exe`.
+        - **VCPKG**: Manifest mode with `x64-windows-static` on Windows; overlay ports targeting `${CMAKE_CURRENT_SOURCE_DIR}/vcpkg-overlay-ports/ports`.
+        - **CI/CD Enforcements**: Windows runners use `clang-cl` and `ninja` from Chocolatey. Ubuntu runners use `clang/lld` and `ninja-build`.
+        - **Coding Mandates**: STRICT Allman style; Data-Oriented Design (DOD); Branchless logic; Zero heap allocations in hot loops; Restrict STL (use `std::array` or raw arrays; no `std::vector` resizing).
+        - **Graphics/UI**: OpenGL 400 Core; `GL_RGBA16F` G-Buffers. No `::` prefix for GL functions. Include `glad/glad.h` and `GLFW/glfw3.h` BEFORE `AliceViewer.h`.
+    </active_constraints>
+
+    <key_knowledge>
+        - **vcpkg Baseline**: Fixed local vcpkg baseline issue by fetching `master` in the vcpkg repository.
+        - **Ubuntu CI Fix**: Resolved compilation error by unrolling `mult(M4, M4)` into a clean nested loop and explicitly setting `CMAKE_MAKE_PROGRAM` for Ninja on Ubuntu.
+        - **RhinoIO Integration**: `RhinoIO.h` is integrated and tested in `src/sketch.cpp` with `ON::Begin()` and `ON::End()` scaffolding.
+    </key_knowledge>
+
+    <artifact_trail>
+        - `src/AliceViewer.cpp`: Refactored `mult()` function for robustness and cross-platform compatibility.
+        - `.github/workflows/build.yml`: Hardened with explicit Ninja path for Ubuntu.
+        - `src/sketch.cpp`: Configured with `RhinoIO.h` unit tests for developer F5 handoff.
+        - `build/`: Regenerated with LLVM/Ninja toolchain for immediate developer use.
+    </artifact_trail>
+
+    <task_state>
+        1. [DONE] Setup vcpkg overlay ports for openNURBS 8.x.
+        2. [DONE] Implement single-header `RhinoIO.h` with DOD translation.
+        3. [DONE] Resolve vcpkg registry and baseline conflicts.
+        4. [DONE] Flatten overlay directory for CI visibility.
+        5. [DONE] Stabilize CI/CD pipeline (Git worktree and cross-platform naming fixes).
+        6. [TODO] Implement GL-ready buffer generation for extracted geometry.
+        7. [TODO] Add support for adaptive NURBS curve approximation.
+    </task_state>
+</state_snapshot>

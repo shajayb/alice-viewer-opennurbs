@@ -26,9 +26,18 @@ file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include")
 set(LIB_NAME "opennurbsStatic")
 if(WIN32)
     set(LIB_EXT ".lib")
+    set(ZLIB_NAME "zlib.lib")
 else()
     set(LIB_EXT ".a")
     set(LIB_NAME "libopennurbsStatic")
+    # Detect zlib name on Linux (McNeel's zlib built with Z_PREFIX)
+    if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/libzlib.a")
+        set(ZLIB_NAME "libzlib.a")
+    elseif(EXISTS "${CURRENT_PACKAGES_DIR}/lib/libz.a")
+        set(ZLIB_NAME "libz.a")
+    else()
+        set(ZLIB_NAME "libzlib.a") # Fallback
+    endif()
 endif()
 
 set(CONFIG_CONTENT "
@@ -39,9 +48,9 @@ set_target_properties(opennurbs::opennurbs PROPERTIES
 ")
 
 if(WIN32)
-    string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"shlwapi.lib;\${CMAKE_CURRENT_LIST_DIR}/../../lib/zlib.lib\"\n")
+    string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"shlwapi.lib;\${CMAKE_CURRENT_LIST_DIR}/../../lib/${ZLIB_NAME}\"\n")
 else()
-    string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"z;uuid\"\n")
+    string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"uuid;\${CMAKE_CURRENT_LIST_DIR}/../../lib/${ZLIB_NAME}\"\n")
 endif()
 
 string(APPEND CONFIG_CONTENT ")\n")
@@ -51,9 +60,10 @@ string(APPEND CONFIG_CONTENT "    set_target_properties(opennurbs::opennurbs PRO
 string(APPEND CONFIG_CONTENT "        IMPORTED_LOCATION_DEBUG \"\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${LIB_NAME}${LIB_EXT}\"\n")
 
 if(WIN32)
-    string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"shlwapi.lib;\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/zlib.lib\"\n")
+    string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"shlwapi.lib;\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${ZLIB_NAME}\"\n")
 else()
-    string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"z;uuid\"\n")
+    # In debug config, the zlib name might be the same or have a 'd' suffix, but openNURBS usually keeps it same for static
+    string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"uuid;\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${ZLIB_NAME}\"\n")
 endif()
 
 string(APPEND CONFIG_CONTENT "    )\n")

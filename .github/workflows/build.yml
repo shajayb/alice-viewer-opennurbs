@@ -25,7 +25,7 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libxinerama-dev libxcursor-dev xorg-dev libgl1-mesa-dev pkg-config ninja-build clang lld
+        sudo apt-get install -y libxinerama-dev libxcursor-dev xorg-dev libgl1-mesa-dev pkg-config ninja-build clang lld uuid-dev
         # Fix vcpkg git issue if present
         if [ -d "$VCPKG_INSTALLATION_ROOT/.git" ]; then
           cd "$VCPKG_INSTALLATION_ROOT"

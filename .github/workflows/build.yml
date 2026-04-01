@@ -26,10 +26,13 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y libxinerama-dev libxcursor-dev xorg-dev libgl1-mesa-dev pkg-config ninja-build clang lld
-        # Try to update vcpkg baseline cache if needed
-        cd "$VCPKG_INSTALLATION_ROOT"
-        git fetch --unshallow || true
-        git fetch origin master
+        # Ubuntu runner vcpkg is often just a tool, not a full repo. 
+        # But we can try to fetch if it's a repo.
+        if [ -d "$VCPKG_INSTALLATION_ROOT/.git" ]; then
+          cd "$VCPKG_INSTALLATION_ROOT"
+          git fetch --unshallow || true
+          git fetch origin master
+        fi
 
     - name: Install Windows Dependencies
       if: runner.os == 'Windows'
@@ -39,17 +42,18 @@ jobs:
         echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
         # Ensure Ninja is in path
         echo "C:\ProgramData\chocolatey\bin" >> $GITHUB_PATH
-        # Try to update vcpkg baseline cache
-        cd "$VCPKG_INSTALLATION_ROOT"
-        git fetch --unshallow || true
-        git fetch origin master
+        # Check if vcpkg is a git repo. On GitHub runners it usually is C:\vcpkg
+        if (Test-Path "$env:VCPKG_INSTALLATION_ROOT\.git") {
+            cd "$env:VCPKG_INSTALLATION_ROOT"
+            git fetch --unshallow
+            git fetch origin master
+        } else {
+            Write-Host "VCPKG_INSTALLATION_ROOT is not a git repo or doesn't exist. vcpkg might fail to find baseline if not updated."
+        }
 
     - name: Configure CMake
       shell: bash
       run: |
-        # Ensure Ninja is findable by setting it in the environment as well
-        export CMAKE_MAKE_PROGRAM=$(which ninja 2>/dev/null || echo "C:/ProgramData/chocolatey/bin/ninja.exe")
-        
         if [[ "${{ runner.os }}" == "Windows" ]]; then
           cmake -B build -S . -G Ninja \
           -DCMAKE_C_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" \

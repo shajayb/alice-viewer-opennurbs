@@ -1,4 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
+
+set(VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg-overlay-ports/ports" CACHE PATH "Local vcpkg overlay ports")
+if(WIN32)
+    set(VCPKG_TARGET_TRIPLET "x64-windows-static" CACHE STRING "")
+endif()
+
 project(AliceViewer)
 
 set(CMAKE_CXX_STANDARD 17)

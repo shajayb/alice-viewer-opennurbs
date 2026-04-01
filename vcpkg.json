@@ -12,5 +12,11 @@
       ]
     },
     "opennurbs"
+  ],
+  "overrides": [
+    {
+      "name": "opennurbs",
+      "version": "8.24.25281.15003"
+    }
   ]
 }

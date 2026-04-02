@@ -73,6 +73,30 @@ struct SSAO
         unsigned int program;
         int uMVP, uMV, uColor;
 
+        static void checkShader(unsigned int id, const char* type)
+        {
+            int status;
+            glGetShaderiv(id, GL_COMPILE_STATUS, &status);
+            if (!status)
+            {
+                char log[1024];
+                glGetShaderInfoLog(id, 1024, NULL, log);
+                printf("[ERROR] Shader %s: %s\n", type, log);
+            }
+        }
+
+        static void checkProgram(unsigned int id)
+        {
+            int status;
+            glGetProgramiv(id, GL_LINK_STATUS, &status);
+            if (!status)
+            {
+                char log[1024];
+                glGetProgramInfoLog(id, 1024, NULL, log);
+                printf("[ERROR] Program Link: %s\n", log);
+            }
+        }
+
         static constexpr const char* vsrc = R"(#version 400 core
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
@@ -107,13 +131,19 @@ void main(){
             unsigned int vs = glCreateShader(GL_VERTEX_SHADER);
             glShaderSource(vs, 1, &vsrc, NULL);
             glCompileShader(vs);
+            checkShader(vs, "G-VS");
+
             unsigned int fs = glCreateShader(GL_FRAGMENT_SHADER);
             glShaderSource(fs, 1, &fsrc, NULL);
             glCompileShader(fs);
+            checkShader(fs, "G-FS");
+
             program = glCreateProgram();
             glAttachShader(program, vs);
             glAttachShader(program, fs);
             glLinkProgram(program);
+            checkProgram(program);
+
             uMVP = glGetUniformLocation(program, "uMVP");
             uMV = glGetUniformLocation(program, "uMV");
             uColor = glGetUniformLocation(program, "uColor");
@@ -123,9 +153,9 @@ void main(){
     struct SShader
     {
         unsigned int program;
-        unsigned int noiseTex;
+        unsigned int noiseTex, kernelTex;
         int uP, uRadius, uBias, uRes, uNoiseScale, uSamples;
-        float kernel[128 * 3];
+        float kernel[2048 * 3];
 
         static constexpr const char* vsrc = R"(#version 400 core
 layout(location=0) in vec3 aPos;
@@ -136,7 +166,7 @@ out float FragColor;
 uniform sampler2D gPos;
 uniform sampler2D gNorm;
 uniform sampler2D uNoise;
-uniform vec3 uKernel[128];
+uniform sampler1D uKernelTex;
 uniform mat4 uP;
 uniform float uRadius;
 uniform float uBias;
@@ -157,7 +187,8 @@ void main(){
 
     float occlusion = 0.0;
     for(int i = 0; i < uSamples; ++i){
-        vec3 samplePos = TBN * uKernel[i];
+        vec3 kernelSample = texelFetch(uKernelTex, i, 0).xyz;
+        vec3 samplePos = TBN * kernelSample;
         samplePos = pos + samplePos * uRadius;
 
         vec4 offset = vec4(samplePos, 1.0);
@@ -175,17 +206,24 @@ void main(){
 
         void init()
         {
-            for (int i = 0; i < 128; ++i)
+            for (int i = 0; i < 2048; ++i)
             {
-                float z = (float)i / 128.0f;
+                float z = (float)i / 2048.0f;
                 float r = sqrtf(1.0f - z * z);
                 float theta = (float)i * 2.39996f;
-                float scale = (float)i / 128.0f;
+                float scale = (float)i / 2048.0f;
                 scale = 0.1f + 0.9f * scale * scale;
                 kernel[i * 3 + 0] = cosf(theta) * r * scale;
                 kernel[i * 3 + 1] = sinf(theta) * r * scale;
                 kernel[i * 3 + 2] = z * scale;
             }
+
+            glGenTextures(1, &kernelTex);
+            glBindTexture(GL_TEXTURE_1D, kernelTex);
+            glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB16F, 2048, 0, GL_RGB, GL_FLOAT, kernel);
+            glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 
             float noiseData[16 * 3];
             for (int i = 0; i < 16; ++i)
@@ -205,13 +243,19 @@ void main(){
             unsigned int vs = glCreateShader(GL_VERTEX_SHADER);
             glShaderSource(vs, 1, &vsrc, NULL);
             glCompileShader(vs);
+            GShader::checkShader(vs, "S-VS");
+
             unsigned int fs = glCreateShader(GL_FRAGMENT_SHADER);
             glShaderSource(fs, 1, &fsrc, NULL);
             glCompileShader(fs);
+            GShader::checkShader(fs, "S-FS");
+
             program = glCreateProgram();
             glAttachShader(program, vs);
             glAttachShader(program, fs);
             glLinkProgram(program);
+            GShader::checkProgram(program);
+
             uP = glGetUniformLocation(program, "uP");
             uRadius = glGetUniformLocation(program, "uRadius");
             uBias = glGetUniformLocation(program, "uBias");
@@ -247,7 +291,7 @@ void main(){
     float ssaoRaw = texture(sSSAO, uv).r;
 
     if (albedoSample.a < 0.01) {
-        FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+        FragColor = vec4(0.9, 0.9, 0.9, 1.0); // Clean background, no SSAO processing
         return;
     }
 
@@ -295,13 +339,19 @@ void main(){
             unsigned int vs = glCreateShader(GL_VERTEX_SHADER);
             glShaderSource(vs, 1, &vsrc, NULL);
             glCompileShader(vs);
+            GShader::checkShader(vs, "B-VS");
+
             unsigned int fs = glCreateShader(GL_FRAGMENT_SHADER);
             glShaderSource(fs, 1, &fsrc, NULL);
             glCompileShader(fs);
+            GShader::checkShader(fs, "B-FS");
+
             program = glCreateProgram();
             glAttachShader(program, vs);
             glAttachShader(program, fs);
             glLinkProgram(program);
+            GShader::checkProgram(program);
+
             uRes = glGetUniformLocation(program, "uRes");
             uMode = glGetUniformLocation(program, "uMode");
         }
@@ -312,7 +362,10 @@ void main(){
         int mode = 0;
         float bias = 0.25f;
         float radius = 5.0f;
-        int samples = 32;
+        float lastViewMatrix[16] = {0};
+        int staticFrames = 0;
+        int interactiveSamples = 256;
+        int staticSamples = 2048;
         
         int sphereCount = 0;
         int boxCount = 0;
@@ -392,10 +445,13 @@ void main(){
 
 #ifdef SSAO_RUN_TEST
 #include <opennurbs.h>
+#include "DebugRender.h"
 SSAO g_SSAO;
+DebugRender g_Debug;
 MeshPrimitive g_Sphere, g_Box, g_Plane, g_TerrainMesh;
 int g_FrameCount = 0;
 const int MAX_INSTANCES = 10000;
+
 
 namespace SSAO_Test
 {
@@ -475,7 +531,7 @@ namespace SSAO_Test
     void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
     {
         if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
-        const char* MODE_NAMES[] = { "LIT", "AO_RAW", "AO_BLUR", "NORM", "DEPTH", "POS", "DELTA", "SAMPLES" };
+        const char* MODE_NAMES[] = { "LIT", "AO_RAW", "AO_BLUR", "NORM", "DEPTH", "POS", "DEBUG" };
         switch (key) {
             case GLFW_KEY_B: Action_GridSpheres(); break;
             case GLFW_KEY_N: Action_RandomBoxes(); break;
@@ -486,19 +542,20 @@ namespace SSAO_Test
             case GLFW_KEY_2: g_SSAO.state.bias += 0.05f; break;
             case GLFW_KEY_3: g_SSAO.state.radius = fmaxf(0.1f, g_SSAO.state.radius - 0.5f); break;
             case GLFW_KEY_4: g_SSAO.state.radius += 0.5f; break;
-            case GLFW_KEY_LEFT_BRACKET: g_SSAO.state.samples = fmaxf(1, g_SSAO.state.samples - 16); break;
-            case GLFW_KEY_RIGHT_BRACKET: g_SSAO.state.samples = fminf(128, g_SSAO.state.samples + 16); break;
+            case GLFW_KEY_LEFT_BRACKET: g_SSAO.state.staticSamples = fmaxf(1, g_SSAO.state.staticSamples - 128); break;
+            case GLFW_KEY_RIGHT_BRACKET: g_SSAO.state.staticSamples = fminf(2048, g_SSAO.state.staticSamples + 128); break;
             case GLFW_KEY_D: 
-                g_SSAO.state.mode = (g_SSAO.state.mode + 1) % 6; 
+                g_SSAO.state.mode = (g_SSAO.state.mode + 1) % 7; 
                 printf("[DEBUG] Mode Switched: %s\n", MODE_NAMES[g_SSAO.state.mode]);
                 break;
         }
         if (key != GLFW_KEY_D) {
-            printf("[DEBUG] Bias: %.2f, Radius: %.2f, Samples: %d, Mode: %s\n", 
-                g_SSAO.state.bias, g_SSAO.state.radius, g_SSAO.state.samples, MODE_NAMES[g_SSAO.state.mode]);
+            printf("[DEBUG] Bias: %.2f, Radius: %.2f, Static Samples: %d, Mode: %s\n", 
+                g_SSAO.state.bias, g_SSAO.state.radius, g_SSAO.state.staticSamples, MODE_NAMES[g_SSAO.state.mode]);
         }
         fflush(stdout);
     }
+
 
     void window_size_callback(GLFWwindow* window, int width, int height)
     {
@@ -517,8 +574,16 @@ extern "C" void setup()
     int w, h;
     glfwGetFramebufferSize(av->window, &w, &h);
     g_SSAO.init(w, h);
+    g_Debug.init();
     glfwSetWindowSizeCallback(av->window, SSAO_Test::window_size_callback);
     glfwSetKeyCallback(av->window, SSAO_Test::key_callback);
+
+    // Isometric Camera Configuration
+    av->fov = 25.0f * (3.14159f / 180.0f); 
+    av->camera.distance = 280.0f;
+    av->camera.yaw = 0.785398f;
+    av->camera.pitch = 0.615472f;
+    av->camera.focusPoint = { 0.0f, 0.0f, 0.0f };
 
     // Rhino Integration: Filter for "TERRAIN" mesh
     ONX_Model model;
@@ -539,14 +604,37 @@ extern "C" void setup()
                 if (mesh)
                 {
                     int vcount = mesh->m_V.Count();
-                    int icount = mesh->m_F.Count() * 3;
+                    
+                    // Count indices including quads
+                    int icount = 0;
+                    for (int i = 0; i < mesh->m_F.Count(); ++i) icount += mesh->m_F[i].IsQuad() ? 6 : 3;
+
+                    // Spatial Normalization (Centering & Scaling)
+                    ON_3dPoint minPt(1e18, 1e18, 1e18), maxPt(-1e18, -1e18, -1e18);
+                    for (int i = 0; i < vcount; ++i)
+                    {
+                        ON_3dPoint p = mesh->m_V[i];
+                        if (p.x < minPt.x) minPt.x = p.x; if (p.y < minPt.y) minPt.y = p.y; if (p.z < minPt.z) minPt.z = p.z;
+                        if (p.x > maxPt.x) maxPt.x = p.x; if (p.y > maxPt.y) maxPt.y = p.y; if (p.z > maxPt.z) maxPt.z = p.z;
+                    }
+                    ON_3dPoint center = (minPt + maxPt) * 0.5;
+                    ON_3dVector extent = maxPt - minPt;
+                    double maxExtent = fmax(extent.x, fmax(extent.y, extent.z));
+                    if (maxExtent < 1e-6) maxExtent = 1.0;
+                    float scale = 100.0f / (float)maxExtent;
+
+                    // Calculate bottom elevation for ground plane grounding
+                    float bottomElevation = (float)(minPt.z - center.z) * scale;
+                    static float s_bottomElevation = 0.0f; 
+                    s_bottomElevation = bottomElevation;
+
                     float* vdata = (float*)Alice::g_Arena.allocate(vcount * 6 * sizeof(float));
                     unsigned int* idata = (unsigned int*)Alice::g_Arena.allocate(icount * sizeof(unsigned int));
                     for (int i = 0; i < vcount; ++i)
                     {
-                        vdata[i * 6 + 0] = (float)mesh->m_V[i].x;
-                        vdata[i * 6 + 1] = (float)mesh->m_V[i].y;
-                        vdata[i * 6 + 2] = (float)mesh->m_V[i].z;
+                        vdata[i * 6 + 0] = (float)(mesh->m_V[i].x - center.x) * scale;
+                        vdata[i * 6 + 1] = (float)(mesh->m_V[i].y - center.y) * scale;
+                        vdata[i * 6 + 2] = (float)(mesh->m_V[i].z - center.z) * scale;
                         if (mesh->HasVertexNormals())
                         {
                             vdata[i * 6 + 3] = (float)mesh->m_N[i].x;
@@ -558,19 +646,35 @@ extern "C" void setup()
                             vdata[i * 6 + 3] = 0; vdata[i * 6 + 4] = 0; vdata[i * 6 + 5] = 1;
                         }
                     }
-                    for (int i = 0; i < mesh->m_F.Count(); ++i)
-                    {
-                        idata[i * 3 + 0] = (unsigned int)mesh->m_F[i].vi[0];
-                        idata[i * 3 + 1] = (unsigned int)mesh->m_F[i].vi[1];
-                        idata[i * 3 + 2] = (unsigned int)mesh->m_F[i].vi[2];
+                    
+                    int idx = 0;
+                    for (int i = 0; i < mesh->m_F.Count(); ++i) {
+                        idata[idx++] = (unsigned int)mesh->m_F[i].vi[0];
+                        idata[idx++] = (unsigned int)mesh->m_F[i].vi[1];
+                        idata[idx++] = (unsigned int)mesh->m_F[i].vi[2];
+                        if (mesh->m_F[i].IsQuad()) {
+                            idata[idx++] = (unsigned int)mesh->m_F[i].vi[0];
+                            idata[idx++] = (unsigned int)mesh->m_F[i].vi[2];
+                            idata[idx++] = (unsigned int)mesh->m_F[i].vi[3];
+                        }
                     }
                     g_TerrainMesh.initFromRaw(vcount, vdata, icount, idata);
+
+                    // Initial Queue Population
+                    g_SSAO.clearQueue();
+                    float identity[16]; Math::mat4_identity(identity);
+                    g_SSAO.addObject(&g_TerrainMesh, identity, 0.45f, 0.28f, 0.14f);
+
+                    float planeMatrix[16];
+                    Math::mat4_identity(planeMatrix);
+                    planeMatrix[14] = s_bottomElevation; 
+                    g_SSAO.addObject(&g_Plane, planeMatrix, 0.95f, 0.95f, 0.95f);
                 }
             }
         }
     }
 
-    g_Plane.initPlane(2000.0f);
+    g_Plane.initPlane(120.0f);
     g_Sphere.initSphere(16, 8);
     g_Box.initBox();
 
@@ -579,12 +683,6 @@ extern "C" void setup()
     
     g_Sphere.initInstanced(MAX_INSTANCES, g_SSAO.state.sphereOffsets);
     g_Box.initInstanced(MAX_INSTANCES, g_SSAO.state.boxOffsets);
-
-    // Initial Queue Population
-    g_SSAO.clearQueue();
-    float identity[16]; Math::mat4_identity(identity);
-    g_SSAO.addObject(&g_TerrainMesh, identity, 0.45f, 0.28f, 0.14f);
-    g_SSAO.addObject(&g_Plane, identity, 0.95f, 0.95f, 0.95f);
 }
 
 extern "C" void update(float dt) {}
@@ -602,23 +700,49 @@ extern "C" void draw()
     for(int i=0; i<16; ++i) v[i] = viewMat.m[i];
     Math::mat4_mul(pv, p, v);
 
+    // Adaptive Logic
+    bool isCameraMoving = false;
+    for (int i = 0; i < 16; ++i) {
+        if (v[i] != g_SSAO.state.lastViewMatrix[i]) {
+            isCameraMoving = true;
+            g_SSAO.state.lastViewMatrix[i] = v[i];
+        }
+    }
+    
+    if (isCameraMoving) {
+        g_SSAO.state.staticFrames = 0;
+    } else {
+        g_SSAO.state.staticFrames++;
+    }
+    
+    // Wait 15 frames after movement stops before triggering the heavy render pass
+    int activeSamples = (g_SSAO.state.staticFrames > 15) ? g_SSAO.state.staticSamples : g_SSAO.state.interactiveSamples;
+
     // Pass 1: G-Buffer
     {
         g_SSAO.gBuffer.bind();
-        glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+        glClearColor(0.9f, 0.9f, 0.9f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glEnable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
         glUseProgram(g_SSAO.gs.program);
         
         for (int i = 0; i < g_SSAO.itemCount; ++i)
         {
             auto& item = g_SSAO.renderQueue[i];
+            if (!item.mesh || item.mesh->vao == 0) continue;
+
             float mv[16], mvp[16];
             Math::mat4_mul(mv, v, item.modelMatrix);
             Math::mat4_mul(mvp, p, mv);
+            
             glUniformMatrix4fv(g_SSAO.gs.uMV, 1, GL_FALSE, mv);
             glUniformMatrix4fv(g_SSAO.gs.uMVP, 1, GL_FALSE, mvp);
             glUniform3f(g_SSAO.gs.uColor, item.color[0], item.color[1], item.color[2]);
+            
+            // Set default instance data (pos=0, scale=1) for non-instanced draw
+            glVertexAttrib4f(2, 0.0f, 0.0f, 0.0f, 1.0f);
+            
             item.mesh->draw();
         }
         g_SSAO.gBuffer.unbind();
@@ -636,13 +760,14 @@ extern "C" void draw()
         glUniform1i(glGetUniformLocation(g_SSAO.ss.program, "gNorm"), 1);
         glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, g_SSAO.ss.noiseTex);
         glUniform1i(glGetUniformLocation(g_SSAO.ss.program, "uNoise"), 2);
-        glUniform3fv(glGetUniformLocation(g_SSAO.ss.program, "uKernel"), 128, g_SSAO.ss.kernel);
+        glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_1D, g_SSAO.ss.kernelTex);
+        glUniform1i(glGetUniformLocation(g_SSAO.ss.program, "uKernelTex"), 3);
         glUniformMatrix4fv(g_SSAO.ss.uP, 1, GL_FALSE, p);
         glUniform1f(g_SSAO.ss.uRadius, g_SSAO.state.radius);
         glUniform1f(g_SSAO.ss.uBias, g_SSAO.state.bias);
         glUniform2f(g_SSAO.ss.uRes, (float)w, (float)h);
         glUniform2f(g_SSAO.ss.uNoiseScale, (float)w / 4.0f, (float)h / 4.0f);
-        glUniform1i(g_SSAO.ss.uSamples, g_SSAO.state.samples);
+        glUniform1i(g_SSAO.ss.uSamples, activeSamples);
         g_SSAO.quad.draw();
         g_SSAO.ssaoFbo.unbind();
     }
@@ -650,20 +775,39 @@ extern "C" void draw()
     // Pass 3: Composite
     {
         glViewport(0, 0, w, h);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glUseProgram(g_SSAO.bs.program);
-        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, g_SSAO.ssaoFbo.textures[0]);
-        glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "sSSAO"), 0);
-        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[2]);
-        glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "sAlbedo"), 1);
-        glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[0]);
-        glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "gPos"), 2);
-        glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[1]);
-        glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "gNorm"), 3);
-        glUniform2f(g_SSAO.bs.uRes, (float)w, (float)h);
-        glUniform1i(g_SSAO.bs.uMode, g_SSAO.state.mode);
-        g_SSAO.quad.draw();
+        if (g_SSAO.state.mode == 6)
+        {
+            glClearColor(0.9f, 0.9f, 0.9f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glEnable(GL_DEPTH_TEST);
+            glDisable(GL_CULL_FACE);
+            for (int i = 0; i < g_SSAO.itemCount; ++i)
+            {
+                auto& item = g_SSAO.renderQueue[i];
+                if (!item.mesh) continue;
+                float mvp[16];
+                Math::mat4_mul(mvp, pv, item.modelMatrix);
+                g_Debug.draw(item.mesh, mvp);
+            }
+        }
+        else
+        {
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glUseProgram(g_SSAO.bs.program);
+            glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, g_SSAO.ssaoFbo.textures[0]);
+            glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "sSSAO"), 0);
+            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[2]);
+            glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "sAlbedo"), 1);
+            glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[0]);
+            glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "gPos"), 2);
+            glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[1]);
+            glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "gNorm"), 3);
+            glUniform2f(g_SSAO.bs.uRes, (float)w, (float)h);
+            glUniform1i(g_SSAO.bs.uMode, g_SSAO.state.mode);
+            g_SSAO.quad.draw();
+        }
     }
+
     g_FrameCount++;
 }
 #endif

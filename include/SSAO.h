@@ -150,11 +150,125 @@ void main(){
         }
     } gs;
 
+    struct PShader
+    {
+        unsigned int program;
+        int uP, uMV, uColor, uMode, uRes, uThickness;
+
+        static constexpr const char* vsrc = R"(#version 400 core
+layout(location=0) in vec3 aPos;
+layout(location=2) in vec4 aInstanceData;
+out vec3 vPos;
+out vec2 vUV;
+uniform mat4 uP;
+uniform mat4 uMV;
+uniform vec2 uRes;
+uniform float uThickness;
+void main(){
+    vec4 viewCenter = uMV * vec4(aInstanceData.xyz, 1.0);
+    vec4 clipCenter = uP * viewCenter;
+    
+    // Constant screen-space pixel size
+    vec2 offset = aPos.xy * uThickness * 2.0 / uRes;
+    gl_Position = clipCenter;
+    gl_Position.xy += offset * clipCenter.w;
+    
+    // Z-Bias: Move points slightly in front of terrain
+    gl_Position.z -= 0.0005 * gl_Position.w;
+
+    vPos = viewCenter.xyz;
+    vUV = aPos.xy * 2.0; 
+})";
+
+        static constexpr const char* fsrc = R"(#version 400 core
+layout(location=0) out vec4 gPos;
+layout(location=1) out vec4 gNorm;
+layout(location=2) out vec4 gAlbedo;
+in vec3 vPos;
+in vec2 vUV;
+uniform vec3 uColor;
+uniform int uMode; // 0: Disk, 1: Cross-hair
+void main(){
+    float distSq = dot(vUV, vUV);
+    if (uMode == 0) {
+        if (distSq > 1.0) discard;
+    } else {
+        float thickness = 0.2;
+        bool horizontal = abs(vUV.y) < thickness && abs(vUV.x) < 1.0;
+        bool vertical = abs(vUV.x) < thickness && abs(vUV.y) < 1.0;
+        if (!horizontal && !vertical) discard;
+    }
+    gPos = vec4(vPos, 1.0);
+    gNorm = vec4(0.0, 0.0, 1.0, 1.0);
+    gAlbedo = vec4(uColor, 1.0); // Rhino Vector Black
+})";
+
+        void init()
+        {
+            unsigned int vs = glCreateShader(GL_VERTEX_SHADER);
+            glShaderSource(vs, 1, &vsrc, NULL);
+            glCompileShader(vs);
+            GShader::checkShader(vs, "P-VS");
+
+            unsigned int fs = glCreateShader(GL_FRAGMENT_SHADER);
+            glShaderSource(fs, 1, &fsrc, NULL);
+            glCompileShader(fs);
+            GShader::checkShader(fs, "P-FS");
+
+            program = glCreateProgram();
+            glAttachShader(program, vs);
+            glAttachShader(program, fs);
+            glLinkProgram(program);
+            GShader::checkProgram(program);
+
+            uP = glGetUniformLocation(program, "uP");
+            uMV = glGetUniformLocation(program, "uMV");
+            uColor = glGetUniformLocation(program, "uColor");
+            uMode = glGetUniformLocation(program, "uMode");
+            uRes = glGetUniformLocation(program, "uRes");
+            uThickness = glGetUniformLocation(program, "uThickness");
+        }
+    } ps;
+
+    struct PointRenderer
+    {
+        unsigned int vao, vbo, instanceVbo;
+        void init()
+        {
+            float quad[] = { -0.5f,0.5f,0, -0.5f,-0.5f,0, 0.5f,0.5f,0, 0.5f,-0.5f,0 };
+            glGenVertexArrays(1, &vao);
+            glBindVertexArray(vao);
+            glGenBuffers(1, &vbo);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3*sizeof(float), (void*)0);
+
+            glGenBuffers(1, &instanceVbo);
+            glBindBuffer(GL_ARRAY_BUFFER, instanceVbo);
+            glBufferData(GL_ARRAY_BUFFER, 10000 * 4 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+            glEnableVertexAttribArray(2);
+            glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)0);
+            glVertexAttribDivisor(2, 1);
+            glBindVertexArray(0);
+        }
+        void update(int count, float* data)
+        {
+            glBindBuffer(GL_ARRAY_BUFFER, instanceVbo);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, count * 4 * sizeof(float), data);
+        }
+        void draw(int count)
+        {
+            glBindVertexArray(vao);
+            glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, count);
+        }
+    } pointRenderer;
+
     struct SShader
     {
         unsigned int program;
-        unsigned int noiseTex, kernelTex;
-        int uP, uRadius, uBias, uRes, uNoiseScale, uSamples;
+        unsigned int kernelTex;
+        int uP, uRadius, uBias, uRes, uNoiseScale, uSamples, uAoType, uSkyUp;
         float kernel[2048 * 3];
 
         static constexpr const char* vsrc = R"(#version 400 core
@@ -165,14 +279,18 @@ void main(){ gl_Position = vec4(aPos, 1.0); })";
 out float FragColor;
 uniform sampler2D gPos;
 uniform sampler2D gNorm;
-uniform sampler2D uNoise;
 uniform sampler1D uKernelTex;
 uniform mat4 uP;
 uniform float uRadius;
 uniform float uBias;
 uniform vec2 uRes;
-uniform vec2 uNoiseScale;
 uniform int uSamples;
+uniform int uAoType; 
+uniform vec3 uSkyUp; 
+
+float IGN(vec2 v) {
+    return fract(52.9829189 * fract(dot(v, vec2(0.06711056, 0.00583715))));
+}
 
 void main(){
     vec2 uv = gl_FragCoord.xy / uRes;
@@ -180,11 +298,22 @@ void main(){
     vec3 norm = texture(gNorm, uv).xyz;
     float validNorm = step(0.1, length(norm));
     
-    vec3 randomVec = texture(uNoise, uv * uNoiseScale).xyz;
-    vec3 tangent = normalize(randomVec - norm * dot(randomVec, norm));
-    vec3 bitangent = cross(norm, tangent);
-    mat3 TBN = mat3(tangent, bitangent, norm);
+    float noise = IGN(gl_FragCoord.xy);
+    float angle = noise * 6.283185;
+    float s = sin(angle);
+    float c = cos(angle);
+    mat3 rot = mat3(
+        vec3(c, s, 0),
+        vec3(-s, c, 0),
+        vec3(0, 0, 1)
+    );
 
+    vec3 basisUp = (uAoType == 0) ? norm : uSkyUp;
+    vec3 tangent = normalize(vec3(1, 0, 0.1) - basisUp * dot(vec3(1, 0, 0.1), basisUp));
+    vec3 bitangent = cross(basisUp, tangent);
+    mat3 TBN = mat3(tangent, bitangent, basisUp) * rot;
+
+    float effectiveBias = uBias * abs(pos.z) * 0.001;
     float occlusion = 0.0;
     for(int i = 0; i < uSamples; ++i){
         vec3 kernelSample = texelFetch(uKernelTex, i, 0).xyz;
@@ -197,8 +326,9 @@ void main(){
         offset.xyz = offset.xyz * 0.5 + 0.5;
 
         float sampleDepth = texture(gPos, offset.xy).z;
-        float rangeCheck = smoothstep(0.0, 1.0, uRadius / abs(pos.z - sampleDepth));
-        occlusion += step(samplePos.z + uBias, sampleDepth) * rangeCheck;
+        float dist = abs(pos.z - sampleDepth);
+        float rangeCheck = exp(-dist / uRadius);
+        occlusion += step(samplePos.z + effectiveBias, sampleDepth) * rangeCheck;
     }
     float ao = 1.0 - (occlusion / float(uSamples));
     FragColor = mix(1.0, ao, validNorm);
@@ -225,21 +355,6 @@ void main(){
             glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 
-            float noiseData[16 * 3];
-            for (int i = 0; i < 16; ++i)
-            {
-                noiseData[i * 3 + 0] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
-                noiseData[i * 3 + 1] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
-                noiseData[i * 3 + 2] = 0.0f;
-            }
-            glGenTextures(1, &noiseTex);
-            glBindTexture(GL_TEXTURE_2D, noiseTex);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, 4, 4, 0, GL_RGB, GL_FLOAT, noiseData);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-
             unsigned int vs = glCreateShader(GL_VERTEX_SHADER);
             glShaderSource(vs, 1, &vsrc, NULL);
             glCompileShader(vs);
@@ -260,15 +375,16 @@ void main(){
             uRadius = glGetUniformLocation(program, "uRadius");
             uBias = glGetUniformLocation(program, "uBias");
             uRes = glGetUniformLocation(program, "uRes");
-            uNoiseScale = glGetUniformLocation(program, "uNoiseScale");
             uSamples = glGetUniformLocation(program, "uSamples");
+            uAoType = glGetUniformLocation(program, "uAoType");
+            uSkyUp = glGetUniformLocation(program, "uSkyUp");
         }
     } ss;
 
     struct BShader
     {
         unsigned int program;
-        int uRes, uMode;
+        int uRes, uMode, uDir, uAoType;
 
         static constexpr const char* vsrc = R"(#version 400 core
 layout(location=0) in vec3 aPos;
@@ -282,51 +398,74 @@ uniform sampler2D gPos;
 uniform sampler2D gNorm;
 uniform vec2 uRes;
 uniform int uMode;
+uniform int uDir; // 0: Horizontal, 1: Vertical, 2: Final Composite
+uniform int uAoType;
+
+vec3 falseColor(float v) {
+    vec3 c1 = vec3(0.0, 0.0, 0.5); // Deep Blue
+    vec3 c2 = vec3(0.0, 1.0, 0.0); // Bright Green
+    return mix(c1, c2, v);
+}
 
 void main(){
     vec2 uv = gl_FragCoord.xy / uRes;
-    vec4 albedoSample = texture(sAlbedo, uv);
-    vec3 centerPos = texture(gPos, uv).xyz;
-    vec3 centerNorm = texture(gNorm, uv).xyz;
-    float ssaoRaw = texture(sSSAO, uv).r;
-
-    if (albedoSample.a < 0.01) {
-        FragColor = vec4(0.9, 0.9, 0.9, 1.0); // Clean background, no SSAO processing
-        return;
-    }
-
-    vec2 texelSize = 1.0 / uRes;
-    float result = 0.0;
-    float weightSum = 0.0;
-    for (int x = -2; x <= 2; ++x) {
-        for (int y = -2; y <= 2; ++y) {
-            vec2 offset = vec2(float(x), float(y)) * texelSize;
+    
+    if (uDir < 2) {
+        float centerAO = texture(sSSAO, uv).r;
+        vec3 centerPos = texture(gPos, uv).xyz;
+        vec3 centerNorm = texture(gNorm, uv).xyz;
+        
+        vec2 texelSize = 1.0 / uRes;
+        vec2 dir = (uDir == 0) ? vec2(texelSize.x, 0.0) : vec2(0.0, texelSize.y);
+        
+        float result = 0.0;
+        float weightSum = 0.0;
+        for (int i = -4; i <= 4; ++i) {
+            vec2 offset = dir * float(i);
             float sampleAO = texture(sSSAO, uv + offset).r;
             vec3 samplePos = texture(gPos, uv + offset).xyz;
             vec3 sampleNorm = texture(gNorm, uv + offset).xyz;
             
-            float wD = 1.0 / (1.0 + abs(centerPos.z - samplePos.z) * 100.0);
-            float wN = max(0.0, dot(centerNorm, sampleNorm));
-            float weight = exp(-(x*x + y*y) / 2.0) * wD * wN;
+            float wD = 1.0 / (1.0 + abs(centerPos.z - samplePos.z) * 400.0);
+            float wN = pow(max(0.0, dot(centerNorm, sampleNorm)), 16.0);
+            float weight = exp(-(i*i) / 8.0) * wD * wN;
             
             result += sampleAO * weight;
             weightSum += weight;
         }
+        FragColor = vec4(vec3(result / (weightSum + 0.0001)), 1.0);
+        return;
     }
-    float ao = result / (weightSum + 0.0001);
 
-    // Lambertian Lighting (View Space)
-    vec3 L = normalize(vec3(0.5, 0.5, 1.0));
-    float d = max(dot(centerNorm, L), 0.0);
-    
-    // White Clay Aesthetic
-    vec3 ambient = albedoSample.rgb * 0.65;
-    vec3 diffuse = albedoSample.rgb * 0.35 * d;
-    float finalAO = pow(ao, 4.0);
-    vec3 finalLit = (ambient + diffuse) * finalAO;
+    vec4 albedoSample = texture(sAlbedo, uv);
+    vec3 centerPos = texture(gPos, uv).xyz;
+    vec3 centerNorm = texture(gNorm, uv).xyz;
+    float ao = texture(sSSAO, uv).r;
+
+    if (albedoSample.a < 0.01) {
+        FragColor = vec4(0.95, 0.95, 0.95, 1.0); 
+        return;
+    }
+
+    // False Color Mapping for Sky Visibility
+    if (uMode == 1) {
+        FragColor = vec4(falseColor(ao), 1.0);
+        return;
+    }
+
+    // Arctic Mode Lighting: Hemispherical Ambient
+    float hemi = centerNorm.y * 0.5 + 0.5;
+    vec3 skyColor = vec3(1.0, 1.0, 1.0);
+    vec3 groundColor = vec3(0.5, 0.5, 0.5);
+    vec3 ambient = mix(groundColor, skyColor, hemi) * 0.95;
+
+    float vdn = 1.0 - max(dot(centerNorm, vec3(0.0, 0.0, 1.0)), 0.0);
+    float ink = smoothstep(0.5, 1.0, vdn) * 0.15;
+
+    float finalAO = pow(ao, 3.5); 
+    vec3 finalLit = (ambient * finalAO) - ink;
 
     if (uMode == 0) FragColor = vec4(finalLit, 1.0);
-    else if (uMode == 1) FragColor = vec4(vec3(ssaoRaw), 1.0);
     else if (uMode == 2) FragColor = vec4(vec3(ao), 1.0);
     else if (uMode == 3) FragColor = vec4(centerNorm * 0.5 + 0.5, 1.0);
     else if (uMode == 4) FragColor = vec4(vec3(clamp((-centerPos.z - 20.0) / 100.0, 0.0, 1.0)), 1.0);
@@ -354,14 +493,19 @@ void main(){
 
             uRes = glGetUniformLocation(program, "uRes");
             uMode = glGetUniformLocation(program, "uMode");
+            uDir = glGetUniformLocation(program, "uDir");
+            uAoType = glGetUniformLocation(program, "uAoType");
         }
     } bs;
 
     struct SceneState
     {
         int mode = 0;
-        float bias = 0.25f;
-        float radius = 5.0f;
+        int pointMode = 0; // 0: Disk, 1: Cross-hair
+        int aoType = 0;    // 0: SSAO, 1: SkyVisibility
+        float bias = 0.08f;
+        float radius = 12.0f;
+        float pointThickness = 2.0f;
         float lastViewMatrix[16] = {0};
         int staticFrames = 0;
         int interactiveSamples = 256;
@@ -392,53 +536,65 @@ void main(){
         void draw() { glBindVertexArray(vao); glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); }
     } quad;
 
-    struct RenderItem
+    struct RenderQueue
     {
-        MeshPrimitive* mesh;
-        float modelMatrix[16];
-        float color[3];
-    };
+        MeshPrimitive* meshes[1024];
+        float modelMatrices[1024][16];
+        float colors[1024][3];
+        int instanceCounts[1024];
+        bool isPointLayer[1024];
+        int count = 0;
 
-    RenderItem renderQueue[1024];
-    int itemCount = 0;
+        void reset() { count = 0; }
 
-    void addObject(MeshPrimitive* mesh, const float* modelMatrix, float r, float g, float b)
+        void add(MeshPrimitive* mesh, const float* modelMatrix, float r, float g, float b, int instanceCount = 0, bool isPoint = false)
+        {
+            if (count >= 1024) return;
+            meshes[count] = mesh;
+            if (modelMatrix)
+            {
+                for (int i = 0; i < 16; ++i) modelMatrices[count][i] = modelMatrix[i];
+            }
+            else
+            {
+                Math::mat4_identity(modelMatrices[count]);
+            }
+            colors[count][0] = r;
+            colors[count][1] = g;
+            colors[count][2] = b;
+            instanceCounts[count] = instanceCount;
+            isPointLayer[count] = isPoint;
+            count++;
+        }
+    } queue;
+
+    void addObject(MeshPrimitive* mesh, const float* modelMatrix, float r, float g, float b, int instanceCount = 0, bool isPoint = false)
     {
-        if (itemCount >= 1024) return;
-        RenderItem& item = renderQueue[itemCount++];
-        item.mesh = mesh;
-        if (modelMatrix)
-        {
-            for (int i = 0; i < 16; ++i) item.modelMatrix[i] = modelMatrix[i];
-        }
-        else
-        {
-            Math::mat4_identity(item.modelMatrix);
-        }
-        item.color[0] = r;
-        item.color[1] = g;
-        item.color[2] = b;
+        queue.add(mesh, modelMatrix, r, g, b, instanceCount, isPoint);
     }
 
     void clearQueue()
     {
-        itemCount = 0;
+        queue.reset();
     }
 
-    FBO gBuffer, ssaoFbo;
+    FBO gBuffer, ssaoFbo, pingPongFbo;
 
     void InitializePipeline(int width, int height)
     {
         gBuffer.init(width, height, 3, true);
         ssaoFbo.init(width, height, 1, false);
+        pingPongFbo.init(width, height, 1, false);
     }
 
     void init(int w, int h)
     {
         gs.init();
+        ps.init();
         ss.init();
         bs.init();
         quad.init();
+        pointRenderer.init();
         InitializePipeline(w, h);
     }
 };
@@ -464,7 +620,7 @@ namespace SSAO_Test
         g_SSAO.state.sphereOffsets[idx + 2] = ((float)rand() / RAND_MAX) * 30.0f + 1.0f;
         g_SSAO.state.sphereOffsets[idx + 3] = 1.0f;
         g_SSAO.state.sphereCount++;
-        g_Sphere.updateInstanced(g_SSAO.state.sphereCount, g_SSAO.state.sphereOffsets);
+        // Sphere update skipped for PC layer as it now uses pointRenderer
     }
 
     void Action_GridSpheres()
@@ -484,7 +640,6 @@ namespace SSAO_Test
                 }
             }
         }
-        g_Sphere.updateInstanced(g_SSAO.state.sphereCount, g_SSAO.state.sphereOffsets);
     }
 
     void Action_RandomBoxes()
@@ -524,14 +679,13 @@ namespace SSAO_Test
                 g_SSAO.state.boxCount++;
             }
         }
-        g_Sphere.updateInstanced(g_SSAO.state.sphereCount, g_SSAO.state.sphereOffsets);
         g_Box.updateInstanced(g_SSAO.state.boxCount, g_SSAO.state.boxOffsets);
     }
 
     void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
     {
         if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
-        const char* MODE_NAMES[] = { "LIT", "AO_RAW", "AO_BLUR", "NORM", "DEPTH", "POS", "DEBUG" };
+        const char* MODE_NAMES[] = { "LIT", "SKY_false", "AO_BLUR", "NORM", "DEPTH", "POS", "DEBUG" };
         switch (key) {
             case GLFW_KEY_B: Action_GridSpheres(); break;
             case GLFW_KEY_N: Action_RandomBoxes(); break;
@@ -544,14 +698,18 @@ namespace SSAO_Test
             case GLFW_KEY_4: g_SSAO.state.radius += 0.5f; break;
             case GLFW_KEY_LEFT_BRACKET: g_SSAO.state.staticSamples = fmaxf(1, g_SSAO.state.staticSamples - 128); break;
             case GLFW_KEY_RIGHT_BRACKET: g_SSAO.state.staticSamples = fminf(2048, g_SSAO.state.staticSamples + 128); break;
+            case GLFW_KEY_K: g_SSAO.state.pointMode = (g_SSAO.state.pointMode + 1) % 2; break;
+            case GLFW_KEY_S: g_SSAO.state.aoType = (g_SSAO.state.aoType + 1) % 2; break;
+            case GLFW_KEY_9: g_SSAO.state.pointThickness = fmaxf(0.1f, g_SSAO.state.pointThickness - 0.5f); break;
+            case GLFW_KEY_0: g_SSAO.state.pointThickness += 0.5f; break;
             case GLFW_KEY_D: 
                 g_SSAO.state.mode = (g_SSAO.state.mode + 1) % 7; 
                 printf("[DEBUG] Mode Switched: %s\n", MODE_NAMES[g_SSAO.state.mode]);
                 break;
         }
         if (key != GLFW_KEY_D) {
-            printf("[DEBUG] Bias: %.2f, Radius: %.2f, Static Samples: %d, Mode: %s\n", 
-                g_SSAO.state.bias, g_SSAO.state.radius, g_SSAO.state.staticSamples, MODE_NAMES[g_SSAO.state.mode]);
+            printf("[DEBUG] Bias: %.2f, Radius: %.2f, Static Samples: %d, Mode: %s, PtMode: %d, PtThick: %.1f\n", 
+                g_SSAO.state.bias, g_SSAO.state.radius, g_SSAO.state.staticSamples, MODE_NAMES[g_SSAO.state.mode], g_SSAO.state.pointMode, g_SSAO.state.pointThickness);
         }
         fflush(stdout);
     }
@@ -585,95 +743,7 @@ extern "C" void setup()
     av->camera.pitch = 0.615472f;
     av->camera.focusPoint = { 0.0f, 0.0f, 0.0f };
 
-    // Rhino Integration: Filter for "TERRAIN" mesh
-    ONX_Model model;
-    if (model.Read("test.3dm"))
-    {
-        ONX_ModelComponentIterator it(model, ON_ModelComponent::Type::ModelGeometry);
-        const ON_ModelComponent* comp = nullptr;
-        while ((comp = it.NextComponent()) != nullptr)
-        {
-            const ON_ModelGeometryComponent* geometry = ON_ModelGeometryComponent::Cast(comp);
-            if (!geometry) continue;
-
-            const ON_3dmObjectAttributes* attributes = geometry->Attributes(nullptr);
-            if (attributes && attributes->m_name == L"TERRAIN")
-            {
-                const ON_Geometry* geom = geometry->Geometry(nullptr);
-                const ON_Mesh* mesh = ON_Mesh::Cast(geom);
-                if (mesh)
-                {
-                    int vcount = mesh->m_V.Count();
-                    
-                    // Count indices including quads
-                    int icount = 0;
-                    for (int i = 0; i < mesh->m_F.Count(); ++i) icount += mesh->m_F[i].IsQuad() ? 6 : 3;
-
-                    // Spatial Normalization (Centering & Scaling)
-                    ON_3dPoint minPt(1e18, 1e18, 1e18), maxPt(-1e18, -1e18, -1e18);
-                    for (int i = 0; i < vcount; ++i)
-                    {
-                        ON_3dPoint p = mesh->m_V[i];
-                        if (p.x < minPt.x) minPt.x = p.x; if (p.y < minPt.y) minPt.y = p.y; if (p.z < minPt.z) minPt.z = p.z;
-                        if (p.x > maxPt.x) maxPt.x = p.x; if (p.y > maxPt.y) maxPt.y = p.y; if (p.z > maxPt.z) maxPt.z = p.z;
-                    }
-                    ON_3dPoint center = (minPt + maxPt) * 0.5;
-                    ON_3dVector extent = maxPt - minPt;
-                    double maxExtent = fmax(extent.x, fmax(extent.y, extent.z));
-                    if (maxExtent < 1e-6) maxExtent = 1.0;
-                    float scale = 100.0f / (float)maxExtent;
-
-                    // Calculate bottom elevation for ground plane grounding
-                    float bottomElevation = (float)(minPt.z - center.z) * scale;
-                    static float s_bottomElevation = 0.0f; 
-                    s_bottomElevation = bottomElevation;
-
-                    float* vdata = (float*)Alice::g_Arena.allocate(vcount * 6 * sizeof(float));
-                    unsigned int* idata = (unsigned int*)Alice::g_Arena.allocate(icount * sizeof(unsigned int));
-                    for (int i = 0; i < vcount; ++i)
-                    {
-                        vdata[i * 6 + 0] = (float)(mesh->m_V[i].x - center.x) * scale;
-                        vdata[i * 6 + 1] = (float)(mesh->m_V[i].y - center.y) * scale;
-                        vdata[i * 6 + 2] = (float)(mesh->m_V[i].z - center.z) * scale;
-                        if (mesh->HasVertexNormals())
-                        {
-                            vdata[i * 6 + 3] = (float)mesh->m_N[i].x;
-                            vdata[i * 6 + 4] = (float)mesh->m_N[i].y;
-                            vdata[i * 6 + 5] = (float)mesh->m_N[i].z;
-                        }
-                        else
-                        {
-                            vdata[i * 6 + 3] = 0; vdata[i * 6 + 4] = 0; vdata[i * 6 + 5] = 1;
-                        }
-                    }
-                    
-                    int idx = 0;
-                    for (int i = 0; i < mesh->m_F.Count(); ++i) {
-                        idata[idx++] = (unsigned int)mesh->m_F[i].vi[0];
-                        idata[idx++] = (unsigned int)mesh->m_F[i].vi[1];
-                        idata[idx++] = (unsigned int)mesh->m_F[i].vi[2];
-                        if (mesh->m_F[i].IsQuad()) {
-                            idata[idx++] = (unsigned int)mesh->m_F[i].vi[0];
-                            idata[idx++] = (unsigned int)mesh->m_F[i].vi[2];
-                            idata[idx++] = (unsigned int)mesh->m_F[i].vi[3];
-                        }
-                    }
-                    g_TerrainMesh.initFromRaw(vcount, vdata, icount, idata);
-
-                    // Initial Queue Population
-                    g_SSAO.clearQueue();
-                    float identity[16]; Math::mat4_identity(identity);
-                    g_SSAO.addObject(&g_TerrainMesh, identity, 0.45f, 0.28f, 0.14f);
-
-                    float planeMatrix[16];
-                    Math::mat4_identity(planeMatrix);
-                    planeMatrix[14] = s_bottomElevation; 
-                    g_SSAO.addObject(&g_Plane, planeMatrix, 0.95f, 0.95f, 0.95f);
-                }
-            }
-        }
-    }
-
+    // Primitive and Instancing Initialization
     g_Plane.initPlane(120.0f);
     g_Sphere.initSphere(16, 8);
     g_Box.initBox();
@@ -681,8 +751,169 @@ extern "C" void setup()
     g_SSAO.state.sphereOffsets = (float*)Alice::g_Arena.allocate(MAX_INSTANCES * 4 * sizeof(float));
     g_SSAO.state.boxOffsets = (float*)Alice::g_Arena.allocate(MAX_INSTANCES * 4 * sizeof(float));
     
-    g_Sphere.initInstanced(MAX_INSTANCES, g_SSAO.state.sphereOffsets);
     g_Box.initInstanced(MAX_INSTANCES, g_SSAO.state.boxOffsets);
+
+    // Rhino Integration: Filter for "TERRAIN" mesh and "PC" point cloud
+    ONX_Model model;
+    const char* paths[] = { "test.3dm", "build/bin/test.3dm", "../test.3dm" };
+    bool loaded = false;
+    for (const char* p : paths)
+    {
+        if (model.Read(p))
+        {
+            printf("[INFO] Model %s loaded successfully.\n", p);
+            loaded = true;
+            break;
+        }
+    }
+
+    if (loaded)
+    {
+        ON_3dPoint terrainCenter(0,0,0);
+        float terrainScale = 1.0f;
+        float s_bottomElevation = 0.0f;
+        bool terrainFound = false;
+
+        // Pass 1: Find TERRAIN and calculate normalization
+        {
+            ONX_ModelComponentIterator it(model, ON_ModelComponent::Type::ModelGeometry);
+            const ON_ModelComponent* comp = nullptr;
+            while ((comp = it.NextComponent()) != nullptr)
+            {
+                const ON_ModelGeometryComponent* geometry = ON_ModelGeometryComponent::Cast(comp);
+                if (!geometry) continue;
+                const ON_3dmObjectAttributes* attributes = geometry->Attributes(nullptr);
+                if (attributes && attributes->m_name == L"TERRAIN")
+                {
+                    const ON_Geometry* geom = geometry->Geometry(nullptr);
+                    const ON_Mesh* mesh = ON_Mesh::Cast(geom);
+                    if (mesh)
+                    {
+                        printf("[INFO] TERRAIN mesh found with %d vertices.\n", mesh->m_V.Count());
+                        int vcount = mesh->m_V.Count();
+                        ON_3dPoint minPt(1e18, 1e18, 1e18), maxPt(-1e18, -1e18, -1e18);
+                        for (int i = 0; i < vcount; ++i)
+                        {
+                            ON_3dPoint p = mesh->m_V[i];
+                            if (p.x < minPt.x) minPt.x = p.x; if (p.y < minPt.y) minPt.y = p.y; if (p.z < minPt.z) minPt.z = p.z;
+                            if (p.x > maxPt.x) maxPt.x = p.x; if (p.y > maxPt.y) maxPt.y = p.y; if (p.z > maxPt.z) maxPt.z = p.z;
+                        }
+                        terrainCenter = (minPt + maxPt) * 0.5;
+                        ON_3dVector extent = maxPt - minPt;
+                        double maxExtent = fmax(extent.x, fmax(extent.y, extent.z));
+                        if (maxExtent < 1e-6) maxExtent = 1.0;
+                        terrainScale = 100.0f / (float)maxExtent;
+                        s_bottomElevation = (float)(minPt.z - terrainCenter.z) * terrainScale;
+                        terrainFound = true;
+
+                        int icount = 0;
+                        for (int i = 0; i < mesh->m_F.Count(); ++i) icount += mesh->m_F[i].IsQuad() ? 6 : 3;
+
+                        // Contiguous Memory Allocation for Terrain
+                        float* vdata = (float*)Alice::g_Arena.allocate(vcount * 6 * sizeof(float));
+                        unsigned int* idata = (unsigned int*)Alice::g_Arena.allocate(icount * sizeof(unsigned int));
+                        
+                        const ON_3fPoint* V = mesh->m_V.Array();
+                        const ON_3fVector* N = mesh->m_N.Array();
+                        const bool hasNormals = mesh->HasVertexNormals();
+
+                        for (int i = 0; i < vcount; ++i)
+                        {
+                            const ON_3fPoint& p = V[i];
+                            vdata[i * 6 + 0] = (float)(p.x - terrainCenter.x) * terrainScale;
+                            vdata[i * 6 + 1] = (float)(p.y - terrainCenter.y) * terrainScale;
+                            vdata[i * 6 + 2] = (float)(p.z - terrainCenter.z) * terrainScale;
+                            
+                            if (hasNormals)
+                            {
+                                const ON_3fVector& n = N[i];
+                                vdata[i * 6 + 3] = (float)n.x;
+                                vdata[i * 6 + 4] = (float)n.y;
+                                vdata[i * 6 + 5] = (float)n.z;
+                            }
+                            else
+                            {
+                                vdata[i * 6 + 3] = 0.0f; vdata[i * 6 + 4] = 0.0f; vdata[i * 6 + 5] = 1.0f;
+                            }
+                        }
+                        
+                        const ON_MeshFace* F = mesh->m_F.Array();
+                        int idx = 0;
+                        for (int i = 0; i < mesh->m_F.Count(); ++i) {
+                            const ON_MeshFace& face = F[i];
+                            idata[idx++] = (unsigned int)face.vi[0];
+                            idata[idx++] = (unsigned int)face.vi[1];
+                            idata[idx++] = (unsigned int)face.vi[2];
+                            if (face.IsQuad()) {
+                                idata[idx++] = (unsigned int)face.vi[0];
+                                idata[idx++] = (unsigned int)face.vi[2];
+                                idata[idx++] = (unsigned int)face.vi[3];
+                            }
+                        }
+                        g_TerrainMesh.initFromRaw(vcount, vdata, icount, idata);
+
+                        g_SSAO.clearQueue();
+                        float identity[16]; Math::mat4_identity(identity);
+                        g_SSAO.addObject(&g_TerrainMesh, identity, 0.9f, 0.9f, 0.9f); // Matte White
+
+                        float planeMatrix[16];
+                        Math::mat4_identity(planeMatrix);
+                        planeMatrix[14] = s_bottomElevation; 
+                        g_SSAO.addObject(&g_Plane, planeMatrix, 0.95f, 0.95f, 0.95f);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Pass 2: Find PC and normalize
+        if (terrainFound)
+        {
+            ONX_ModelComponentIterator it(model, ON_ModelComponent::Type::ModelGeometry);
+            const ON_ModelComponent* comp = nullptr;
+            while ((comp = it.NextComponent()) != nullptr)
+            {
+                const ON_ModelGeometryComponent* geometry = ON_ModelGeometryComponent::Cast(comp);
+                if (!geometry) continue;
+                const ON_3dmObjectAttributes* attributes = geometry->Attributes(nullptr);
+                if (attributes && attributes->m_name == L"PC")
+                {
+                    const ON_Geometry* geom = geometry->Geometry(nullptr);
+                    const ON_PointCloud* pc = ON_PointCloud::Cast(geom);
+                    if (pc)
+                    {
+                        printf("[INFO] PC point cloud found with %d points.\n", pc->m_P.Count());
+                        int pcount = pc->m_P.Count();
+                        if (pcount > MAX_INSTANCES) pcount = MAX_INSTANCES;
+
+                        // Use pre-allocated state buffer
+                        for (int i = 0; i < pcount; ++i)
+                        {
+                            ON_3dPoint p = pc->m_P[i];
+                            g_SSAO.state.sphereOffsets[i * 4 + 0] = (float)(p.x - terrainCenter.x) * terrainScale;
+                            g_SSAO.state.sphereOffsets[i * 4 + 1] = (float)(p.y - terrainCenter.y) * terrainScale;
+                            g_SSAO.state.sphereOffsets[i * 4 + 2] = (float)(p.z - terrainCenter.z) * terrainScale;
+                            g_SSAO.state.sphereOffsets[i * 4 + 3] = 0.08f; // Fine dots
+                        }
+
+                        g_SSAO.state.sphereCount = pcount;
+                        // Diverse False-Color Points
+                        g_SSAO.addObject(nullptr, nullptr, 0.05f, 0.05f, 0.05f, g_SSAO.state.sphereCount, true); 
+                        g_SSAO.addObject(nullptr, nullptr, 0.8f, 0.1f, 0.1f, 100, true); 
+                        g_SSAO.addObject(nullptr, nullptr, 0.1f, 0.1f, 0.8f, 100, true); 
+                    }
+                }
+            }
+        }
+        else
+        {
+            printf("[WARN] TERRAIN mesh NOT found in model.\n");
+        }
+    }
+    else
+    {
+        printf("[CRITICAL ERROR] Failed to read model test.3dm from any attempted path.\n");
+    }
 }
 
 extern "C" void update(float dt) {}
@@ -701,49 +932,52 @@ extern "C" void draw()
     Math::mat4_mul(pv, p, v);
 
     // Adaptive Logic
-    bool isCameraMoving = false;
+    int isCameraMoving = 0;
     for (int i = 0; i < 16; ++i) {
-        if (v[i] != g_SSAO.state.lastViewMatrix[i]) {
-            isCameraMoving = true;
-            g_SSAO.state.lastViewMatrix[i] = v[i];
-        }
+        isCameraMoving |= (v[i] != g_SSAO.state.lastViewMatrix[i]);
+        g_SSAO.state.lastViewMatrix[i] = v[i];
     }
-    
-    if (isCameraMoving) {
-        g_SSAO.state.staticFrames = 0;
-    } else {
-        g_SSAO.state.staticFrames++;
+    g_SSAO.state.staticFrames = (g_SSAO.state.staticFrames + 1) * (!isCameraMoving);
+    int isStatic = (g_SSAO.state.staticFrames > 15);
+    int activeSamples = isStatic * g_SSAO.state.staticSamples + (!isStatic) * g_SSAO.state.interactiveSamples;
+
+    if (g_SSAO.state.sphereCount > 0)
+    {
+        g_SSAO.pointRenderer.update(g_SSAO.state.sphereCount, g_SSAO.state.sphereOffsets);
     }
-    
-    // Wait 15 frames after movement stops before triggering the heavy render pass
-    int activeSamples = (g_SSAO.state.staticFrames > 15) ? g_SSAO.state.staticSamples : g_SSAO.state.interactiveSamples;
 
     // Pass 1: G-Buffer
     {
         g_SSAO.gBuffer.bind();
-        glClearColor(0.9f, 0.9f, 0.9f, 0.0f);
+        glClearColor(0.95f, 0.95f, 0.95f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glEnable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);
-        glUseProgram(g_SSAO.gs.program);
         
-        for (int i = 0; i < g_SSAO.itemCount; ++i)
+        for (int i = 0; i < g_SSAO.queue.count; ++i)
         {
-            auto& item = g_SSAO.renderQueue[i];
-            if (!item.mesh || item.mesh->vao == 0) continue;
-
-            float mv[16], mvp[16];
-            Math::mat4_mul(mv, v, item.modelMatrix);
-            Math::mat4_mul(mvp, p, mv);
-            
-            glUniformMatrix4fv(g_SSAO.gs.uMV, 1, GL_FALSE, mv);
-            glUniformMatrix4fv(g_SSAO.gs.uMVP, 1, GL_FALSE, mvp);
-            glUniform3f(g_SSAO.gs.uColor, item.color[0], item.color[1], item.color[2]);
-            
-            // Set default instance data (pos=0, scale=1) for non-instanced draw
-            glVertexAttrib4f(2, 0.0f, 0.0f, 0.0f, 1.0f);
-            
-            item.mesh->draw();
+            if (g_SSAO.queue.isPointLayer[i])
+            {
+                glUseProgram(g_SSAO.ps.program);
+                glUniformMatrix4fv(g_SSAO.ps.uP, 1, GL_FALSE, p);
+                glUniformMatrix4fv(g_SSAO.ps.uMV, 1, GL_FALSE, v);
+                glUniform3fv(g_SSAO.ps.uColor, 1, g_SSAO.queue.colors[i]); 
+                glUniform1i(g_SSAO.ps.uMode, g_SSAO.state.pointMode);
+                glUniform2f(g_SSAO.ps.uRes, (float)w, (float)h);
+                glUniform1f(g_SSAO.ps.uThickness, g_SSAO.state.pointThickness);
+                g_SSAO.pointRenderer.draw(g_SSAO.queue.instanceCounts[i]);
+            }
+            else
+            {
+                glUseProgram(g_SSAO.gs.program);
+                float mv[16], mvp[16];
+                Math::mat4_mul(mv, v, g_SSAO.queue.modelMatrices[i]);
+                Math::mat4_mul(mvp, p, mv);
+                glUniformMatrix4fv(g_SSAO.gs.uMV, 1, GL_FALSE, mv);
+                glUniformMatrix4fv(g_SSAO.gs.uMVP, 1, GL_FALSE, mvp);
+                glUniform3fv(g_SSAO.gs.uColor, 1, g_SSAO.queue.colors[i]);
+                g_SSAO.queue.meshes[i]->drawInstanced(g_SSAO.queue.instanceCounts[i] ? g_SSAO.queue.instanceCounts[i] : 1);
+            }
         }
         g_SSAO.gBuffer.unbind();
     }
@@ -755,57 +989,70 @@ extern "C" void draw()
         glDisable(GL_DEPTH_TEST);
         glUseProgram(g_SSAO.ss.program);
         glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[0]);
-        glUniform1i(glGetUniformLocation(g_SSAO.ss.program, "gPos"), 0);
         glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[1]);
+        glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_1D, g_SSAO.ss.kernelTex);
+        glUniform1i(glGetUniformLocation(g_SSAO.ss.program, "gPos"), 0);
         glUniform1i(glGetUniformLocation(g_SSAO.ss.program, "gNorm"), 1);
-        glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, g_SSAO.ss.noiseTex);
-        glUniform1i(glGetUniformLocation(g_SSAO.ss.program, "uNoise"), 2);
-        glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_1D, g_SSAO.ss.kernelTex);
-        glUniform1i(glGetUniformLocation(g_SSAO.ss.program, "uKernelTex"), 3);
+        glUniform1i(glGetUniformLocation(g_SSAO.ss.program, "uKernelTex"), 2);
         glUniformMatrix4fv(g_SSAO.ss.uP, 1, GL_FALSE, p);
         glUniform1f(g_SSAO.ss.uRadius, g_SSAO.state.radius);
         glUniform1f(g_SSAO.ss.uBias, g_SSAO.state.bias);
         glUniform2f(g_SSAO.ss.uRes, (float)w, (float)h);
-        glUniform2f(g_SSAO.ss.uNoiseScale, (float)w / 4.0f, (float)h / 4.0f);
         glUniform1i(g_SSAO.ss.uSamples, activeSamples);
+        glUniform1i(g_SSAO.ss.uAoType, g_SSAO.state.aoType);
+        float skyUp[3] = { v[1], v[5], v[9] };
+        glUniform3fv(g_SSAO.ss.uSkyUp, 1, skyUp);
         g_SSAO.quad.draw();
         g_SSAO.ssaoFbo.unbind();
     }
 
-    // Pass 3: Composite
+    // Pass 3: Separable Bilateral Blur
+    {
+        glUseProgram(g_SSAO.bs.program);
+        glUniform2f(g_SSAO.bs.uRes, (float)w, (float)h);
+        glUniform1i(g_SSAO.bs.uMode, g_SSAO.state.mode);
+        glUniform1i(g_SSAO.bs.uAoType, g_SSAO.state.aoType);
+        
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[0]); // gPos
+        glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[1]); // gNorm
+        glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "gPos"), 1);
+        glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "gNorm"), 2);
+
+        // Horizontal
+        g_SSAO.pingPongFbo.bind();
+        glClear(GL_COLOR_BUFFER_BIT);
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, g_SSAO.ssaoFbo.textures[0]);
+        glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "sSSAO"), 0);
+        glUniform1i(g_SSAO.bs.uDir, 0);
+        g_SSAO.quad.draw();
+        g_SSAO.pingPongFbo.unbind();
+
+        // Vertical
+        g_SSAO.ssaoFbo.bind();
+        glClear(GL_COLOR_BUFFER_BIT);
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, g_SSAO.pingPongFbo.textures[0]);
+        glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "sSSAO"), 0);
+        glUniform1i(g_SSAO.bs.uDir, 1);
+        g_SSAO.quad.draw();
+        g_SSAO.ssaoFbo.unbind();
+    }
+
+    // Pass 4: Composite
     {
         glViewport(0, 0, w, h);
-        if (g_SSAO.state.mode == 6)
-        {
-            glClearColor(0.9f, 0.9f, 0.9f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            glEnable(GL_DEPTH_TEST);
-            glDisable(GL_CULL_FACE);
-            for (int i = 0; i < g_SSAO.itemCount; ++i)
-            {
-                auto& item = g_SSAO.renderQueue[i];
-                if (!item.mesh) continue;
-                float mvp[16];
-                Math::mat4_mul(mvp, pv, item.modelMatrix);
-                g_Debug.draw(item.mesh, mvp);
-            }
-        }
-        else
-        {
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            glUseProgram(g_SSAO.bs.program);
-            glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, g_SSAO.ssaoFbo.textures[0]);
-            glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "sSSAO"), 0);
-            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[2]);
-            glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "sAlbedo"), 1);
-            glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[0]);
-            glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "gPos"), 2);
-            glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[1]);
-            glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "gNorm"), 3);
-            glUniform2f(g_SSAO.bs.uRes, (float)w, (float)h);
-            glUniform1i(g_SSAO.bs.uMode, g_SSAO.state.mode);
-            g_SSAO.quad.draw();
-        }
+        glClearColor(0.95f, 0.95f, 0.95f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glUseProgram(g_SSAO.bs.program);
+        glUniform1i(g_SSAO.bs.uDir, 2);
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, g_SSAO.ssaoFbo.textures[0]);
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[2]);
+        glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[0]);
+        glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, g_SSAO.gBuffer.textures[1]);
+        glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "sSSAO"), 0);
+        glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "sAlbedo"), 1);
+        glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "gPos"), 2);
+        glUniform1i(glGetUniformLocation(g_SSAO.bs.program, "gNorm"), 3);
+        g_SSAO.quad.draw();
     }
 
     g_FrameCount++;

@@ -86,24 +86,46 @@ namespace Alice::Alg::GeminiClient {
         get_edges(origDepth, edgesOrig, 1);
         get_edges(aiRender, edgesAI, 3);
 
-        int match = 0, total = 0;
-        for (int i = 0; i < w * h; ++i) {
-            if (edgesOrig[i] == 255) {
-                total++;
-                int y = i / w; int x = i % w;
-                bool found = false;
-                for (int dy = -3; dy <= 3 && !found; ++dy) {
-                    for (int dx = -3; dx <= 3; ++dx) {
-                        int nx = x + dx, ny = y + dy;
-                        if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
-                            if (edgesAI[ny * w + nx] == 255) { found = true; break; }
+        int matchRecall = 0, totalOrig = 0;
+        int matchPrecision = 0, totalAI = 0;
+
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                int i = y * w + x;
+                if (edgesOrig[i] == 255) {
+                    totalOrig++;
+                    bool found = false;
+                    for (int dy = -1; dy <= 1 && !found; ++dy) {
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            int nx = x + dx, ny = y + dy;
+                            if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                                if (edgesAI[ny * w + nx] == 255) { found = true; break; }
+                            }
                         }
                     }
+                    if (found) matchRecall++;
                 }
-                if (found) match++;
+
+                if (edgesAI[i] == 255) {
+                    totalAI++;
+                    bool found = false;
+                    for (int dy = -1; dy <= 1 && !found; ++dy) {
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            int nx = x + dx, ny = y + dy;
+                            if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                                if (edgesOrig[ny * w + nx] == 255) { found = true; break; }
+                            }
+                        }
+                    }
+                    if (found) matchPrecision++;
+                }
             }
         }
-        return (total == 0) ? 1.0f : (float)match / (float)total;
+        
+        float recall = (totalOrig == 0) ? 1.0f : (float)matchRecall / (float)totalOrig;
+        float precision = (totalAI == 0) ? 1.0f : (float)matchPrecision / (float)totalAI;
+        if (recall + precision == 0.0f) return 0.0f;
+        return 2.0f * (precision * recall) / (precision + recall);
     }
 
     inline M4 perspective_local(float fov, float asp, float n, float f) {
@@ -299,7 +321,10 @@ namespace Alice::Alg::GeminiClient {
         glUniformMatrix4fv(glGetUniformLocation(viewer->shaderProgram, "mvp"), 1, 0, finalMvp.m);
         glUniform3f(glGetUniformLocation(viewer->shaderProgram, "color_override"), col.x, col.y, col.z);
         glBindVertexArray(g_Sphere.vao);
+        glDisableVertexAttribArray(1);
+        glVertexAttrib3f(1, col.x, col.y, col.z);
         glDrawElements(GL_TRIANGLES, g_Sphere.vertexCount, GL_UNSIGNED_INT, 0);
+        glEnableVertexAttribArray(1);
         glUniform3f(glGetUniformLocation(viewer->shaderProgram, "color_override"), -1, -1, -1);
     }
 
@@ -384,40 +409,14 @@ namespace Alice::Alg::GeminiClient {
 
                     std::string payloadParts;
                     if (g_State.activeTask == 2) {
-                        Color semanticColors[5] = {
-                            {204, 204, 204}, // Floor
-                            {204, 51, 51},   // Red Cube
-                            {51, 204, 51},   // Green Cube
-                            {51, 51, 204},   // Blue Cube
-                            {204, 25, 25}    // Sphere
-                        };
-                        const char* stencilNames[5] = {
-                            "stencil_floor.png", "stencil_red.png", "stencil_green.png", "stencil_blue.png", "stencil_sphere.png"
-                        };
-                        uint8_t* maskBuffer = (uint8_t*)Alice::g_Arena.allocate(w * h);
-                        for (int s = 0; s < 5; ++s) {
-                            if (!maskBuffer) break;
-                            for (int i = 0; i < w * h; ++i) {
-                                uint8_t r = g_State.segData[i * 3 + 0];
-                                uint8_t g = g_State.segData[i * 3 + 1];
-                                uint8_t b = g_State.segData[i * 3 + 2];
-                                if (colorMatch(r, g, b, semanticColors[s].r, semanticColors[s].g, semanticColors[s].b)) {
-                                    maskBuffer[i] = fullDepth8[i];
-                                } else maskBuffer[i] = 0;
-                            }
-                            // Save stencil to disk for verification
-                            stbi_write_png(stencilNames[s], w, h, 1, maskBuffer, w);
-                            std::cout << "[GeminiClient] Saved stencil: " << stencilNames[s] << std::endl;
-
-                            size_t pngStart = Alice::g_Arena.offset;
-                            stbi_write_png_to_func(stbiWriteToArena, &Alice::g_Arena, w, h, 1, maskBuffer, w);
-                            size_t pngSize = Alice::g_Arena.offset - pngStart;
-                            size_t b64Len = ((pngSize + 2) / 3) * 4;
-                            char* b64Str = (char*)Alice::g_Arena.allocate(b64Len + 1);
-                            if (b64Str) {
-                                base64_encode(Alice::g_Arena.memory + pngStart, pngSize, b64Str);
-                                payloadParts += "{\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"" + std::string(b64Str) + "\"}},";
-                            }
+                        // Strategy A: Single Master Depth Map
+                        size_t dStart = Alice::g_Arena.offset;
+                        stbi_write_png_to_func(stbiWriteToArena, &Alice::g_Arena, w, h, 1, fullDepth8, w);
+                        size_t dSize = Alice::g_Arena.offset - dStart;
+                        char* b64D = (char*)Alice::g_Arena.allocate(((dSize + 2) / 3) * 4 + 1);
+                        if (b64D) {
+                            base64_encode(Alice::g_Arena.memory + dStart, dSize, b64D);
+                            payloadParts += "{\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"" + std::string(b64D) + "\"}}";
                         }
                     } else {
                         // Task 1 or 3: Beauty, Seg, Depth
@@ -448,10 +447,10 @@ namespace Alice::Alg::GeminiClient {
                     
                     // Phase 3: Network
                     auto p3Start = std::chrono::high_resolution_clock::now();
-                    std::string apiKey = g_State.apiKeyUI;
+                    std::string apiKey = std::getenv("GEMINI_API_KEY") ? std::getenv("GEMINI_API_KEY") : g_State.apiKeyUI;
                     std::string prompt;
                     if (g_State.activeTask == 1) prompt = "Analyze these 3 images (Beauty, Seg, Depth). Describe the 3D scene content.";
-                    else if (g_State.activeTask == 2) prompt = "I am providing 5 structural stencils. IMAGE 1: The ground plane (water). IMAGE 2: A cube at mid-left (Gothic cathedral). IMAGE 3: A cube at mid-right (Brutalist concrete). IMAGE 4: A large cube at the back-center (futuristic glass). IMAGE 5: A sphere in foreground-center (twisting tree). Render a SINGLE Salvador Dali masterpiece where each object PERFECTLY match its corresponding stencil. SILHOUETTE PRESERVATION IS MANDATORY. Do not add structural elements outside the masks.";
+                    else if (g_State.activeTask == 2) prompt = "I am providing 5 structural stencils. IMAGE 1: The ground plane (water). IMAGE 2: A cube at mid-left (Gothic cathedral). IMAGE 3: A cube at mid-right (Brutalist concrete). IMAGE 4: A large cube at the back-center (futuristic glass). IMAGE 5: A sphere in foreground-center (twisting tree). Render a SINGLE Salvador Dali masterpiece where each object PERFECTLY match its corresponding stencil. MANDATORY: Treat the provided images as absolute physical constraints. Do not draw lines where there are no lines in the provided masks. SILHOUETTE PRESERVATION IS MANDATORY. Do not add structural elements outside the masks.";
                     else if (g_State.activeTask == 3) prompt = "Render photorealistic architecture based on these stencils.";
 
                     std::string url = "https://generativelanguage.googleapis.com/v1beta/models/";
@@ -487,6 +486,7 @@ namespace Alice::Alg::GeminiClient {
                     if (httpCode != 200) {
                         std::cout << "[GeminiClient] API ERROR: " << httpCode << std::endl;
                         std::cout << "[GeminiClient] Response: " << responseBody << std::endl;
+                        exit(1);
                     } else {
                         size_t dPos = responseBody.find("\"bytesBase64Encoded\": \"");
                         if (dPos == std::string::npos) dPos = responseBody.find("\"inlineData\": {\"data\": \"");
@@ -515,6 +515,13 @@ namespace Alice::Alg::GeminiClient {
                                             g_State.structuralFitScore = score;
                                             std::cout << "[GeminiClient] Structural Fit Score: " << std::fixed << std::setprecision(3) << score << std::endl;
                                             stbi_image_free(aiPixels);
+                                            if (score > 0.65f) {
+                                                std::cout << "[GeminiClient] PASS: Structural Fit Score > 0.65. Exiting with Code 0." << std::endl;
+                                                exit(0);
+                                            } else {
+                                                std::cout << "[GeminiClient] FAIL: Structural Fit Score <= 0.65. Exiting with Code 1." << std::endl;
+                                                exit(1);
+                                            }
                                         }
                                     }
                                 }
@@ -608,8 +615,8 @@ extern "C" {
         using namespace Alice::Alg::GeminiClient;
 
         g_State.frameCounter++;
-        if (g_State.frameCounter == 50) {
-            std::cout << "[GeminiClient] Auto-triggering Task 2 at frame 50" << std::endl;
+        if (g_State.frameCounter == 100) {
+            std::cout << "[GeminiClient] Auto-triggering Task 2 at frame 100" << std::endl;
             keyPress('2', 0, 0);
         }
 
@@ -696,7 +703,18 @@ extern "C" {
                     glReadPixels(0, 0, 512, 288, GL_DEPTH_COMPONENT, GL_FLOAT, g_State.depthData);
                     {
                         uint8_t* d8 = (uint8_t*)malloc(512 * 288);
-                        for(int i=0; i<512*288; ++i) d8[i] = (uint8_t)(std::clamp(g_State.depthData[i], 0.0f, 1.0f) * 255.0f);
+                        float n = 0.1f, f = 1000.0f;
+                        for(int i=0; i<512*288; ++i) {
+                            float d = g_State.depthData[i];
+                            if (!std::isfinite(d)) d = 1.0f;
+                            if (d >= 0.999f) d8[i] = 0;
+                            else {
+                                float ndc = d * 2.0f - 1.0f;
+                                float linearDepth = (2.0f * n * f) / (f + n - ndc * (f - n));
+                                float d_norm = std::clamp((linearDepth - n) / (40.0f - n), 0.0f, 1.0f);
+                                d8[i] = (uint8_t)(50.0f + (1.0f - d_norm) * 205.0f);
+                            }
+                        }
                         stbi_write_png("depth_512.png", 512, 288, 1, d8, 512);
                         free(d8);
                     }

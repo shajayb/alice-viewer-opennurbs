@@ -15,7 +15,12 @@
     "opennurbs",
     {
       "name": "curl",
-      "features": ["sspi"]
+      "features": ["sspi"],
+      "platform": "windows"
+    },
+    {
+      "name": "curl",
+      "platform": "!windows"
     },
     "stb"
   ],

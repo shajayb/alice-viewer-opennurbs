@@ -18,6 +18,12 @@
 #include <stb_image_write.h>
 #endif
 
+#ifndef STB_IMAGE_IMPLEMENTATION_DEFINED
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION_DEFINED
+#include <stb_image.h>
+#endif
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "AliceViewer.h"
@@ -46,6 +52,59 @@
 namespace Alice { extern LinearArena g_Arena; }
 
 namespace Alice::Alg::GeminiClient {
+
+    struct Color { uint8_t r, g, b; };
+    inline bool colorMatch(uint8_t r1, uint8_t g1, uint8_t b1, uint8_t r2, uint8_t g2, uint8_t b2) {
+        return (std::abs((int)r1 - (int)r2) < 4) && (std::abs((int)g1 - (int)g2) < 4) && (std::abs((int)b1 - (int)b2) < 4);
+    }
+
+    inline float evaluateStructuralFit(const uint8_t* origDepth, const uint8_t* aiRender, int w, int h) {
+        auto get_edges = [&](const uint8_t* img, uint8_t* edges, int ch) {
+            for (int y = 1; y < h - 1; ++y) {
+                for (int x = 1; x < w - 1; ++x) {
+                    float gx = 0, gy = 0;
+                    auto get_v = [&](int ox, int oy) {
+                        int idx = ((y + oy) * w + (x + ox)) * ch;
+                        if (ch == 1) return (float)img[idx];
+                        return (img[idx] * 0.299f + img[idx + 1] * 0.587f + img[idx + 2] * 0.114f);
+                    };
+                    gx = -1 * get_v(-1, -1) + 1 * get_v(1, -1) +
+                         -2 * get_v(-1,  0) + 2 * get_v(1,  0) +
+                         -1 * get_v(-1,  1) + 1 * get_v(1,  1);
+                    gy = -1 * get_v(-1, -1) - 2 * get_v(0, -1) - 1 * get_v(1, -1) +
+                          1 * get_v(-1,  1) + 2 * get_v(0,  1) + 1 * get_v(1,  1);
+                    float mag = sqrtf(gx * gx + gy * gy);
+                    edges[y * w + x] = (mag > 25.0f) ? 255 : 0;
+                }
+            }
+        };
+
+        uint8_t* edgesOrig = (uint8_t*)Alice::g_Arena.allocate(w * h);
+        uint8_t* edgesAI = (uint8_t*)Alice::g_Arena.allocate(w * h);
+        if (!edgesOrig || !edgesAI) return 0.0f;
+
+        get_edges(origDepth, edgesOrig, 1);
+        get_edges(aiRender, edgesAI, 3);
+
+        int match = 0, total = 0;
+        for (int i = 0; i < w * h; ++i) {
+            if (edgesOrig[i] == 255) {
+                total++;
+                int y = i / w; int x = i % w;
+                bool found = false;
+                for (int dy = -3; dy <= 3 && !found; ++dy) {
+                    for (int dx = -3; dx <= 3; ++dx) {
+                        int nx = x + dx, ny = y + dy;
+                        if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                            if (edgesAI[ny * w + nx] == 255) { found = true; break; }
+                        }
+                    }
+                }
+                if (found) match++;
+            }
+        }
+        return (total == 0) ? 1.0f : (float)match / (float)total;
+    }
 
     inline M4 perspective_local(float fov, float asp, float n, float f) {
         float tn = tanf(fov * 0.5f);
@@ -275,6 +334,7 @@ namespace Alice::Alg::GeminiClient {
         std::atomic<double> phase1LatencyMs{0.0};
         std::atomic<double> phase2LatencyMs{0.0};
         std::atomic<double> phase3LatencyMs{0.0};
+        std::atomic<float> structuralFitScore{0.0f};
     };
 
     inline State g_State;
@@ -297,8 +357,6 @@ namespace Alice::Alg::GeminiClient {
             if (g_State.captureRequested.exchange(false)) {
                 try {
                     g_State.workerBusy = true;
-                    
-                    // Phase 2: Downsample & Encode
                     auto p2Start = std::chrono::high_resolution_clock::now();
                     
                     Alice::g_Arena.reset();
@@ -306,200 +364,153 @@ namespace Alice::Alg::GeminiClient {
                     int h = g_State.currentH;
                     stbi_flip_vertically_on_write(1);
 
-                    size_t beautyStart = Alice::g_Arena.offset;
-                    stbi_write_png_to_func(stbiWriteToArena, &Alice::g_Arena, w, h, 4, g_State.beautyData, w * 4);
-                    size_t beautySize = Alice::g_Arena.offset - beautyStart;
-
-                    size_t segStart = Alice::g_Arena.offset;
-                    stbi_write_png_to_func(stbiWriteToArena, &Alice::g_Arena, w, h, 3, g_State.segData, w * 3);
-                    size_t segSize = Alice::g_Arena.offset - segStart;
-
-                    uint8_t* depth8 = (uint8_t*)Alice::g_Arena.allocate(w * h);
-                    size_t depthPngStart = Alice::g_Arena.offset; 
-                    if (depth8) {
+                    // Pre-calculate inverted depth (Near=255, Far=50, BG=0)
+                    uint8_t* fullDepth8 = (uint8_t*)Alice::g_Arena.allocate(w * h);
+                    if (fullDepth8) {
                         float n = 0.1f, f = 1000.0f;
                         for (int i = 0; i < w * h; ++i) {
                             float d = g_State.depthData[i];
                             if (!std::isfinite(d)) d = 1.0f;
-                            if (d >= 0.9999f) depth8[i] = 255; 
+                            if (d >= 0.999f) fullDepth8[i] = 0;
                             else {
                                 float ndc = d * 2.0f - 1.0f;
                                 float linearDepth = (2.0f * n * f) / (f + n - ndc * (f - n));
-                                depth8[i] = (uint8_t)std::clamp((linearDepth / 100.0f) * 255.0f, 0.0f, 255.0f);
+                                float d_norm = std::clamp((linearDepth - n) / (40.0f - n), 0.0f, 1.0f);
+                                fullDepth8[i] = (uint8_t)(50.0f + (1.0f - d_norm) * 205.0f);
                             }
                         }
-                        stbi_write_png_to_func(stbiWriteToArena, &Alice::g_Arena, w, h, 1, depth8, w);
                     }
-                    size_t depthPngSize = Alice::g_Arena.offset - depthPngStart;
 
-                    size_t b64BeautyLen = ((beautySize + 2) / 3) * 4;
-                    char* b64BeautyStr = (char*)Alice::g_Arena.allocate(b64BeautyLen + 1);
-                    size_t b64SegLen = ((segSize + 2) / 3) * 4;
-                    char* b64SegStr = (char*)Alice::g_Arena.allocate(b64SegLen + 1);
-                    size_t b64DepthLen = ((depthPngSize + 2) / 3) * 4;
-                    char* b64DepthStr = (char*)Alice::g_Arena.allocate(b64DepthLen + 1);
+                    std::string payloadParts;
+                    if (g_State.activeTask == 2) {
+                        Color semanticColors[5] = {
+                            {204, 204, 204}, // Floor
+                            {204, 51, 51},   // Red Cube
+                            {51, 204, 51},   // Green Cube
+                            {51, 51, 204},   // Blue Cube
+                            {204, 25, 25}    // Sphere
+                        };
+                        uint8_t* maskBuffer = (uint8_t*)Alice::g_Arena.allocate(w * h);
+                        for (int s = 0; s < 5; ++s) {
+                            if (!maskBuffer) break;
+                            for (int i = 0; i < w * h; ++i) {
+                                uint8_t r = g_State.segData[i * 3 + 0];
+                                uint8_t g = g_State.segData[i * 3 + 1];
+                                uint8_t b = g_State.segData[i * 3 + 2];
+                                if (colorMatch(r, g, b, semanticColors[s].r, semanticColors[s].g, semanticColors[s].b)) {
+                                    maskBuffer[i] = fullDepth8[i];
+                                } else maskBuffer[i] = 0;
+                            }
+                            size_t pngStart = Alice::g_Arena.offset;
+                            stbi_write_png_to_func(stbiWriteToArena, &Alice::g_Arena, w, h, 1, maskBuffer, w);
+                            size_t pngSize = Alice::g_Arena.offset - pngStart;
+                            size_t b64Len = ((pngSize + 2) / 3) * 4;
+                            char* b64Str = (char*)Alice::g_Arena.allocate(b64Len + 1);
+                            if (b64Str) {
+                                base64_encode(Alice::g_Arena.memory + pngStart, pngSize, b64Str);
+                                payloadParts += "{\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"" + std::string(b64Str) + "\"}},";
+                            }
+                        }
+                    } else {
+                        // Task 1 or 3: Beauty, Seg, Depth
+                        size_t bStart = Alice::g_Arena.offset;
+                        stbi_write_png_to_func(stbiWriteToArena, &Alice::g_Arena, w, h, 4, g_State.beautyData, w * 4);
+                        size_t bSize = Alice::g_Arena.offset - bStart;
+                        char* b64B = (char*)Alice::g_Arena.allocate(((bSize + 2) / 3) * 4 + 1);
+                        base64_encode(Alice::g_Arena.memory + bStart, bSize, b64B);
+                        payloadParts += "{\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"" + std::string(b64B) + "\"}},";
 
-                    if (b64BeautyStr && b64SegStr && b64DepthStr) {
-                        base64_encode(Alice::g_Arena.memory + beautyStart, beautySize, b64BeautyStr);
-                        base64_encode(Alice::g_Arena.memory + segStart, segSize, b64SegStr);
-                        base64_encode(Alice::g_Arena.memory + depthPngStart, depthPngSize, b64DepthStr);
+                        size_t sStart = Alice::g_Arena.offset;
+                        stbi_write_png_to_func(stbiWriteToArena, &Alice::g_Arena, w, h, 3, g_State.segData, w * 3);
+                        size_t sSize = Alice::g_Arena.offset - sStart;
+                        char* b64S = (char*)Alice::g_Arena.allocate(((sSize + 2) / 3) * 4 + 1);
+                        base64_encode(Alice::g_Arena.memory + sStart, sSize, b64S);
+                        payloadParts += "{\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"" + std::string(b64S) + "\"}},";
+
+                        size_t dStart = Alice::g_Arena.offset;
+                        stbi_write_png_to_func(stbiWriteToArena, &Alice::g_Arena, w, h, 1, fullDepth8, w);
+                        size_t dSize = Alice::g_Arena.offset - dStart;
+                        char* b64D = (char*)Alice::g_Arena.allocate(((dSize + 2) / 3) * 4 + 1);
+                        base64_encode(Alice::g_Arena.memory + dStart, dSize, b64D);
+                        payloadParts += "{\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"" + std::string(b64D) + "\"}},";
                     }
 
                     auto p2End = std::chrono::high_resolution_clock::now();
                     g_State.phase2LatencyMs = std::chrono::duration<double, std::milli>(p2End - p2Start).count();
-                    std::cout << "[Profiler] Phase 2 (Downsample & Base64): " << std::fixed << std::setprecision(2) << g_State.phase2LatencyMs << " ms" << std::endl;
-
-                    // Phase 3: Network Transfer
+                    
+                    // Phase 3: Network
                     auto p3Start = std::chrono::high_resolution_clock::now();
-
                     std::string apiKey = g_State.apiKeyUI;
-                    if (apiKey.empty()) {
-                        const char* env = std::getenv("GEMINI_API_KEY");
-                        if (env) apiKey = env;
-                    }
-
                     std::string prompt;
-                    if (g_State.activeTask == 1) prompt = "Analyze these 3 images (Beauty, Seg, Depth). Describe the 3D scene content, geometry layout, and colors. Mention the red sphere specifically.";
-                    else if (g_State.activeTask == 2) prompt = "Analyze these CAD buffers. Replace each cube by a different building style and the sphere by a tree, and the ground plane by water, all to be rendered in a Salvador Dali style.";
-                    else if (g_State.activeTask == 3) prompt = "Render a photorealistic architectural scene based on these stencils (Beauty/Seg/Depth). Use high-end materials and atmospheric lighting.";
+                    if (g_State.activeTask == 1) prompt = "Analyze these 3 images (Beauty, Seg, Depth). Describe the 3D scene content.";
+                    else if (g_State.activeTask == 2) prompt = "I am providing 5 structural stencils. IMAGE 1: The ground plane (water). IMAGE 2: A cube at mid-left (Gothic cathedral). IMAGE 3: A cube at mid-right (Brutalist concrete). IMAGE 4: A large cube at the back-center (futuristic glass). IMAGE 5: A sphere in foreground-center (twisting tree). Render a SINGLE Salvador Dali masterpiece where each object PERFECTLY match its corresponding stencil. SILHOUETTE PRESERVATION IS MANDATORY. Do not add structural elements outside the masks.";
+                    else if (g_State.activeTask == 3) prompt = "Render photorealistic architecture based on these stencils.";
 
-                    std::string payload;
-                    std::string url;
-                    if (g_State.activeTask == 2) {
-                        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=" + apiKey;
-                        payload = "{\"contents\": [{\"parts\": [{\"text\": \"" + prompt + "\"},";
-                        payload += "{\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"" + std::string(b64BeautyStr) + "\"}},";
-                        payload += "{\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"" + std::string(b64SegStr) + "\"}},";
-                        payload += "{\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"" + std::string(b64DepthStr) + "\"}}]} ]";
-                        payload += ",\"generationConfig\": {\"responseModalities\": [\"TEXT\", \"IMAGE\"]}";
-                        payload += "}";
-                    } else {
-                        url = (g_State.activeTask == 3) ? "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent" : "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
-                        url += "?key=" + apiKey;
-                        payload = "{\"contents\": [{\"parts\": [{\"text\": \"" + prompt + "\"},";
-                        payload += "{\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"" + std::string(b64BeautyStr) + "\"}},";
-                        payload += "{\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"" + std::string(b64SegStr) + "\"}},";
-                        payload += "{\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"" + std::string(b64DepthStr) + "\"}}]} ]";
-                        if (g_State.activeTask == 3) payload += ",\"generationConfig\": {\"responseModalities\": [\"TEXT\", \"IMAGE\"]}";
-                        payload += "}";
-                    }
+                    std::string url = "https://generativelanguage.googleapis.com/v1beta/models/";
+                    if (g_State.activeTask == 2) url += "gemini-2.5-flash-image";
+                    else if (g_State.activeTask == 3) url += "gemini-2.0-flash-exp";
+                    else url += "gemini-flash-latest";
+                    url += ":generateContent?key=" + apiKey;
+
+                    std::string payload = "{\"contents\": [{\"parts\": [{\"text\": \"" + prompt + "\"}," + payloadParts;
+                    if (payload.back() == ',') payload.pop_back();
+                    payload += "]}]";
+                    if (g_State.activeTask >= 2) payload += ",\"generationConfig\": {\"responseModalities\": [\"TEXT\", \"IMAGE\"]}";
+                    payload += "}";
 
                     CURL* curl = curl_easy_init();
                     std::string responseBody;
                     long httpCode = 0;
-
                     if (curl) {
                         struct curl_slist* headers = NULL;
                         headers = curl_slist_append(headers, "Content-Type: application/json");
-                        
                         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
                         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
                         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
                         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteCallback);
                         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBody);
-                        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
-                        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-                        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-                        curl_easy_setopt(curl, CURLOPT_USE_SSL, CURLUSESSL_ALL);
-
-                        CURLcode res = curl_easy_perform(curl);
-                        if (res != CURLE_OK) {
-                            std::cout << "[GeminiClient] Curl Error: " << curl_easy_strerror(res) << std::endl;
-                        } else {
-                            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-                        }
-
-                        curl_slist_free_all(headers);
+                        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 90L);
+                        curl_easy_perform(curl);
+                        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
                         curl_easy_cleanup(curl);
                     }
 
-                    {
-                        std::cout << "[GeminiClient] POST Status: " << httpCode << std::endl;
-                        if (httpCode == 200) {
-                            if (g_State.activeTask == 2) {
-                                size_t dPos = responseBody.find("\"bytesBase64Encoded\": \"");
-                                if (dPos == std::string::npos) dPos = responseBody.find("\"inlineData\": {\"data\": \"");
-                                if (dPos == std::string::npos) dPos = responseBody.find("\"data\": \"");
-                                if (dPos != std::string::npos) {
-                                    if (responseBody[dPos+1] == 'b') dPos += 23; 
-                                    else if (responseBody[dPos+1] == 'i') dPos += 24;
-                                    else dPos += 9;
-                                    
-                                    size_t ePos = responseBody.find("\"", dPos);
-                                    if (ePos != std::string::npos) {
-                                        std::string b64 = responseBody.substr(dPos, ePos - dPos);
-                                        size_t outLen = 0;
-                                        uint8_t* decoded = base64_decode(b64.c_str(), b64.size(), &outLen);
-                                        if (decoded) {
-                                            std::string outPath = std::filesystem::absolute("dali_render.png").string();
-                                            std::ofstream outFile(outPath, std::ios::binary);
-                                            if (outFile.is_open()) {
-                                                outFile.write((const char*)decoded, outLen);
-                                                outFile.close();
-                                                std::cout << "[GeminiClient] Saved Dali render to: " << outPath << " (" << outLen << " bytes)" << std::endl;
-                                            }
+                    if (httpCode == 200) {
+                        size_t dPos = responseBody.find("\"bytesBase64Encoded\": \"");
+                        if (dPos == std::string::npos) dPos = responseBody.find("\"inlineData\": {\"data\": \"");
+                        if (dPos == std::string::npos) dPos = responseBody.find("\"data\": \"");
+                        if (dPos != std::string::npos) {
+                            if (responseBody[dPos+1] == 'b') dPos += 23; 
+                            else if (responseBody[dPos+1] == 'i') dPos += 24;
+                            else dPos += 9;
+                            size_t ePos = responseBody.find("\"", dPos);
+                            if (ePos != std::string::npos) {
+                                std::string b64 = responseBody.substr(dPos, ePos - dPos);
+                                size_t outLen = 0;
+                                uint8_t* decoded = base64_decode(b64.c_str(), b64.size(), &outLen);
+                                if (decoded) {
+                                    std::string outPath = (g_State.activeTask == 2) ? "dali_render.png" : "ai_render_output.png";
+                                    std::ofstream outFile(outPath, std::ios::binary);
+                                    if (outFile.is_open()) {
+                                        outFile.write((const char*)decoded, outLen);
+                                        outFile.close();
+                                    }
+                                    if (g_State.activeTask == 2) {
+                                        int aiW, aiH, aiC;
+                                        uint8_t* aiPixels = stbi_load_from_memory(decoded, (int)outLen, &aiW, &aiH, &aiC, 3);
+                                        if (aiPixels) {
+                                            float score = evaluateStructuralFit(fullDepth8, aiPixels, aiW, aiH);
+                                            g_State.structuralFitScore = score;
+                                            std::cout << "[GeminiClient] Structural Fit Score: " << std::fixed << std::setprecision(3) << score << std::endl;
+                                            stbi_image_free(aiPixels);
                                         }
                                     }
                                 }
                             }
-
-                            // Clean Parsing for TEXT chunks
-                            std::string cleanText;
-                            size_t tPos = 0;
-                            while ((tPos = responseBody.find("\"text\": \"", tPos)) != std::string::npos) {
-                                tPos += 9;
-                                size_t ePos = responseBody.find("\"", tPos);
-                                if (ePos != std::string::npos) {
-                                    std::string chunk = responseBody.substr(tPos, ePos - tPos);
-                                    size_t nPos = 0;
-                                    while((nPos = chunk.find("\\n", nPos)) != std::string::npos) { chunk.replace(nPos, 2, "\n"); nPos += 1; }
-                                    nPos = 0;
-                                    while((nPos = chunk.find("\\\"", nPos)) != std::string::npos) { chunk.replace(nPos, 2, "\""); nPos += 1; }
-                                    cleanText += chunk + "\n";
-                                    tPos = ePos + 1;
-                                } else break;
-                            }
-
-                            if (!cleanText.empty()) {
-                                std::cout << "[GeminiClient] Success. Parsed Text:" << std::endl;
-                                std::cout << cleanText << std::endl;
-
-                                std::ofstream logFile("api_log.txt", std::ios::app);
-                                if (logFile.is_open()) {
-                                    auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-                                    logFile << "--- [" << std::put_time(std::localtime(&now), "%Y-%m-%d %H:%M:%S") << "] Task " << g_State.activeTask << " ---\n";
-                                    logFile << cleanText << "\n\n";
-                                    logFile.close();
-                                }
-                            }
-
-                            if (g_State.activeTask == 3) {
-                                size_t dPos = responseBody.find("\"data\": \"");
-                                if (dPos != std::string::npos) {
-                                    dPos += 9; size_t ePos = responseBody.find("\"", dPos);
-                                    if (ePos != std::string::npos) {
-                                        std::string b64 = responseBody.substr(dPos, ePos - dPos);
-                                        size_t outLen = 0;
-                                        uint8_t* decoded = base64_decode(b64.c_str(), b64.size(), &outLen);
-                                        if (decoded) {
-                                            std::string outPath = std::filesystem::absolute("ai_render_output.png").string();
-                                            std::ofstream outFile(outPath, std::ios::binary);
-                                            if (outFile.is_open()) {
-                                                outFile.write((const char*)decoded, outLen);
-                                                outFile.close();
-                                                std::cout << "[GeminiClient] Saved render to: " << outPath << " (" << outLen << " bytes)" << std::endl;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } else std::cout << "[GeminiClient] Error: " << responseBody << std::endl;
+                        }
                     }
-
                     auto p3End = std::chrono::high_resolution_clock::now();
                     g_State.phase3LatencyMs = std::chrono::duration<double, std::milli>(p3End - p3Start).count();
-                    std::cout << "[Profiler] Phase 3 (API Transfer): " << std::fixed << std::setprecision(2) << g_State.phase3LatencyMs << " ms" << std::endl;
-
                     g_State.workerBusy = false;
                     g_State.newResultReady = true;
                 } catch (...) { g_State.workerBusy = false; }
@@ -577,7 +588,7 @@ extern "C" {
 
     void draw() {
         using namespace Alice::Alg::GeminiClient;
-        
+
         ImGui::Begin("Gemini API Configuration");
         ImGui::InputText("API Key", g_State.apiKeyUI, sizeof(g_State.apiKeyUI), ImGuiInputTextFlags_Password);
         ImGui::Text("Tasks: 1:Analysis, 2:Dali, 3:Render");

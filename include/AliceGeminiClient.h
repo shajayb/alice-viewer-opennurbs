@@ -327,8 +327,9 @@ namespace Alice::Alg::GeminiClient {
         int activeTask = 0;
         int currentW = 3840;
         int currentH = 2160;
+        int frameCounter = 0;
 
-        char apiKeyUI[128] = "AIzaSyBfcxqzvArHxpzAfeTJ8S0lmJPrg9W0qKE";
+        char apiKeyUI[128] = "AIzaSyCt0IvHNeVMZzN1-nL3uUcuCO2RnnUEgaU";
 
         // Metrics
         std::atomic<double> phase1LatencyMs{0.0};
@@ -390,6 +391,9 @@ namespace Alice::Alg::GeminiClient {
                             {51, 51, 204},   // Blue Cube
                             {204, 25, 25}    // Sphere
                         };
+                        const char* stencilNames[5] = {
+                            "stencil_floor.png", "stencil_red.png", "stencil_green.png", "stencil_blue.png", "stencil_sphere.png"
+                        };
                         uint8_t* maskBuffer = (uint8_t*)Alice::g_Arena.allocate(w * h);
                         for (int s = 0; s < 5; ++s) {
                             if (!maskBuffer) break;
@@ -401,6 +405,10 @@ namespace Alice::Alg::GeminiClient {
                                     maskBuffer[i] = fullDepth8[i];
                                 } else maskBuffer[i] = 0;
                             }
+                            // Save stencil to disk for verification
+                            stbi_write_png(stencilNames[s], w, h, 1, maskBuffer, w);
+                            std::cout << "[GeminiClient] Saved stencil: " << stencilNames[s] << std::endl;
+
                             size_t pngStart = Alice::g_Arena.offset;
                             stbi_write_png_to_func(stbiWriteToArena, &Alice::g_Arena, w, h, 1, maskBuffer, w);
                             size_t pngSize = Alice::g_Arena.offset - pngStart;
@@ -470,12 +478,16 @@ namespace Alice::Alg::GeminiClient {
                         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteCallback);
                         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBody);
                         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 90L);
+                        curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L); 
                         curl_easy_perform(curl);
                         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
                         curl_easy_cleanup(curl);
                     }
 
-                    if (httpCode == 200) {
+                    if (httpCode != 200) {
+                        std::cout << "[GeminiClient] API ERROR: " << httpCode << std::endl;
+                        std::cout << "[GeminiClient] Response: " << responseBody << std::endl;
+                    } else {
                         size_t dPos = responseBody.find("\"bytesBase64Encoded\": \"");
                         if (dPos == std::string::npos) dPos = responseBody.find("\"inlineData\": {\"data\": \"");
                         if (dPos == std::string::npos) dPos = responseBody.find("\"data\": \"");
@@ -513,7 +525,13 @@ namespace Alice::Alg::GeminiClient {
                     g_State.phase3LatencyMs = std::chrono::duration<double, std::milli>(p3End - p3Start).count();
                     g_State.workerBusy = false;
                     g_State.newResultReady = true;
-                } catch (...) { g_State.workerBusy = false; }
+                } catch (const std::exception& e) { 
+                    std::cout << "[GeminiClient] Exception: " << e.what() << std::endl;
+                    g_State.workerBusy = false; 
+                } catch (...) { 
+                    std::cout << "[GeminiClient] Unknown Exception" << std::endl;
+                    g_State.workerBusy = false; 
+                }
             } else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         curl_global_cleanup();
@@ -589,6 +607,12 @@ extern "C" {
     void draw() {
         using namespace Alice::Alg::GeminiClient;
 
+        g_State.frameCounter++;
+        if (g_State.frameCounter == 50) {
+            std::cout << "[GeminiClient] Auto-triggering Task 2 at frame 50" << std::endl;
+            keyPress('2', 0, 0);
+        }
+
         ImGui::Begin("Gemini API Configuration");
         ImGui::InputText("API Key", g_State.apiKeyUI, sizeof(g_State.apiKeyUI), ImGuiInputTextFlags_Password);
         ImGui::Text("Tasks: 1:Analysis, 2:Dali, 3:Render");
@@ -604,6 +628,7 @@ extern "C" {
         ImGui::Text("P1 (Capture): %.2f ms", (double)g_State.phase1LatencyMs);
         ImGui::Text("P2 (Encode): %.2f ms", (double)g_State.phase2LatencyMs);
         ImGui::Text("P3 (Network): %.2f ms", (double)g_State.phase3LatencyMs);
+        ImGui::Text("Structural Fit Score: %.3f", (float)g_State.structuralFitScore);
         
         ImGui::End();
 
@@ -645,29 +670,6 @@ extern "C" {
                     drawSolidSphere({0, 0, 10}, 4.0f, {0.8f, 0.1f, 0.1f}, mvp);
                     glFinish();
 
-                    // --- 4K Extraction ---
-                    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-                    stbi_flip_vertically_on_write(1);
-
-                    glReadBuffer(GL_COLOR_ATTACHMENT0);
-                    glReadPixels(0, 0, 3840, 2160, GL_RGBA, GL_UNSIGNED_BYTE, g_State.beautyData);
-                    stbi_write_png("beauty_4k.png", 3840, 2160, 4, g_State.beautyData, 3840 * 4);
-
-                    glReadBuffer(GL_COLOR_ATTACHMENT1);
-                    glReadPixels(0, 0, 3840, 2160, GL_RGB, GL_UNSIGNED_BYTE, g_State.segData);
-                    stbi_write_png("seg_4k.png", 3840, 2160, 3, g_State.segData, 3840 * 3);
-
-                    glReadPixels(0, 0, 3840, 2160, GL_DEPTH_COMPONENT, GL_FLOAT, g_State.depthData);
-                    // Convert float depth to 8-bit for preview
-                    {
-                        uint8_t* d8 = (uint8_t*)malloc(3840 * 2160);
-                        for(int i=0; i<3840*2160; ++i) d8[i] = (uint8_t)(std::clamp(g_State.depthData[i], 0.0f, 1.0f) * 255.0f);
-                        stbi_write_png("depth_4k.png", 3840, 2160, 1, d8, 3840);
-                        free(d8);
-                    }
-
-                    std::cout << "[GeminiClient] 4K Buffers Saved: beauty_4k.png, seg_4k.png, depth_4k.png" << std::endl;
-
                     // --- 512p Downsample ---
                     glBindFramebuffer(GL_READ_FRAMEBUFFER, g_State.fbo);
                     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_State.transferFbo);
@@ -679,7 +681,10 @@ extern "C" {
                     glFinish();
 
                     // --- 512p Extraction ---
+                    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                    stbi_flip_vertically_on_write(1);
                     glBindFramebuffer(GL_FRAMEBUFFER, g_State.transferFbo);
+                    
                     glReadBuffer(GL_COLOR_ATTACHMENT0);
                     glReadPixels(0, 0, 512, 288, GL_RGBA, GL_UNSIGNED_BYTE, g_State.beautyData);
                     stbi_write_png("beauty_512.png", 512, 288, 4, g_State.beautyData, 512 * 4);
@@ -697,8 +702,6 @@ extern "C" {
                     }
                     
                     std::cout << "[GeminiClient] 512p Buffers Saved: beauty_512.png, seg_512.png, depth_512.png" << std::endl;
-                    std::cout << "[Paths] " << std::filesystem::absolute("beauty_4k.png") << std::endl;
-                    std::cout << "[Paths] " << std::filesystem::absolute("beauty_512.png") << std::endl;
 
                     g_State.activeTask = (key == '1') ? 1 : ((key == '2') ? 2 : 3);
                     g_State.currentW = 512;

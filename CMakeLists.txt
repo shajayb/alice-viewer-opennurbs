@@ -34,6 +34,9 @@ find_package(glfw3 CONFIG REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(opennurbs CONFIG REQUIRED)
+# OVERRIDE: Using CURL for robust REST/TLS compliance with Gemini API.
+find_package(CURL CONFIG REQUIRED)
+find_package(Stb REQUIRED)
 
 # Link libraries
 target_link_libraries(AliceViewer PRIVATE
@@ -42,7 +45,9 @@ target_link_libraries(AliceViewer PRIVATE
     imgui::imgui
     OpenGL::GL
     opennurbs::opennurbs
+    CURL::libcurl
 )
+target_include_directories(AliceViewer PRIVATE ${Stb_INCLUDE_DIR})
 
 # Optional: Copy DLLs on Windows if using shared libs
 if(WIN32)

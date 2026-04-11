@@ -1,0 +1,57 @@
+<state_snapshot>
+    <overall_goal>
+        Build the AliceGeminiClient from scratch to extract mathematically pristine 4K G-Buffer stencils (Beauty, Depth, Segmentation) and POST them asynchronously to the Gemini 3 Flash API.
+    </overall_goal>
+
+    <active_constraints>
+        - SECURITY/TECH: OpenSSL and simdjson are strictly BANNED. Use OS-native TLS (SChannel/CPPHTTPLIB_USE_SCHANNEL) and custom string parsing.
+        - PERFORMANCE: 0ms blocking latency on main thread; zero heap allocations (std::string/vector) in the hot rendering loop.
+        - ARCHITECTURE: Mirror SelectionContext.h; register all 6 extern "C" callbacks without the 'inline' keyword to ensure strong symbol emission.
+        - RENDERING: 4K FBO (3840x2160), NO MSAA. MRTs: GL_RGBA16F (Beauty), GL_RGB8 (Segmentation), GL_DEPTH_COMPONENT32F (Depth).
+        - VISUAL: drawGrid(50.0f) must be visible in the 100x100 unit grid from default "Perspective" camera.
+        - MEMORY: 128MB Arena (Alice::g_Arena) with mandatory nullptr/capacity checks.
+    </active_constraints>
+
+    <key_knowledge>
+        - Vcpkg Baseline: Resolved by using valid commit `67f167b2f7c170f83688919c90edcd896239330e`. Target triplet is x64-windows-static.
+        - Arena Stability: 512MB allocation failed on native host; reverted to 128MB. Added fatal check on g_Arena.memory to prevent abort() on allocation failure.
+        - Phantom Pointers: stbiWriteToArena fix prevents offset incrementing on failure (checks arena->offset + size > arena->capacity before allocate()).
+        - Worker Armor: Entire worker thread loop is wrapped in try/catch to prevent networking/STL exceptions from triggering global std::terminate().
+        - PBO Ring: g_State.isFirstFrame skip protects worker thread from frame-0 incompressible noise.
+        - Depth Stencil: depthPngStart offset must be captured AFTER allocating depth8 conversion buffer to prevent file corruption in disk dumps.
+    </key_knowledge>
+
+    <artifact_trail>
+        - `vcpkg.json`: Configured with cpp-httplib, stb, and opennurbs overlay.
+        - `include/AliceGeminiClient.h`: 
+            - 4K FBO/PBO Ring Implementation.
+            - Bespoke zero-allocation Base64 encoder.
+            - Worker thread with try/catch exception handling and latency metrics.
+            - GridRenderer (VBO-based) for high-res FBO captures.
+        - `src/sketch.cpp`: Enabled ALICEGEMINICLIENT_RUN_TEST.
+    </artifact_trail>
+
+    <file_system_state>
+        - CWD: `C:\Users\shajay.b.ZAHA-HADID\source\repos\alice-viewer-opennurbs`
+        - BUILD ARTIFACTS: `./build/beauty_4k.png`, `./build/seg_4k.png`, `./build/depth_4k.png`.
+        - BINARY: `build/bin/AliceViewer.exe` linked successfully with zero linker/compiler errors.
+    </file_system_state>
+
+    <recent_actions>
+        - Reverted arena expansion to 128MB and implemented fatal safety checks for malloc failure.
+        - Fixed phantom pointer vulnerability in stbiWriteToArena.
+        - Added CPU heap safety net for large G-Buffer allocations (beautyData/segData/depthData).
+        - Wrapped worker thread in try/catch to prevent networking exceptions from crashing the process.
+        - Fixed depth_4k.png corruption by recalibrating PNG byte stream offsets.
+    </recent_actions>
+
+    <task_state>
+        1. [DONE] Scaffold 4K MRT FBO & PBO Ring.
+        2. [DONE] Implement native Base64 & worker thread workflow.
+        3. [DONE] Fix memory stability and arena allocation safety.
+        4. [DONE] Resolve thread-level exceptions and PNG file corruption.
+        5. [TODO] Final Visual QA of .png disk dumps (Confirming 3840x2160 resolution).
+        6. [TODO] Implement and verify 0ms blocking latency metrics in draw().
+        7. [TODO] Finalize Gemini JSON Response scanner integration.
+    </task_state>
+</state_snapshot>

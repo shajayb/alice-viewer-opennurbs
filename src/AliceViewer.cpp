@@ -519,7 +519,7 @@ V3 AliceViewer::screenToWorld(int x, int y, float planeZ)
 int AliceViewer::init()
 {
     g_instance = this;
-    printf(">>> AliceViewer Framework v2.0.2 Optimized <<<\n");
+    printf(">>> AliceViewer Framework v2.0.4 Optimized <<<\n");
     if (!glfwInit()) 
     {
         return 1;
@@ -527,7 +527,7 @@ int AliceViewer::init()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4); 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    window = glfwCreateWindow(1280, 720, "ALICE CAD ON FRAMEWORK", 0, 0);
+    window = glfwCreateWindow(1280, 720, "ALICE CAD ON FRAMEWORK 3.1", 0, 0);
     if (!window) 
     {
         return 1;

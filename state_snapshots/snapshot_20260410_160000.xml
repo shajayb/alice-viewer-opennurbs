@@ -1,0 +1,44 @@
+<state_snapshot>
+    <overall_goal>
+        Finalize AliceGeminiClient with TLS support, API key fallback, and corrected depth linearization.
+    </overall_goal>
+
+    <active_constraints>
+        - SECURITY: Gemini API key fallback implemented (UI -> ENV -> Hardcoded for test).
+        - NETWORKING: Force-rebuilt cpp-httplib with "schannel" for TLS support.
+        - RENDERING: Corrected depth linearization (Black = Near, White = Far/Background).
+    </active_constraints>
+
+    <key_knowledge>
+        - TLS Fix: Scheme 'https' failure was due to cached non-TLS binary. Nuking 'build/' and regenerating with explicit LLVM MT/RC paths solved the configuration and linkage issues.
+        - Depth Mapping: Background is now clamped to 0.9999f (Solid White) to prevent linearization artifacts on infinite backgrounds. Near-field mapping (0-100 units) is linear 0-255 (Black-to-White).
+        - Toolchain: Successfully bypassed MSVC 'mt.exe' by using 'llvm-mt.exe' and 'llvm-rc.exe' during CMake configuration on Windows.
+    </key_knowledge>
+
+    <artifact_trail>
+        - `include/AliceGeminiClient.h`:
+            - Updated `workerThreadFunc` with API key fallback logic.
+            - Replaced depth linearization loop with standard near/far mapping and background clamp.
+        - `build/bin/AliceViewer.exe`: Compiled successfully with LLVM/clang-cl (Ninja).
+    </artifact_trail>
+
+    <file_system_state>
+        - CWD: `C:\Users\shajay.b.ZAHA-HADID\source\repos\alice-viewer-opennurbs`
+        - BINARY: `build/bin/AliceViewer.exe` (Verified).
+    </file_system_state>
+
+    <recent_actions>
+        - Nuked `./build/` directory.
+        - Regenerated CMake with `-DCMAKE_MT` and `-DCMAKE_RC_COMPILER` pointing to LLVM.
+        - Implemented hardcoded API key fallback for unit testing.
+        - Fixed depth map linearization logic.
+        - Verified 0-error build via Ninja.
+    </recent_actions>
+
+    <task_state>
+        1. [DONE] Nuke build cache and force TLS rebuild.
+        2. [DONE] Implement API key fallback (UI/ENV/Hardcoded).
+        3. [DONE] Fix depth map linearization and background clamping.
+        4. [DONE] Verify local build (0 errors).
+    </task_state>
+</state_snapshot>

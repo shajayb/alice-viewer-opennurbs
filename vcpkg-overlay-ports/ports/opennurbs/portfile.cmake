@@ -14,6 +14,14 @@ vcpkg_cmake_configure(
 
 vcpkg_cmake_install()
 
+# Rename zlib to avoid conflict with standard zlib port
+if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/zlib.lib")
+    file(RENAME "${CURRENT_PACKAGES_DIR}/lib/zlib.lib" "${CURRENT_PACKAGES_DIR}/lib/opennurbs_zlib.lib")
+endif()
+if(EXISTS "${CURRENT_PACKAGES_DIR}/debug/lib/zlib.lib")
+    file(RENAME "${CURRENT_PACKAGES_DIR}/debug/lib/zlib.lib" "${CURRENT_PACKAGES_DIR}/debug/lib/opennurbs_zlib.lib")
+endif()
+
 # Ensure all headers are installed to include/ root, preserving structure
 file(COPY "${SOURCE_PATH}/" DESTINATION "${CURRENT_PACKAGES_DIR}/include" FILES_MATCHING PATTERN "*.h")
 
@@ -32,12 +40,12 @@ else()
 endif()
 
 set(MAIN_LIB "${LIB_PREFIX}opennurbsStatic${LIB_EXT}")
-set(ZLIB_NAME "${LIB_PREFIX}zlib${LIB_EXT}")
+set(ZLIB_NAME "${LIB_PREFIX}opennurbs_zlib${LIB_EXT}")
 
 # Check for alternative names if defaults don't exist
 if(NOT EXISTS "${CURRENT_PACKAGES_DIR}/lib/${ZLIB_NAME}")
-    if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/${LIB_PREFIX}opennurbs_zlib${LIB_EXT}")
-        set(ZLIB_NAME "${LIB_PREFIX}opennurbs_zlib${LIB_EXT}")
+    if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/${LIB_PREFIX}zlib${LIB_EXT}")
+        set(ZLIB_NAME "${LIB_PREFIX}zlib${LIB_EXT}")
     elseif(EXISTS "${CURRENT_PACKAGES_DIR}/lib/${LIB_PREFIX}opennurbs_public_zlib${LIB_EXT}")
         set(ZLIB_NAME "${LIB_PREFIX}opennurbs_public_zlib${LIB_EXT}")
     elseif(EXISTS "${CURRENT_PACKAGES_DIR}/lib/${LIB_PREFIX}z${LIB_EXT}")

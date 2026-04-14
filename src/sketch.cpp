@@ -5,5 +5,11 @@
 namespace Alice { LinearArena g_Arena; }
 
 // Active Test
-#define NORMAL_SHADER_RUN_TEST
-#include "NormalShader.h"
+#define CAD_PIPELINE_TEST_RUN_TEST
+#include "CADPipelineTest.h"
+
+//#define ECEF_TEST_RUN_TEST
+//#include "ECEFTest.h"
+
+//#define GLB_TEST_RUN_TEST
+//#include "GLBTest.h"

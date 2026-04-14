@@ -1,24 +1,28 @@
 [CLI AGENT PROMPT]
 CONTEXT: 
-Initialize according to `gemini.md`. We are implementing a Normal Visualization Shader for `AliceViewer 2` to debug geometric facing directions. 
+Initialize according to `gemini.md`. The try/catch block successfully prevented a hard crash! However, we hit a `nlohmann::json` exception (`invalid UTF-8 byte: 0xFF`). A legacy UTF-16 Byte Order Mark (BOM) was left in `executor_console.log` by a previous PowerShell pipe. We must sanitize all file reads in the Orchestrator.
+
+CRITICAL SYSTEM RULES: 
+1. FILE LOCK AVOIDANCE: Specify your build targets explicitly. Rename running `.exe` files to `.old.exe` before linking if necessary.
 
 EXECUTION MANDATE:
-Execute SOP Steps 1 through 7. You MUST write the strict JSON "Execution Reporting" schema to a file named `executor_report.json` in the repository root.
+Execute SOP Steps 1 through 7. Write the strict JSON report to `executor_report.json`.
 
-1. PHASE 1 (MVP - Pipeline & Math): 
-   - Scaffold a new Shader Program (Vertex and Fragment) that overrides the default material.
-   - The shader must map world-space Normal vectors to RGB colors. Use the standard mapping: `color = Normal * 0.5 + 0.5`.
-   - Apply this shader to the main drawing loop (e.g., `g_testCloud` or the procedural city).
-   - Build locally using LLVM/Ninja until 0 errors.
+1. PHASE 1 (The Orchestrator Sanitizer): 
+   - Open `src/AliceOrchestrator.cpp`.
+   - Create a helper function `std::string sanitizeString(const std::string& input)` above `readFileContents`.
+   - In `sanitizeString`, iterate through the input and remove any `0xFF`, `0xFE`, or `0x00` (null) bytes. (Alternatively, just strip anything where `(unsigned char)c > 127` to force pure ASCII for our logs and prompts).
+   - Update `readFileContents` to return `sanitizeString(content)` so all files read from disk are automatically stripped of illegal UTF-8 bytes and BOMs.
+   - Build explicitly: `ninja AliceOrchestrator`
 
-2. PHASE 2 (AESTHETIC): 
-   - The `--headless-capture` must output `framebuffer.png`.
-   - STRICT CAD MANDATE: AliceViewer 2 uses a Z-Up coordinate system. 
-   - Therefore, surfaces pointing towards the sky (+Z) MUST render as pure BLUE. 
-   - Surfaces pointing +X must be RED. Surfaces pointing +Y must be GREEN.
+2. PHASE 2 (File Wiping): 
+   - Open `src/TilesetMicroTest.cpp`.
+   - Before opening the `std::ofstream`, add `std::filesystem::remove("executor_console.log");` to explicitly destroy the old, corrupted file on disk.
+   - Build explicitly: `ninja TilesetMicroTest`
+   - Run the test natively (`./build/bin/TilesetMicroTest.exe`).
 
-3. PHASE 3 (PERFORMANCE): 
-   - The shader strings must be defined as `constexpr const char*` literals to avoid heap allocation.
-   - Do not allocate any `std::vector` or heap memory during the render loop.
+3. PHASE 3 (TERMINATION):
+   - Write the `executor_report.json` detailing the sanitization fix.
+   - Do NOT execute any taskkill commands yourself. The Orchestrator's Watchdog will terminate you.
 
-Run the full sequence autonomously. DO NOT ask for permission. Proceed with the SOP and execute all shell build commands immediately.
+Run autonomously. Do not ask for permission.

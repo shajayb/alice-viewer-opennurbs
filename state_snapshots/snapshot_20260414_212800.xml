@@ -1,0 +1,30 @@
+﻿<snapshot>
+  <active_constraints>
+    <constraint>OGC 3D Tiles/GLB streaming manifest parsing.</constraint>
+    <constraint>STRICT Ninja/LLVM pipeline in ./build/.</constraint>
+    <constraint>CAMERA FRAMING MANDATE: Frame root tile using bounding sphere.</constraint>
+    <constraint>ZERO heap allocations in draw() loop.</constraint>
+  </active_constraints>
+  <key_knowledge>
+    <knowledge>TilesetLoader resolved content URI 'test_tile.glb' from 'test_tileset.json'.</knowledge>
+    <knowledge>ECEF-to-ENU projection applied with corrected rotation matrix in AliceMath.h.</knowledge>
+    <knowledge>Dynamic camera framing based on mesh extents achieved in CADPipelineTest.</knowledge>
+  </key_knowledge>
+  <artifact_trail>
+    <artifact>include/TilesetLoader.h</artifact>
+    <artifact>include/AliceMath.h</artifact>
+    <artifact>include/GLBLoader.h</artifact>
+    <artifact>test_tile.glb</artifact>
+    <artifact>test_tileset.json</artifact>
+    <artifact>executor_report.json</artifact>
+    <artifact>executor_console.log</artifact>
+    <artifact>framebuffer.png</artifact>
+  </artifact_trail>
+  <task_state>
+    <state>PHASE 1 (Manifest Parsing &amp; Network Chaining): COMPLETED</state>
+    <state>PHASE 2 (AESTHETIC): COMPLETED</state>
+    <state>PHASE 3 (PERFORMANCE): COMPLETED</state>
+    <state>SOP Step 7 (Local Build): COMPLETED</state>
+    <state>Agent Status: AWAITING_REVIEW</state>
+  </task_state>
+</snapshot>

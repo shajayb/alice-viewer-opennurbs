@@ -1,0 +1,28 @@
+<snapshot>
+  <active_constraints>
+    <constraint>STRICT Ninja/LLVM pipeline in ./build/.</constraint>
+    <constraint>Meta-Healing: API errors are fed back to prompt.txt for autonomous patching.</constraint>
+    <constraint>ZERO heap allocations in draw() loop.</constraint>
+    <constraint>REVERSED-Z projection required for rendering.</constraint>
+  </active_constraints>
+  <key_knowledge>
+    <knowledge>ECEF-to-ENU projection requires double precision rotation to prevent distorted spikes.</knowledge>
+    <knowledge>Orchestrator uses gemini-1.5-pro-latest and captures HTTP response codes.</knowledge>
+    <knowledge>Sky background set to blue (0.5, 0.7, 1.0) for visual fidelity.</knowledge>
+  </key_knowledge>
+  <artifact_trail>
+    <artifact>src/AliceOrchestrator.cpp</artifact>
+    <artifact>include/AliceMath.h</artifact>
+    <artifact>include/GLBLoader.h</artifact>
+    <artifact>include/TilesetLoader.h</artifact>
+    <artifact>include/CADPipelineTest.h</artifact>
+    <artifact>executor_report.json</artifact>
+    <artifact>framebuffer.png</artifact>
+  </artifact_trail>
+  <task_state>
+    <state>PHASE 1 (Meta-Healing): COMPLETED</state>
+    <state>PHASE 2 (GLB Math): COMPLETED</state>
+    <state>PHASE 3 (Aesthetic): COMPLETED</state>
+    <state>Agent Status: AWAITING_REVIEW</state>
+  </task_state>
+</snapshot>

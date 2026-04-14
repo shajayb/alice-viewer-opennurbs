@@ -49,6 +49,10 @@ target_link_libraries(AliceViewer PRIVATE
 )
 target_include_directories(AliceViewer PRIVATE ${Stb_INCLUDE_DIR})
 
+if(WIN32)
+    target_link_options(AliceViewer PRIVATE "/FORCE:MULTIPLE")
+endif()
+
 # --- AliceOrchestrator Target ---
 add_executable(AliceOrchestrator src/AliceOrchestrator.cpp)
 target_link_libraries(AliceOrchestrator PRIVATE
@@ -56,6 +60,22 @@ target_link_libraries(AliceOrchestrator PRIVATE
     CURL::libcurl
 )
 target_include_directories(AliceOrchestrator PRIVATE include)
+
+# --- APITest Target ---
+add_executable(APITest src/APITest.cpp)
+target_link_libraries(APITest PRIVATE
+    nlohmann_json::nlohmann_json
+    CURL::libcurl
+)
+target_include_directories(APITest PRIVATE include)
+
+# --- TilesetMicroTest Target ---
+add_executable(TilesetMicroTest src/TilesetMicroTest.cpp)
+target_link_libraries(TilesetMicroTest PRIVATE
+    nlohmann_json::nlohmann_json
+    CURL::libcurl
+)
+target_include_directories(TilesetMicroTest PRIVATE include)
 
 # Optional: Copy DLLs on Windows if using shared libs
 if(WIN32)

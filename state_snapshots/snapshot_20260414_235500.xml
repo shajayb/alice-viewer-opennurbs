@@ -1,0 +1,26 @@
+<snapshot>
+  <active_constraints>
+    <constraint>Pivot to 3D Tiles/GLB streaming.</constraint>
+    <constraint>STRICT Ninja/LLVM pipeline in ./build/.</constraint>
+    <constraint>CAMERA FRAMING MANDATE: Frame all loaded geometry in init().</constraint>
+    <constraint>Mandatory reporting to executor_report.json.</constraint>
+  </active_constraints>
+  <key_knowledge>
+    <knowledge>GLBLoader refactored to return bounding box using cgltf metadata.</knowledge>
+    <knowledge>GLBTest frames Duck model by transforming glTF Y-up to Alice Z-up: X'=X, Y'=-Z, Z'=Y.</knowledge>
+    <knowledge>Successful 0-error build of AliceViewer target using LLVM/Clang on Windows.</knowledge>
+  </key_knowledge>
+  <artifact_trail>
+    <artifact>gemini.md</artifact>
+    <artifact>include/GLBLoader.h</artifact>
+    <artifact>include/GLBTest.h</artifact>
+    <artifact>executor_report.json</artifact>
+    <artifact>executor_console.log</artifact>
+  </artifact_trail>
+  <task_state>
+    <state>PHASE 1 (System Prompt Update): COMPLETED</state>
+    <state>PHASE 2 (GLB Test Camera Fix): COMPLETED</state>
+    <state>SOP Step 7 (Local Build): COMPLETED</state>
+    <state>Agent Status: AWAITING_REVIEW</state>
+  </task_state>
+</snapshot>

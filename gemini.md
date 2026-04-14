@@ -99,6 +99,7 @@ You are operating within a dual-target architecture (Primary: Ubuntu DevContaine
 1. **Interaction**: Orbit (`ALT+LMB`), Pan (`MMB`), Zoom (`ALT+RMB`). Respect `ImGui::GetIO().WantCaptureMouse`.
 2. **Aesthetics**: Background `0.9`. Geometry in Deep Charcoal (`#2D2D2D`).
 3. **OpenGL**: Version 400. Use `GL_RGBA16F` for G-Buffers.
+4. **CAMERA FRAMING MANDATE**: When writing test code, you MUST explicitly compute the bounding box, bounding sphere, or extents of your generated/loaded geometry. During the `init()` phase, you MUST explicitly set the camera's Eye and Target to frame this geometry perfectly. Never assume the default camera position will capture the object for the headless framebuffer.
 
 # Application Integration (sketch.cpp Switchboard)
 When configuring a header unit test for the human developer (SOP Step 9), `src/sketch.cpp` MUST adhere to this exact structural pattern at the top of the file:
@@ -118,7 +119,7 @@ namespace Alice { LinearArena g_Arena; }
 #include "<MyAlgorithm>.h"
 
 # Execution Reporting (STRICT SCHEMA)
-Upon completing SOP Step 7 (or failing after max self-healing attempts), you MUST output a final status report. This report MUST be formatted as a valid JSON object wrapped in a `json` markdown block. Do not prepend or append any conversational text outside of this block at the very end of your response.
+Upon completing SOP Step 7 (or failing after max self-healing attempts), you MUST write the final status report to a file named `executor_report.json` in the repository root. This report MUST be formatted as a valid JSON object. Do not just print it to the console.
 
 During execution, you MUST save a transcript of your critical console logs, build outputs, and thought processes to a file named `executor_console.log` in the repository root.
 

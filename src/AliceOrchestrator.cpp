@@ -8,6 +8,8 @@
 #include <sstream>
 #include <filesystem>
 #include <algorithm>
+#include <thread>
+#include <chrono>
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -40,12 +42,23 @@ std::string readApiKey(const std::string& path) {
     throw std::runtime_error("API_KEYS.txt is empty.");
 }
 
+std::string sanitizeString(const std::string& input) {
+    std::string output;
+    output.reserve(input.size());
+    for (unsigned char c : input) {
+        if (c == 0xFF || c == 0xFE || c == 0x00) continue;
+        if (c > 127) continue; // Force pure ASCII for logs and prompts
+        output += (char)c;
+    }
+    return output;
+}
+
 std::string readFileContents(const std::string& path) {
-    std::ifstream file(path);
+    std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) return "";
     std::stringstream buffer;
     buffer << file.rdbuf();
-    return buffer.str();
+    return sanitizeString(buffer.str());
 }
 
 // --- BASE64 ---
@@ -160,7 +173,22 @@ int main(int argc, char** argv)
                 }
 
                 std::cout << "[STATE: EXECUTE] (Iteration: " << iterationCount << ") Triggering Executor via: " << EXECUTOR_CMD << std::endl;
-                std::system(EXECUTOR_CMD.c_str());
+                
+                if (fs::exists("executor_report.json")) {
+                    fs::remove("executor_report.json");
+                }
+                
+                std::string detachedCmd = "start \"\" cmd /c \"title AliceExecutor && gemini --yolo " + promptFile + "\"";
+                std::system(detachedCmd.c_str());
+                
+                std::cout << "[WATCHDOG] Waiting for executor_report.json..." << std::endl;
+                while (!fs::exists("executor_report.json")) {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                }
+                std::this_thread::sleep_for(std::chrono::seconds(2)); // Buffer for file flush
+                
+                std::cout << "[WATCHDOG] Artifact detected. Terminating Executor..." << std::endl;
+                std::system("taskkill /FI \"WINDOWTITLE eq AliceExecutor*\" /F /T >nul 2>&1");
                 
                 // Read report from file-based handoff
                 std::ifstream reportFile("executor_report.json");
@@ -235,90 +263,110 @@ int main(int argc, char** argv)
                 std::string originalBrief = readFileContents(promptFile);
 
                 // Construct Prompt
-                std::string reviewerPrompt = 
-                    "SYSTEM PROMPT: You are the Senior Architect Reviewer. Evaluate the provided data against the Original Brief.\n"
-                    "ORIGINAL BRIEF: " + originalBrief + "\n"
-                    "EXECUTOR CLAIMS: " + lastReport.dump(2) + "\n"
-                    "MODIFIED CODE: \n" + modifiedCode + "\n"
-                    "EXECUTOR LOGS: \n" + logs + "\n"
-                    "TASK: Review the visual framebuffer.png, the C++ code, and the claims. \n"
-                    "If the goals and visually meaningful results are MET, output ONLY: <STATUS: PASSED_PHASE_3>.\n"
-                    "If NOT MET, devise a NEW precise, step-by-step prompt to send back to the Executor CLI to fix the code. Start your response with '[CLI AGENT PROMPT]'.";
+                try {
+                    std::string reviewerSystemPrompt = readFileContents("reviewer.md");
+                    std::string reviewerPrompt = reviewerSystemPrompt + "\n\n"
+                        "--- ORCHESTRATOR PAYLOAD ---\n"
+                        "ORIGINAL BRIEF: " + originalBrief + "\n"
+                        "EXECUTOR CLAIMS: " + lastReport.dump(2) + "\n"
+                        "MODIFIED CODE: \n" + modifiedCode + "\n"
+                        "EXECUTOR LOGS: \n" + logs + "\n";
 
-                CurlHandle curl;
-                if (curl.get()) {
-                    std::string url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=" + apiKey;
-                    
-                    json payload = {
-                        {"contents", {{
-                            {"parts", {
-                                {{"text", reviewerPrompt}}
-                            }}
-                        }}}
-                    };
+                    CurlHandle curl;
+                    if (curl.get()) {
+                        std::string url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + apiKey;
+                        
+                        json payload = {
+                            {"contents", {{
+                                {"parts", {
+                                    {{"text", reviewerPrompt}}
+                                }}
+                            }}}
+                        };
 
-                    // Add image if available
-                    if (!encodedImage.empty()) {
-                        payload["contents"][0]["parts"].push_back({
-                            {"inline_data", {
-                                {"mime_type", "image/png"},
-                                {"data", encodedImage}
-                            }}
-                        });
-                    }
+                        // Add image if available
+                        if (!encodedImage.empty()) {
+                            payload["contents"][0]["parts"].push_back({
+                                {"inline_data", {
+                                    {"mime_type", "image/png"},
+                                    {"data", encodedImage}
+                                }}
+                            });
+                        }
 
-                    std::string jsonStr = payload.dump();
-                    std::string responseBuffer;
+                        std::string jsonStr = payload.dump();
+                        std::cout << "[ORCHESTRATOR] Sending payload to API. Size: " << jsonStr.size() << " bytes." << std::endl;
+                        
+                        std::string responseBuffer;
+                        struct curl_slist* headers = nullptr;
+                        headers = curl_slist_append(headers, "Content-Type: application/json");
 
-                    struct curl_slist* headers = nullptr;
-                    headers = curl_slist_append(headers, "Content-Type: application/json");
+                        curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+                        curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, jsonStr.c_str());
+                        curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers);
+                        curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, WriteCallback);
+                        curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &responseBuffer);
 
-                    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
-                    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, jsonStr.c_str());
-                    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers);
-                    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, WriteCallback);
-                    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &responseBuffer);
+                        CURLcode res = curl_easy_perform(curl.get());
+                        
+                        long httpCode = 0;
+                        curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &httpCode);
+                        std::cout << "\n--- API RESPONSE (HTTP: " << httpCode << ") ---\n" << responseBuffer << "\n------------------------\n";
 
-                    CURLcode res = curl_easy_perform(curl.get());
-                    if (res != CURLE_OK) {
-                        std::cerr << "[CURL ERROR] " << curl_easy_strerror(res) << std::endl;
-                        running = false;
-                    } else {
-                        // Parse response to find text
-                        try {
-                            json respJson = json::parse(responseBuffer);
-                            if (respJson.contains("candidates") && !respJson["candidates"].empty()) {
-                                std::string text = respJson["candidates"][0]["content"]["parts"][0]["text"];
-                                std::cout << "[GEMINI RESPONSE] " << text << std::endl;
+                        if (res != CURLE_OK) {
+                            std::cerr << "[CURL ERROR] " << curl_easy_strerror(res) << std::endl;
+                            running = false;
+                        } else {
+                            try {
+                                json respJson = json::parse(responseBuffer);
+                                
+                                // META-HEALING: If HTTP not 200 or JSON has "error"
+                                if (httpCode != 200 || respJson.contains("error")) {
+                                    std::cout << "[META-HEAL] API Error intercepted. Looping back to EXECUTE." << std::endl;
+                                    std::string metaHealPrompt = "[CLI AGENT PROMPT]\nCONTEXT: The Vision API rejected the payload. HTTP Code: " + std::to_string(httpCode) + 
+                                        "\nError: " + responseBuffer + 
+                                        "\nEXECUTION MANDATE: Patch AliceOrchestrator.cpp to fix the endpoint, headers, or JSON payload structure until you achieve an HTTP 200.";
+                                    
+                                    std::ofstream ofs(promptFile);
+                                    ofs << metaHealPrompt;
+                                    ofs.close();
+                                    
+                                    state = OrchestratorState::EXECUTE;
+                                } else if (respJson.contains("candidates") && !respJson["candidates"].empty()) {
+                                    std::string text = respJson["candidates"][0]["content"]["parts"][0]["text"];
+                                    std::cout << "[GEMINI RESPONSE] " << text << std::endl;
 
-                                if (text.find("<STATUS: PASSED_PHASE_3>") != std::string::npos) {
-                                    state = OrchestratorState::RESOLUTION;
-                                } else {
-                                    // Extract new prompt
-                                    size_t pos = text.find("[CLI AGENT PROMPT]");
-                                    if (pos != std::string::npos) {
-                                        std::string newPrompt = text.substr(pos);
-                                        std::ofstream ofs(promptFile);
-                                        ofs << newPrompt;
-                                        ofs.close();
-                                        std::cout << "[ORCHESTRATOR] New prompt written to " << promptFile << ". Looping back to EXECUTE." << std::endl;
-                                        state = OrchestratorState::EXECUTE;
+                                    if (text.find("<STATUS: PASSED_PHASE_3>") != std::string::npos) {
+                                        state = OrchestratorState::RESOLUTION;
                                     } else {
-                                        std::cerr << "[ERROR] Reviewer did not return PASSED or a new CLI AGENT PROMPT." << std::endl;
-                                        running = false;
+                                        size_t pos = text.find("[CLI AGENT PROMPT]");
+                                        if (pos != std::string::npos) {
+                                            std::string newPrompt = text.substr(pos);
+                                            std::ofstream ofs(promptFile);
+                                            ofs << newPrompt;
+                                            ofs.close();
+                                            std::cout << "[ORCHESTRATOR] New prompt written to " << promptFile << ". Looping back to EXECUTE." << std::endl;
+                                            state = OrchestratorState::EXECUTE;
+                                        } else {
+                                            std::cerr << "[ERROR] Reviewer did not return PASSED or a new CLI AGENT PROMPT." << std::endl;
+                                            running = false;
+                                        }
                                     }
+                                } else {
+                                    std::cerr << "[ERROR] Unexpected API response: " << responseBuffer << std::endl;
+                                    running = false;
                                 }
-                            } else {
-                                std::cerr << "[ERROR] Unexpected API response: " << responseBuffer << std::endl;
+                            } catch (const std::exception& e) {
+                                std::cerr << "[ERROR] Failed to parse Gemini response: " << e.what() << std::endl;
                                 running = false;
                             }
-                        } catch (const std::exception& e) {
-                            std::cerr << "[ERROR] Failed to parse Gemini response: " << e.what() << std::endl;
-                            running = false;
                         }
+                        curl_slist_free_all(headers);
+                    } else {
+                        running = false;
                     }
-                    curl_slist_free_all(headers);
-                } else {
+                } catch (const std::exception& e) {
+                    std::cerr << "[JSON/NETWORK ERROR] " << e.what() << std::endl;
                     running = false;
                 }
                 break;

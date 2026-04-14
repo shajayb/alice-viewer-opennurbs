@@ -1,0 +1,15 @@
+{
+  "asset": {
+    "version": "1.0"
+  },
+  "root": {
+    "boundingVolume": {
+      "sphere": [3977271, -8888, 4967916, 100]
+    },
+    "geometricError": 0,
+    "refine": "ADD",
+    "content": {
+      "uri": "test_tile.glb"
+    }
+  }
+}

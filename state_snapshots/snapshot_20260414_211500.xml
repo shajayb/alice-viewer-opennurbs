@@ -1,0 +1,26 @@
+<snapshot>
+  <active_constraints>
+    <constraint>Pivot to 3D Tiles/GLB streaming.</constraint>
+    <constraint>STRICT Ninja/LLVM pipeline in ./build/.</constraint>
+    <constraint>CAMERA FRAMING MANDATE: Frame all loaded geometry in init().</constraint>
+    <constraint>Mandatory reporting to executor_report.json.</constraint>
+    <constraint>Dual-Terminal Architecture enforced (Detached window).</constraint>
+    <constraint>Verbose API Telemetry for Orchestrator enabled.</constraint>
+  </active_constraints>
+  <key_knowledge>
+    <knowledge>GLBLoader refactored to return bounding box using cgltf metadata.</knowledge>
+    <knowledge>Successful build of AliceOrchestrator with Windows "start" command for detached executor.</knowledge>
+    <knowledge>Orchestrator now logs raw API response and payload size.</knowledge>
+  </key_knowledge>
+  <artifact_trail>
+    <artifact>src/AliceOrchestrator.cpp</artifact>
+    <artifact>executor_report.json</artifact>
+    <artifact>executor_console.log</artifact>
+  </artifact_trail>
+  <task_state>
+    <state>PHASE 1 (Dual-Terminal Architecture): COMPLETED</state>
+    <state>PHASE 2 (Verbose API Telemetry): COMPLETED</state>
+    <state>PHASE 3 (Build Orchestrator): COMPLETED</state>
+    <state>Agent Status: AWAITING_REVIEW</state>
+  </task_state>
+</snapshot>

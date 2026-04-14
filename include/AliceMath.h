@@ -7,10 +7,65 @@
 namespace Math
 {
     struct Vec3 { float x, y, z; };
+    struct DVec3 { double x, y, z; };
+    struct LLA { double lat, lon, alt; };
 
     inline Vec3 normalize(Vec3 v) { float l = 1.0f / sqrtf(v.x*v.x + v.y*v.y + v.z*v.z); return {v.x*l, v.y*l, v.z*l}; }
     inline Vec3 cross(Vec3 a, Vec3 b) { return {a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}; }
     inline float dot(Vec3 a, Vec3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
+
+    inline LLA ecef_to_lla(DVec3 ecef)
+    {
+        const double a = 6378137.0;
+        const double b = 6356752.314245;
+        const double e2 = 1.0 - (b * b) / (a * a);
+        const double ep2 = (a * a) / (b * b) - 1.0;
+        
+        double p = sqrt(ecef.x * ecef.x + ecef.y * ecef.y);
+        double th = atan2(a * ecef.z, b * p);
+        double lon = atan2(ecef.y, ecef.x);
+        double lat = atan2(ecef.z + ep2 * b * pow(sin(th), 3), p - e2 * a * pow(cos(th), 3));
+        double sinLat = sin(lat);
+        double N = a / sqrt(1.0 - e2 * sinLat * sinLat);
+        double alt = p / cos(lat) - N;
+        
+        return { lat, lon, alt };
+    }
+
+    inline void denu_matrix(double* m, double lat, double lon)
+    {
+        double sLat = sin(lat), cLat = cos(lat);
+        double sLon = sin(lon), cLon = cos(lon);
+        
+        // East (X):  [-sin(lon), cos(lon), 0]
+        // North (Y): [-sin(lat)cos(lon), -sin(lat)sin(lon), cos(lat)]
+        // Up (Z):    [cos(lat)cos(lon), cos(lat)sin(lon), sin(lat)]
+        
+        // m[0..2] = East
+        m[0] = -sLon;
+        m[1] = cLon;
+        m[2] = 0.0;
+        
+        // m[4..6] = North
+        m[4] = -sLat * cLon;
+        m[5] = -sLat * sLon;
+        m[6] = cLat;
+        
+        // m[8..10] = Up
+        m[8] = cLat * cLon;
+        m[9] = cLat * sLon;
+        m[10] = sLat;
+        
+        m[3] = 0.0; m[7] = 0.0; m[11] = 0.0;
+        m[12] = 0.0; m[13] = 0.0; m[14] = 0.0; m[15] = 1.0;
+    }
+
+    inline void enu_matrix(float* m, double lat, double lon)
+    {
+        double dm[16];
+        denu_matrix(dm, lat, lon);
+        for(int i=0; i<16; ++i) m[i] = (float)dm[i];
+    }
 
     inline void mat4_identity(float* m)
     {

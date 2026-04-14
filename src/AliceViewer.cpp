@@ -13,6 +13,12 @@
 #include <cstddef>
 #include <cstring>
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
+
+#include "AliceMemory.h"
+namespace Alice { extern LinearArena g_Arena; }
+
 #define MAX_PRIMITIVE_BATCH 16384
 
 // --- MVC Weak Symbols ---
@@ -595,8 +601,15 @@ V3 AliceViewer::screenToWorld(int x, int y, float planeZ)
     return p0 + D * t;
 }
 
-int AliceViewer::init()
+int AliceViewer::init(int argc, char** argv)
 {
+    for (int i = 1; i < argc; ++i)
+    {
+        if (strcmp(argv[i], "--headless-capture") == 0)
+        {
+            m_headlessCapture = true;
+        }
+    }
     ON::Begin();
     g_instance = this;
     printf(">>> Alice Viewer 2 - Reversed-Z Pipeline <<<\n");
@@ -774,6 +787,17 @@ void AliceViewer::run()
 
         update(dt); 
         backGround(backColor.x, backColor.y, backColor.z);
+        
+        if (m_headlessCapture)
+        {
+            static bool framed = false;
+            if (!framed)
+            {
+                keyPress('f', 0, 0); // Trigger Zoom Extents from CADPipelineTest.h
+                framed = true;
+            }
+        }
+
         camera.update(window, dt);
         int w, h; 
         glfwGetFramebufferSize(window, &w, &h);
@@ -809,6 +833,33 @@ void AliceViewer::run()
 
         ImGui::Render(); 
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        
+        if (m_headlessCapture)
+        {
+            int width, height;
+            glfwGetFramebufferSize(window, &width, &height);
+            size_t bufferSize = (size_t)width * height * 3;
+            unsigned char* pixelBuffer = (unsigned char*)Alice::g_Arena.allocate(bufferSize);
+            if (pixelBuffer)
+            {
+                glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixelBuffer);
+                stbi_flip_vertically_on_write(true);
+                if (stbi_write_png("framebuffer.png", width, height, 3, pixelBuffer, width * 3))
+                {
+                    printf("[HEADLESS] Capture saved to framebuffer.png (%dx%d)\n", width, height);
+                }
+                else
+                {
+                    printf("[HEADLESS] ERROR: Failed to write framebuffer.png\n");
+                }
+            }
+            else
+            {
+                printf("[HEADLESS] ERROR: Failed to allocate %zu bytes for capture\n", bufferSize);
+            }
+            glfwSetWindowShouldClose(window, true);
+        }
+
         glfwSwapBuffers(window);
     }
 }

@@ -182,8 +182,9 @@ public:
     PerfTuner tuner;
     unsigned int timerQuery;
     unsigned int resolveTimerQuery;
+    bool m_headlessCapture = false;
 
-    int init();
+    int init(int argc, char** argv);
     void run();
     void cleanup();
 

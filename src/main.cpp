@@ -1,10 +1,10 @@
 #include "AliceViewer.h"
 #include <cstdlib>
 
-int main()
+int main(int argc, char** argv)
 {
     AliceViewer viewer;
-    if (viewer.init() != 0)
+    if (viewer.init(argc, argv) != 0)
     {
         return EXIT_FAILURE;
     }

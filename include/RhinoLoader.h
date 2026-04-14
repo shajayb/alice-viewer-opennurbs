@@ -29,10 +29,16 @@ public:
             }
         }
 
-        if (foundPath.empty()) return false;
+        if (foundPath.empty())
+        {
+            return false;
+        }
 
         ONX_Model model;
-        if (!model.Read(foundPath.c_str())) return false;
+        if (!model.Read(foundPath.c_str()))
+        {
+            return false;
+        }
 
         ONX_ModelComponentIterator it(model, ON_ModelComponent::Type::ModelGeometry);
         const ON_ModelComponent* component = nullptr;
@@ -40,21 +46,32 @@ public:
         while ((component = it.NextComponent()) != nullptr)
         {
             const ON_ModelGeometryComponent* geometryComponent = ON_ModelGeometryComponent::Cast(component);
-            if (!geometryComponent) continue;
+            if (!geometryComponent)
+            {
+                continue;
+            }
 
             const ON_Geometry* geom = geometryComponent->Geometry(nullptr);
-            if (!geom) continue;
+            if (!geom)
+            {
+                continue;
+            }
 
             const ON_Mesh* mesh = ON_Mesh::Cast(geom);
-            if (!mesh) continue;
+            if (!mesh)
+            {
+                continue;
+            }
 
             const ON_3dmObjectAttributes* attrs = geometryComponent->Attributes(nullptr);
-            if (!attrs) continue;
+            if (!attrs)
+            {
+                continue;
+            }
 
             ON_String currentName(attrs->m_name);
             bool match = false;
             
-            // If objectName is null/empty, take the first mesh. Otherwise match name.
             if (objectName == nullptr || strlen(objectName) == 0)
             {
                 match = true; 
@@ -71,20 +88,14 @@ public:
                 {
                     const ON_MeshFace& face = mesh->m_F[i];
                     
-                    // Vertex 0
                     outBuffer.push_back(V3((float)mesh->m_V[face.vi[0]].x, (float)mesh->m_V[face.vi[0]].y, (float)mesh->m_V[face.vi[0]].z));
-                    // Vertex 1
                     outBuffer.push_back(V3((float)mesh->m_V[face.vi[1]].x, (float)mesh->m_V[face.vi[1]].y, (float)mesh->m_V[face.vi[1]].z));
-                    // Vertex 2
                     outBuffer.push_back(V3((float)mesh->m_V[face.vi[2]].x, (float)mesh->m_V[face.vi[2]].y, (float)mesh->m_V[face.vi[2]].z));
 
                     if (face.IsQuad())
                     {
-                        // Vertex 2 (again for second triangle)
                         outBuffer.push_back(V3((float)mesh->m_V[face.vi[2]].x, (float)mesh->m_V[face.vi[2]].y, (float)mesh->m_V[face.vi[2]].z));
-                        // Vertex 3
                         outBuffer.push_back(V3((float)mesh->m_V[face.vi[3]].x, (float)mesh->m_V[face.vi[3]].y, (float)mesh->m_V[face.vi[3]].z));
-                        // Vertex 0
                         outBuffer.push_back(V3((float)mesh->m_V[face.vi[0]].x, (float)mesh->m_V[face.vi[0]].y, (float)mesh->m_V[face.vi[0]].z));
                     }
                 }

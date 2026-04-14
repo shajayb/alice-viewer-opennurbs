@@ -116,3 +116,31 @@ namespace Alice { LinearArena g_Arena; }
 // Active Test
 #define <CLASSNAME>_RUN_TEST
 #include "<MyAlgorithm>.h"
+
+# Execution Reporting (STRICT SCHEMA)
+Upon completing SOP Step 7 (or failing after max self-healing attempts), you MUST output a final status report. This report MUST be formatted as a valid JSON object wrapped in a `json` markdown block. Do not prepend or append any conversational text outside of this block at the very end of your response.
+
+The C++ Orchestrator relies on this exact schema to close the loop:
+
+{
+  "agent_status": "AWAITING_REVIEW",
+  "build_status": "SUCCESS", 
+  "highest_phase_completed": 2,
+  "files_modified": [
+    "include/RhinoLoader.h",
+    "src/sketch.cpp"
+  ],
+  "claims": [
+    "Refactored RhinoLoader::LoadMesh to use C++17 std::filesystem::exists.",
+    "Bound camera controller in sketch.cpp.",
+    "Achieved zero-error Ninja build."
+  ],
+  "unresolved_compiler_errors": null,
+  "optimization_metrics": "Stripped 2 std::vectors, replaced with std::array. Spatial query is O(log n)."
+}
+
+**Schema Rules:**
+- `agent_status`: Must be "AWAITING_REVIEW" or "FATAL_ERROR".
+- `build_status`: Must be "SUCCESS" or "FAILED".
+- `highest_phase_completed`: Integer 1, 2, or 3.
+- `unresolved_compiler_errors`: If `build_status` is "FAILED", provide the raw `stderr` tail here. Otherwise, `null`.

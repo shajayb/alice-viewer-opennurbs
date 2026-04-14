@@ -8,13 +8,10 @@
 #include <opennurbs.h>
 #include "AliceViewer.h"
 #include <cstdio>
-#include <iostream>
-#include <string>
 #include <cmath>
 #include <algorithm>
-#include <vector>
-#include <chrono>
 #include <cstddef>
+#include <cstring>
 
 #define MAX_PRIMITIVE_BATCH 16384
 
@@ -91,7 +88,6 @@ void AliceViewer::PerfTuner::tune(float dt, double flushUs)
     if (frameDeltaMs > budgetMs || flushUs > 5000.0)
     {
         currentBatchThreshold = std::max(1024, currentBatchThreshold - 1024);
-       //printf("[TUNER] FrameTime: %.2f ms | FlushTime: %.2f us | Adjusted Batch Limit: %d\n", frameDeltaMs, (float)lastFlushTimeUs, currentBatchThreshold);
     }
     else if (frameDeltaMs < budgetMs * 0.5f && currentBatchThreshold < MAX_PRIMITIVE_BATCH)
     {
@@ -117,11 +113,9 @@ struct PrimitiveBatch
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), nullptr, GL_STREAM_DRAW);
         
-        // Location 0: Position
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
         glEnableVertexAttribArray(0);
         
-        // Location 1: Color
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, color));
         glEnableVertexAttribArray(1);
         
@@ -137,16 +131,15 @@ struct PrimitiveBatch
 
         double flushTime = 0.0;
         {
-            std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
+            double start = glfwGetTime();
             
             glBindVertexArray(vao);
             glBindBuffer(GL_ARRAY_BUFFER, vbo);
             
-            // MEM-SWP-02: glBufferSubData implementation
             glBufferSubData(GL_ARRAY_BUFFER, 0, count * sizeof(Vertex), vertices);
 
             M4 view = g_instance->camera.getViewMatrix();
-            M4 proj = g_instance->makeInfiniteReversedZProjRH(g_instance->fov, 1280.0f/720.0f, g_instance->nearClip); // Simplification for sweep
+            M4 proj = g_instance->makeInfiniteReversedZProjRH(g_instance->fov, 1280.0f/720.0f, g_instance->nearClip);
 
             glUseProgram(g_instance->shaderProgram);
             glUniformMatrix4fv(glGetUniformLocation(g_instance->shaderProgram, "u_ModelView"), 1, 0, view.m);
@@ -158,20 +151,17 @@ struct PrimitiveBatch
 
             if (type == GL_TRIANGLES)
             {
-                // Pass 1: Fill
                 glEnable(GL_POLYGON_OFFSET_FILL);
                 glPolygonOffset(-1.0f, -1.0f); 
                 glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
                 glDrawArrays(GL_TRIANGLES, 0, count);
 
-                // Pass 2: Wireframe
                 glDisable(GL_POLYGON_OFFSET_FILL);
                 glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
                 glUniform1f(locAmb, 0.0f);
                 glUniform1f(locDif, 0.0f);
                 glDrawArrays(GL_TRIANGLES, 0, count);
 
-                // Restore
                 glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
                 glUniform1f(locAmb, g_instance->ambientIntensity);
                 glUniform1f(locDif, g_instance->diffuseIntensity);
@@ -182,8 +172,8 @@ struct PrimitiveBatch
             }
             count = 0;
 
-            auto end = std::chrono::high_resolution_clock::now();
-            flushTime = std::chrono::duration<double, std::micro>(end - start).count();
+            double end = glfwGetTime();
+            flushTime = (end - start) * 1000000.0;
         }
 
         if (g_instance->tuner.enabled)
@@ -195,7 +185,17 @@ struct PrimitiveBatch
     void add(V3 p, V3 c)
     {
         int threshold = g_instance ? g_instance->tuner.currentBatchThreshold : MAX_PRIMITIVE_BATCH;
-        if (count >= threshold - 1) 
+        bool ready = (count >= threshold);
+        if (type == GL_TRIANGLES)
+        {
+            ready &= (count % 3 == 0);
+        }
+        else if (type == GL_LINES)
+        {
+            ready &= (count % 2 == 0);
+        }
+        
+        if (ready) 
         {
             flush();
         }
@@ -209,7 +209,6 @@ static PrimitiveBatch g_pointBatch;
 static PrimitiveBatch g_lineBatch;
 static PrimitiveBatch g_triangleBatch;
 
-// --- V3 Implementation ---
 float V3::length() const
 {
     return sqrtf(x * x + y * y + z * z);
@@ -225,8 +224,6 @@ void V3::normalise()
         z /= l; 
     }
 }
-
-// --- Alice API Implementations ---
 
 void aliceColor3f(float r, float g, float b) 
 { 
@@ -295,7 +292,6 @@ void aliceLineWidth(float width)
     glLineWidth(width); 
 }
 
-// --- Internal Math ---
 static V3 nrm_v(V3 v) 
 { 
     v.normalise(); 
@@ -415,33 +411,32 @@ M4 ArcballCamera::getViewMatrix() const
 
 void ArcballCamera::setBookmark(const char* name)
 {
-    std::string s = name;
-    if (s == "Top") 
+    if (strcmp(name, "Top") == 0) 
     { 
         pitch = 1.57f; 
         yaw = 0.0f; 
     }
-    else if (s == "Front") 
+    else if (strcmp(name, "Front") == 0) 
     { 
         pitch = 0.0f; 
         yaw = 0.0f; 
     }
-    else if (s == "Back") 
+    else if (strcmp(name, "Back") == 0) 
     { 
         pitch = 0.0f; 
         yaw = 3.14159f; 
     }
-    else if (s == "Left") 
+    else if (strcmp(name, "Left") == 0) 
     { 
         pitch = 0.0f; 
         yaw = -1.5708f; 
     }
-    else if (s == "Right") 
+    else if (strcmp(name, "Right") == 0) 
     { 
         pitch = 0.0f; 
         yaw = 1.5708f; 
     }
-    else if (s == "Perspective") 
+    else if (strcmp(name, "Perspective") == 0) 
     { 
         pitch = 0.6f; 
         yaw = 0.8f; 
@@ -526,6 +521,40 @@ static void scroll_cb(GLFWwindow* w, double x, double y)
     ImGui_ImplGlfw_ScrollCallback(w, x, y);
 }
 
+void AliceViewer::drawTriangleArray(const V3* positions, size_t vertexCount, V3 color)
+{
+    size_t i = 0;
+    while (i < vertexCount)
+    {
+        int threshold = tuner.currentBatchThreshold;
+        threshold = (threshold / 3) * 3;
+        
+        int available = threshold - g_triangleBatch.count;
+        if (available < 3)
+        {
+            g_triangleBatch.flush();
+            available = threshold;
+        }
+
+        int toCopy = (int)std::min((size_t)available, vertexCount - i);
+        toCopy = (toCopy / 3) * 3;
+        
+        if (toCopy == 0)
+        {
+            break;
+        }
+
+        for (int j = 0; j < toCopy; ++j)
+        {
+            g_triangleBatch.vertices[g_triangleBatch.count].pos = positions[i + j];
+            g_triangleBatch.vertices[g_triangleBatch.count].color = color;
+            g_triangleBatch.count++;
+        }
+        
+        i += toCopy;
+    }
+}
+
 AliceViewer* AliceViewer::instance() 
 { 
     return g_instance; 
@@ -555,8 +584,8 @@ V3 AliceViewer::screenToWorld(int x, int y, float planeZ)
         return V3(r[0] / r[3], r[1] / r[3], r[2] / r[3]);
     };
 
-    V3 p0 = unproj(nx, ny, 1.0f); // Reversed-Z: Near is 1.0
-    V3 p1 = unproj(nx, ny, 0.0001f); // Reversed-Z: Far is near 0.0
+    V3 p0 = unproj(nx, ny, 1.0f);
+    V3 p1 = unproj(nx, ny, 0.0001f);
     V3 D = p1 - p0; 
     if (fabsf(D.z) < 1e-6f) 
     {
@@ -711,17 +740,35 @@ void AliceViewer::run()
             ImGui::Separator();
             ImGui::Text("Domain 3: AA Benchmarks");
             ImGui::SliderInt("MSAA Samples", &msaaSamples, 1, 8);
-            if (ImGui::Button("Apply MSAA (Requires Restart)")) { /* In a real app we'd recreate the window */ }
+            if (ImGui::Button("Apply MSAA (Requires Restart)"))
+            {
+            }
             
             ImGui::Separator();
             ImGui::Text("Stats:");
             ImGui::Text("Frame: %.2f ms (%.1f FPS)", dt * 1000.0f, 1.0f/dt);
             
             GLuint64 gpuTime = 0;
-            glGetQueryObjectui64v(timerQuery, GL_QUERY_RESULT_AVAILABLE, &gpuTime); // Dummy check
+            glGetQueryObjectui64v(timerQuery, GL_QUERY_RESULT_AVAILABLE, &gpuTime);
             glGetQueryObjectui64v(timerQuery, GL_QUERY_RESULT, &gpuTime);
             ImGui::Text("GPU Frame: %.3f ms", (double)gpuTime / 1000000.0);
 
+            ImGui::End();
+        }
+
+        {
+            ImGui::Begin("Camera Controls");
+            if (ImGui::Button("Perspective")) camera.setBookmark("Perspective");
+            ImGui::SameLine();
+            if (ImGui::Button("Top")) camera.setBookmark("Top");
+            ImGui::SameLine();
+            if (ImGui::Button("Front")) camera.setBookmark("Front");
+            ImGui::SameLine();
+            if (ImGui::Button("Back")) camera.setBookmark("Back");
+            ImGui::SameLine();
+            if (ImGui::Button("Left")) camera.setBookmark("Left");
+            ImGui::SameLine();
+            if (ImGui::Button("Right")) camera.setBookmark("Right");
             ImGui::End();
         }
 
@@ -780,7 +827,6 @@ void runAliceTests()
 {
     printf("\n[TEST] Starting AliceViewer Micro-Framework Tests...\n");
 
-    // V3 Tests
     {
         V3 a(1, 2, 3), b(4, 5, 6);
         V3 c = a + b;
@@ -801,19 +847,19 @@ void runAliceTests()
         ALICE_EXPECT_NEAR(n.y, 0.0f, 1e-5f);
     }
 
-    // M4 Tests (Unrolled Math)
     {
         M4 id = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
         M4 a = { 1,2,3,4, 5,6,7,8, 9,10,11,12, 13,14,15,16 };
         M4 res = mult(a, id);
-        for(int i=0; i<16; ++i) ALICE_EXPECT_NEAR(res.m[i], a.m[i], 1e-5f);
+        for(int i=0; i<16; ++i)
+        {
+            ALICE_EXPECT_NEAR(res.m[i], a.m[i], 1e-5f);
+        }
     }
 
-    // Unprojection Test
     if (g_instance)
     {
         V3 world = g_instance->screenToWorld(640, 360, 0.0f);
-        // At default camera, center of screen should be near focus point (0,0,0)
         ALICE_EXPECT_NEAR(world.z, 0.0f, 1e-3f);
     }
 
@@ -831,7 +877,6 @@ void aliceTestDraw()
 
     drawGrid(50);
     
-    // Stress Test: Points
     aliceColor3f(1.0f, 0.5f, 0.0f);
     for (int i = 0; i < 100000; ++i)
     {
@@ -840,7 +885,6 @@ void aliceTestDraw()
         drawPoint({ x * 0.1f, y * 0.1f, sinf((float)i * 0.01f) * 5.0f });
     }
 
-    // Stress Test: Lines
     aliceColor3f(0.0f, 0.7f, 1.0f);
     for (int i = 0; i < 50000; ++i)
     {

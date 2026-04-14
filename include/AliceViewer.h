@@ -189,14 +189,12 @@ public:
 
     static AliceViewer* instance();
     static M4 makeInfiniteReversedZProjRH(float fovRadians, float aspect, float zNear);
-    };
-
-// #define ALICE_VIEWER_RUN_TEST
+    void drawTriangleArray(const V3* positions, size_t vertexCount, V3 color);
+};
 
 #ifdef ALICE_VIEWER_RUN_TEST
 #include <cstdio>
 #include <cmath>
-#include <chrono>
 
 #define ALICE_ASSERT(cond) \
     if (!(cond)) { printf("[FAIL] ASSERT: %s at %s:%d\n", #cond, __FILE__, __LINE__); }
@@ -207,18 +205,18 @@ public:
 struct ScopedProfiler
 {
     const char* name;
-    std::chrono::high_resolution_clock::time_point start;
+    double start;
     double* outUs;
 
     ScopedProfiler(const char* n, double* out = nullptr) : name(n), outUs(out)
     {
-        start = std::chrono::high_resolution_clock::now();
+        start = glfwGetTime();
     }
 
     ~ScopedProfiler()
     {
-        auto end = std::chrono::high_resolution_clock::now();
-        double dur = std::chrono::duration<double, std::micro>(end - start).count();
+        double end = glfwGetTime();
+        double dur = (end - start) * 1000000.0;
         if (outUs)
         {
             *outUs = dur;

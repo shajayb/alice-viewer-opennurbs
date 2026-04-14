@@ -46,8 +46,8 @@ static int g_CurrentAABB = 0;
 static void logSweep(const char* message)
 {
     printf("[SWEEP] %s\n", message);
-    FILE* f = nullptr;
-    if (fopen_s(&f, "./pipeline_sweep_results.log", "a") == 0)
+    FILE* f = fopen("./pipeline_sweep_results.log", "a");
+    if (f)
     {
         fprintf(f, "%s\n", message);
         fflush(f);
@@ -121,7 +121,7 @@ extern "C" void update(float dt)
             if (zSub < 4)
             {
                 v->nearClip = zValues[zSub];
-                sprintf_s(buf, "[Z-SWP] NearClip: %.3f", v->nearClip);
+                sprintf(buf, "[Z-SWP] NearClip: %.3f", v->nearClip);
                 logSweep(buf);
                 zSub++;
             }
@@ -139,7 +139,7 @@ extern "C" void update(float dt)
             {
                 v->ambientIntensity = amb[shdSub];
                 v->diffuseIntensity = dif[shdSub];
-                sprintf_s(buf, "[SHD-SWP] Amb: %.2f, Dif: %.2f", v->ambientIntensity, v->diffuseIntensity);
+                sprintf(buf, "[SHD-SWP] Amb: %.2f, Dif: %.2f", v->ambientIntensity, v->diffuseIntensity);
                 logSweep(buf);
                 shdSub++;
             }

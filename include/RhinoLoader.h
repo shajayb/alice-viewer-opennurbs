@@ -8,6 +8,14 @@
 #include <filesystem>
 #include <vector>
 
+#ifdef _WIN32
+#include <string.h>
+#define ALICE_STRICMP _stricmp
+#else
+#include <strings.h>
+#define ALICE_STRICMP strcasecmp
+#endif
+
 namespace Alice
 {
 
@@ -76,7 +84,7 @@ public:
             {
                 match = true; 
             }
-            else if (currentName.Length() > 0 && _stricmp(currentName.Array(), objectName) == 0)
+            else if (currentName.Length() > 0 && ALICE_STRICMP(currentName.Array(), objectName) == 0)
             {
                 match = true;
             }

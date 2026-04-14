@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 #pragma pack(push, 1)
 
 struct V3

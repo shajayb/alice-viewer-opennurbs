@@ -40,6 +40,14 @@ std::string readApiKey(const std::string& path) {
     throw std::runtime_error("API_KEYS.txt is empty.");
 }
 
+std::string readFileContents(const std::string& path) {
+    std::ifstream file(path);
+    if (!file.is_open()) return "";
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
 // --- BASE64 ---
 static const std::string base64_chars = 
              "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -119,21 +127,6 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    std::string taskInput = "Analyze the CAD render.";
-    if (argc > 1) {
-        std::string arg1 = argv[1];
-        if (fs::exists(arg1) && fs::is_regular_file(arg1)) {
-            std::ifstream file(arg1);
-            std::stringstream buffer;
-            buffer << file.rdbuf();
-            taskInput = buffer.str();
-            std::cout << "[ORCHESTRATOR] Loaded task from file: " << arg1 << std::endl;
-        } else {
-            taskInput = arg1;
-            std::cout << "[ORCHESTRATOR] Using CLI argument as task." << std::endl;
-        }
-    }
-
     curl_global_init(CURL_GLOBAL_ALL);
     std::cout << "[ORCHESTRATOR] Initializing AliceOrchestrator..." << std::endl;
 
@@ -141,18 +134,17 @@ int main(int argc, char** argv)
     bool running = true;
     json lastReport;
     std::string encodedImage;
+    int iterationCount = 0;
 
-    // --- FIX: Build EXECUTOR_CMD string correctly ---
-    // If arg[1] was a file, we want to pass that file path to the CLI, not its contents.
-    std::string promptArg = "prompt.txt"; // Default
+    // Default prompt file
+    std::string promptFile = "prompt.txt";
     if (argc > 1) {
         if (fs::exists(argv[1]) && fs::is_regular_file(argv[1])) {
-            promptArg = argv[1];
+            promptFile = argv[1];
         }
     }
     
-    // Using 'gemini --yolo' to ensure it runs autonomously as the executor.
-    std::string EXECUTOR_CMD = "gemini --yolo " + promptArg;
+    std::string EXECUTOR_CMD = "gemini --yolo " + promptFile;
 
     while (running) 
     {
@@ -160,7 +152,14 @@ int main(int argc, char** argv)
         {
             case OrchestratorState::EXECUTE:
             {
-                std::cout << "[STATE: EXECUTE] Triggering Executor via: " << EXECUTOR_CMD << std::endl;
+                iterationCount++;
+                if (iterationCount > 10) {
+                    std::cerr << "[ERROR] Max iterations (10) reached. Hard fail." << std::endl;
+                    running = false;
+                    break;
+                }
+
+                std::cout << "[STATE: EXECUTE] (Iteration: " << iterationCount << ") Triggering Executor via: " << EXECUTOR_CMD << std::endl;
                 std::system(EXECUTOR_CMD.c_str());
                 
                 // Read report from file-based handoff
@@ -192,6 +191,8 @@ int main(int argc, char** argv)
             case OrchestratorState::CAPTURE:
             {
                 std::cout << "[STATE: CAPTURE] Initiating Headless Capture..." << std::endl;
+                // Capture image regardless of build status for debugging if possible, 
+                // but usually only works if SUCCESS.
                 if (lastReport["build_status"] == "SUCCESS") {
                     std::system("build\\bin\\AliceViewer.exe --headless-capture");
 
@@ -202,7 +203,10 @@ int main(int argc, char** argv)
                         std::cout << "[ORCHESTRATOR] Image captured and encoded. Size: " << encodedImage.size() << " bytes." << std::endl;
                     } else {
                         std::cerr << "[ERROR] framebuffer.png not found after capture attempt." << std::endl;
+                        encodedImage = ""; // Reset
                     }
+                } else {
+                    encodedImage = ""; // No image for failed builds
                 }
                 state = OrchestratorState::REVIEW;
                 break;
@@ -210,23 +214,58 @@ int main(int argc, char** argv)
 
             case OrchestratorState::REVIEW:
             {
-                std::cout << "[STATE: REVIEW] Sending payload to Gemini..." << std::endl;
+                std::cout << "[STATE: REVIEW] Preparing Multi-Agent Reflection Payload..." << std::endl;
+                
+                // Gather Code
+                std::string modifiedCode;
+                if (lastReport.contains("files_modified") && lastReport["files_modified"].is_array()) {
+                    for (auto& f : lastReport["files_modified"]) {
+                        std::string path = f.get<std::string>();
+                        if (path.find(".h") != std::string::npos || path.find(".cpp") != std::string::npos) {
+                            modifiedCode += "--- FILE: " + path + " ---\n";
+                            modifiedCode += readFileContents(path) + "\n\n";
+                        }
+                    }
+                }
+
+                // Gather Logs
+                std::string logs = readFileContents("executor_console.log");
+                
+                // Gather Original Brief
+                std::string originalBrief = readFileContents(promptFile);
+
+                // Construct Prompt
+                std::string reviewerPrompt = 
+                    "SYSTEM PROMPT: You are the Senior Architect Reviewer. Evaluate the provided data against the Original Brief.\n"
+                    "ORIGINAL BRIEF: " + originalBrief + "\n"
+                    "EXECUTOR CLAIMS: " + lastReport.dump(2) + "\n"
+                    "MODIFIED CODE: \n" + modifiedCode + "\n"
+                    "EXECUTOR LOGS: \n" + logs + "\n"
+                    "TASK: Review the visual framebuffer.png, the C++ code, and the claims. \n"
+                    "If the goals and visually meaningful results are MET, output ONLY: <STATUS: PASSED_PHASE_3>.\n"
+                    "If NOT MET, devise a NEW precise, step-by-step prompt to send back to the Executor CLI to fix the code. Start your response with '[CLI AGENT PROMPT]'.";
+
                 CurlHandle curl;
                 if (curl.get()) {
-                    // FIX: Use gemini-1.5-pro
                     std::string url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=" + apiKey;
                     
                     json payload = {
                         {"contents", {{
                             {"parts", {
-                                {{"text", "Task: " + taskInput + "\n\nAnalyze the attached CAD render and the build report. Confirm if the geometry matches the intended design or provide feedback.\nReport: " + lastReport.dump()}},
-                                {{"inline_data", {
-                                    {"mime_type", "image/png"},
-                                    {"data", encodedImage}
-                                }}}
+                                {{"text", reviewerPrompt}}
                             }}
                         }}}
                     };
+
+                    // Add image if available
+                    if (!encodedImage.empty()) {
+                        payload["contents"][0]["parts"].push_back({
+                            {"inline_data", {
+                                {"mime_type", "image/png"},
+                                {"data", encodedImage}
+                            }}
+                        });
+                    }
 
                     std::string jsonStr = payload.dump();
                     std::string responseBuffer;
@@ -243,17 +282,45 @@ int main(int argc, char** argv)
                     CURLcode res = curl_easy_perform(curl.get());
                     if (res != CURLE_OK) {
                         std::cerr << "[CURL ERROR] " << curl_easy_strerror(res) << std::endl;
+                        running = false;
                     } else {
-                        std::cout << "[GEMINI RESPONSE] " << responseBuffer << std::endl;
-                        if (responseBuffer.find("<STATUS: PASSED_PHASE_3>") != std::string::npos) {
-                            state = OrchestratorState::RESOLUTION;
-                        } else {
-                            state = OrchestratorState::EXECUTE; 
+                        // Parse response to find text
+                        try {
+                            json respJson = json::parse(responseBuffer);
+                            if (respJson.contains("candidates") && !respJson["candidates"].empty()) {
+                                std::string text = respJson["candidates"][0]["content"]["parts"][0]["text"];
+                                std::cout << "[GEMINI RESPONSE] " << text << std::endl;
+
+                                if (text.find("<STATUS: PASSED_PHASE_3>") != std::string::npos) {
+                                    state = OrchestratorState::RESOLUTION;
+                                } else {
+                                    // Extract new prompt
+                                    size_t pos = text.find("[CLI AGENT PROMPT]");
+                                    if (pos != std::string::npos) {
+                                        std::string newPrompt = text.substr(pos);
+                                        std::ofstream ofs(promptFile);
+                                        ofs << newPrompt;
+                                        ofs.close();
+                                        std::cout << "[ORCHESTRATOR] New prompt written to " << promptFile << ". Looping back to EXECUTE." << std::endl;
+                                        state = OrchestratorState::EXECUTE;
+                                    } else {
+                                        std::cerr << "[ERROR] Reviewer did not return PASSED or a new CLI AGENT PROMPT." << std::endl;
+                                        running = false;
+                                    }
+                                }
+                            } else {
+                                std::cerr << "[ERROR] Unexpected API response: " << responseBuffer << std::endl;
+                                running = false;
+                            }
+                        } catch (const std::exception& e) {
+                            std::cerr << "[ERROR] Failed to parse Gemini response: " << e.what() << std::endl;
+                            running = false;
                         }
                     }
                     curl_slist_free_all(headers);
+                } else {
+                    running = false;
                 }
-                running = false; 
                 break;
             }
 

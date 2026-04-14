@@ -120,6 +120,8 @@ namespace Alice { LinearArena g_Arena; }
 # Execution Reporting (STRICT SCHEMA)
 Upon completing SOP Step 7 (or failing after max self-healing attempts), you MUST output a final status report. This report MUST be formatted as a valid JSON object wrapped in a `json` markdown block. Do not prepend or append any conversational text outside of this block at the very end of your response.
 
+During execution, you MUST save a transcript of your critical console logs, build outputs, and thought processes to a file named `executor_console.log` in the repository root.
+
 The C++ Orchestrator relies on this exact schema to close the loop:
 
 {

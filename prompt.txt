@@ -1,15 +1,24 @@
 [CLI AGENT PROMPT]
 CONTEXT: 
-Initialize according to `gemini.md`. The Human Lead has verified that the `AliceOrchestrator` autonomous visual QA loop is structurally sound, and the AABB visualizer test has passed Phase 3. 
+Initialize according to `gemini.md`. We are implementing a Normal Visualization Shader for `AliceViewer 2` to debug geometric facing directions. 
 
 EXECUTION MANDATE:
-Execute SOP Steps 1 through 7 to secure the repository state.
+Execute SOP Steps 1 through 7. You MUST write the strict JSON "Execution Reporting" schema to a file named `executor_report.json` in the repository root.
 
-1. PHASE 1 (Version Control Security): 
-   - Perform a full workspace audit via `git status`.
-   - Stage all modified and untracked files (excluding those properly ignored in `.gitignore` like `API_KEYS.txt`).
-   - Commit the changes with a highly descriptive, conventional commit message detailing the completion of the `AliceOrchestrator` TTY file-based handoff and the successful AABB Phase 3 integration.
-   - Push the commit to the current tracking branch on the remote repository.
-   - You MUST write the strict JSON "Execution Reporting" schema to a file named `executor_report.json` in the repository root confirming the git push.
+1. PHASE 1 (MVP - Pipeline & Math): 
+   - Scaffold a new Shader Program (Vertex and Fragment) that overrides the default material.
+   - The shader must map world-space Normal vectors to RGB colors. Use the standard mapping: `color = Normal * 0.5 + 0.5`.
+   - Apply this shader to the main drawing loop (e.g., `g_testCloud` or the procedural city).
+   - Build locally using LLVM/Ninja until 0 errors.
 
-Run the full sequence autonomously. DO NOT ask for permission. Proceed with the SOP and execute all shell commands immediately.
+2. PHASE 2 (AESTHETIC): 
+   - The `--headless-capture` must output `framebuffer.png`.
+   - STRICT CAD MANDATE: AliceViewer 2 uses a Z-Up coordinate system. 
+   - Therefore, surfaces pointing towards the sky (+Z) MUST render as pure BLUE. 
+   - Surfaces pointing +X must be RED. Surfaces pointing +Y must be GREEN.
+
+3. PHASE 3 (PERFORMANCE): 
+   - The shader strings must be defined as `constexpr const char*` literals to avoid heap allocation.
+   - Do not allocate any `std::vector` or heap memory during the render loop.
+
+Run the full sequence autonomously. DO NOT ask for permission. Proceed with the SOP and execute all shell build commands immediately.

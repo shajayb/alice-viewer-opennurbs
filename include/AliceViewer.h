@@ -111,6 +111,7 @@ extern "C"
     void drawGrid(float size);
     void drawPoint(V3 pt);
     void drawLine(V3 a, V3 b);
+    void drawTriangle(V3 a, V3 b, V3 c);
     void aliceColor3f(float r, float g, float b);
     void alicePointSize(float size);
     void aliceLineWidth(float width);
@@ -171,7 +172,14 @@ public:
     ArcballCamera camera;
     unsigned int shaderProgram;
     float fov = 0.8f;
+    float nearClip = 0.1f;
+    int msaaSamples = 4;
+    float ambientIntensity = 0.35f;
+    float diffuseIntensity = 0.65f;
+    V3 backColor = {0.588f, 0.588f, 0.588f};
     PerfTuner tuner;
+    unsigned int timerQuery;
+    unsigned int resolveTimerQuery;
 
     int init();
     void run();
@@ -180,7 +188,8 @@ public:
     V3 screenToWorld(int screenX, int screenY, float planeZ = 0.0f);
 
     static AliceViewer* instance();
-};
+    static M4 makeInfiniteReversedZProjRH(float fovRadians, float aspect, float zNear);
+    };
 
 // #define ALICE_VIEWER_RUN_TEST
 

@@ -5,7 +5,7 @@
             "name": "Clang-LLD Build and Debug",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/AliceViewer.exe",
+            "program": "${workspaceFolder}/build/bin/AliceViewer.exe",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

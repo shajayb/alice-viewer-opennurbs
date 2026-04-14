@@ -1,0 +1,40 @@
+<state_snapshot>
+    <overall_goal>
+        Architect and implement a bidirectional multimodal pipeline in Alice Viewer 2 for high-fidelity CAD scene analysis and AI-driven reimagining using libcurl and Gemini APIs, featuring strict structural adherence.
+    </overall_goal>
+
+    <active_constraints>
+        - **Networking:** Use `libcurl` with `schannel` (SSPI) for Windows-native TLS; strictly avoid OpenSSL.
+        - **Toolchain:** LLVM/Ninja (`clang-cl`) on Windows; use `x64-windows-static` triplet.
+        - **Synchronization:** Mandatory `glFinish()` before `glReadPixels` to ensure GPU-CPU memory consistency.
+        - **Memory Management:** Use `Alice::LinearArena` (256MB); **CRITICAL DOD RULE:** Zero heap allocations (`std::vector`, `new`, `malloc`) for Base64, PNG encoding, or stencil processing.
+        - **Validation:** Task 2 (Dali) must achieve structural fit >0.65 via Sobel-based bidirectional F1-Score edge detection and 3x3 neighborhood overlap analysis.
+    </active_constraints>
+
+    <key_knowledge>
+        - **Model:** `gemini-2.5-flash-image` via `:generateContent` v1beta; `responseModalities: ["TEXT", "IMAGE"]`.
+        - **Structural Fit:** Uses bidirectional F1-score with Sobel threshold `25.0f` and `3x3` neighborhood search window (`dy/dx = -1 to 1`) for edge overlap calculation. Pass score > 0.65.
+        - **Strategy A (Single Master Depth Map):** Task 2 implemented by sending ONLY the high-contrast, pre-calculated inverted 8-bit depth map (Near=255, Far=50, BG=0) as an absolute physical constraint.
+        - **Build/Linkage:** Resolved `CMAKE_MT` via `llvm-mt.exe`. Resolved OpenNURBS conflict by renaming to `opennurbs_zlib.lib`. Fixed linux zlib static library name conflict.
+        - **Dependencies:** Uses `vcpkg-overlay-ports` for custom `cpp-httplib` and `opennurbs` builds.
+    </key_knowledge>
+
+    <artifact_trail>
+        - `include/AliceGeminiClient.h`: Implemented Strategy A for Task 2, bidirectional F1-score metric `evaluateStructuralFit()`, fixed black sphere VBO color attributes, and fixed depth map dump linearization.
+        - `dali_render.png`: Final validated output achieving a **0.741** structural fit F1-score.
+        - `vcpkg.json` and `vcpkg-overlay-ports/ports/opennurbs/portfile.cmake`: Updated to fix linux CI/CD build issues related to curl sspi and libzlib.a naming.
+        - `build_env_config.json`: Build configuration state maintained.
+        - `src/sketch.cpp`: Configured for active `ALICEGEMINICLIENT_RUN_TEST` hand-off.
+    </artifact_trail>
+
+    <task_state>
+        1. [DONE] Fix the Black Sphere color attribute bug.
+        2. [DONE] Fix the Depth Dump linearization bug in keyPress.
+        3. [DONE] Refactor `evaluateStructuralFit` to calculate a bidirectional F1-Score (3x3 grid).
+        4. [DONE] Iterate Strategy A (Single Master Depth Map) for Task 2.
+        5. [DONE] Achieve PASS F1-score (0.741 > 0.65) in Crucible Mode.
+        6. [DONE] Resolve Linux CI/CD build failures (`vcpkg.json`, `portfile.cmake`).
+        7. [DONE] Configure VS Code Handoff (Clean state).
+        8. [DONE] Document State Compression.
+    </task_state>
+</state_snapshot>

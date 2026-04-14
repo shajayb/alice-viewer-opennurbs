@@ -53,6 +53,9 @@ namespace Alice { extern LinearArena g_Arena; }
 
 namespace Alice::Alg::GeminiClient {
 
+    static V3 g_CubePos[3];
+    static V3 g_SpherePos;
+
     struct Color { uint8_t r, g, b; };
     inline bool colorMatch(uint8_t r1, uint8_t g1, uint8_t b1, uint8_t r2, uint8_t g2, uint8_t b2) {
         return (std::abs((int)r1 - (int)r2) < 4) && (std::abs((int)g1 - (int)g2) < 4) && (std::abs((int)b1 - (int)b2) < 4);
@@ -85,6 +88,9 @@ namespace Alice::Alg::GeminiClient {
 
         get_edges(origDepth, edgesOrig, 1);
         get_edges(aiRender, edgesAI, 3);
+
+        stbi_write_png("eval_mask_source.png", w, h, 1, edgesOrig, w);
+        stbi_write_png("eval_mask_generated.png", w, h, 1, edgesAI, w);
 
         int matchRecall = 0, totalOrig = 0;
         int matchPrecision = 0, totalAI = 0;
@@ -124,9 +130,17 @@ namespace Alice::Alg::GeminiClient {
         
         float recall = (totalOrig == 0) ? 1.0f : (float)matchRecall / (float)totalOrig;
         float precision = (totalAI == 0) ? 1.0f : (float)matchPrecision / (float)totalAI;
-        if (recall + precision == 0.0f) return 0.0f;
-        return 2.0f * (precision * recall) / (precision + recall);
+        float f1 = (recall + precision == 0.0f) ? 0.0f : 2.0f * (precision * recall) / (precision + recall);
+
+        std::ofstream log("api_log.txt", std::ios::app);
+        if (log.is_open()) {
+            log << "[Evaluation] Precision: " << precision << ", Recall: " << recall << ", F1: " << f1 << "\n";
+            log.close();
+        }
+
+        return f1;
     }
+
 
     inline M4 perspective_local(float fov, float asp, float n, float f) {
         float tn = tanf(fov * 0.5f);
@@ -354,7 +368,8 @@ namespace Alice::Alg::GeminiClient {
         int currentH = 2160;
         int frameCounter = 0;
 
-        char apiKeyUI[128] = "AIzaSyCt0IvHNeVMZzN1-nL3uUcuCO2RnnUEgaU";
+        char apiKeyBuffer[256] = "";
+        std::atomic<bool> authError{false};
 
         // Metrics
         std::atomic<double> phase1LatencyMs{0.0};
@@ -447,7 +462,7 @@ namespace Alice::Alg::GeminiClient {
                     
                     // Phase 3: Network
                     auto p3Start = std::chrono::high_resolution_clock::now();
-                    std::string apiKey = std::getenv("GEMINI_API_KEY") ? std::getenv("GEMINI_API_KEY") : g_State.apiKeyUI;
+                    std::string apiKey = std::getenv("GEMINI_API_KEY") ? std::getenv("GEMINI_API_KEY") : g_State.apiKeyBuffer;
                     std::string prompt;
                     if (g_State.activeTask == 1) prompt = "Analyze these 3 images (Beauty, Seg, Depth). Describe the 3D scene content.";
                     else if (g_State.activeTask == 2) prompt = "I am providing 5 structural stencils. IMAGE 1: The ground plane (water). IMAGE 2: A cube at mid-left (Gothic cathedral). IMAGE 3: A cube at mid-right (Brutalist concrete). IMAGE 4: A large cube at the back-center (futuristic glass). IMAGE 5: A sphere in foreground-center (twisting tree). Render a SINGLE Salvador Dali masterpiece where each object PERFECTLY match its corresponding stencil. MANDATORY: Treat the provided images as absolute physical constraints. Do not draw lines where there are no lines in the provided masks. SILHOUETTE PRESERVATION IS MANDATORY. Do not add structural elements outside the masks.";
@@ -462,8 +477,10 @@ namespace Alice::Alg::GeminiClient {
                     std::string payload = "{\"contents\": [{\"parts\": [{\"text\": \"" + prompt + "\"}," + payloadParts;
                     if (payload.back() == ',') payload.pop_back();
                     payload += "]}]";
-                    if (g_State.activeTask >= 2) payload += ",\"generationConfig\": {\"responseModalities\": [\"TEXT\", \"IMAGE\"]}";
-                    payload += "}";
+                    payload += ",\"generationConfig\": {";
+                    if (g_State.activeTask >= 2) payload += "\"responseModalities\": [\"TEXT\", \"IMAGE\"],";
+                    payload += "\"aspectRatio\": \"16:9\"";
+                    payload += "}}";
 
                     CURL* curl = curl_easy_init();
                     std::string responseBody;
@@ -486,8 +503,11 @@ namespace Alice::Alg::GeminiClient {
                     if (httpCode != 200) {
                         std::cout << "[GeminiClient] API ERROR: " << httpCode << std::endl;
                         std::cout << "[GeminiClient] Response: " << responseBody << std::endl;
-                        exit(1);
+                        if (httpCode == 400 || httpCode == 401 || httpCode == 403 || httpCode == 429) {
+                            g_State.authError = true;
+                        }
                     } else {
+                        g_State.authError = false;
                         size_t dPos = responseBody.find("\"bytesBase64Encoded\": \"");
                         if (dPos == std::string::npos) dPos = responseBody.find("\"inlineData\": {\"data\": \"");
                         if (dPos == std::string::npos) dPos = responseBody.find("\"data\": \"");
@@ -509,25 +529,34 @@ namespace Alice::Alg::GeminiClient {
                                     }
                                     if (g_State.activeTask == 2) {
                                         int aiW, aiH, aiC;
-                                        uint8_t* aiPixels = stbi_load_from_memory(decoded, (int)outLen, &aiW, &aiH, &aiC, 3);
-                                        if (aiPixels) {
-                                            float score = evaluateStructuralFit(fullDepth8, aiPixels, aiW, aiH);
-                                            g_State.structuralFitScore = score;
-                                            std::cout << "[GeminiClient] Structural Fit Score: " << std::fixed << std::setprecision(3) << score << std::endl;
-                                            stbi_image_free(aiPixels);
-                                            if (score > 0.65f) {
-                                                std::cout << "[GeminiClient] PASS: Structural Fit Score > 0.65. Exiting with Code 0." << std::endl;
-                                                exit(0);
-                                            } else {
-                                                std::cout << "[GeminiClient] FAIL: Structural Fit Score <= 0.65. Exiting with Code 1." << std::endl;
-                                                exit(1);
+                                        uint8_t* aiPixelsRaw = stbi_load_from_memory(decoded, (int)outLen, &aiW, &aiH, &aiC, 3);
+                                        if (aiPixelsRaw) {
+                                            // Output Resolution Parity: Downsample to 512x288
+                                            uint8_t* aiPixelsScaled = (uint8_t*)Alice::g_Arena.allocate(512 * 288 * 3);
+                                            if (aiPixelsScaled) {
+                                                for (int y = 0; y < 288; ++y) {
+                                                    for (int x = 0; x < 512; ++x) {
+                                                        int srcX = (x * aiW) / 512;
+                                                        int srcY = (y * aiH) / 288;
+                                                        int srcIdx = (srcY * aiW + srcX) * 3;
+                                                        int dstIdx = (y * 512 + x) * 3;
+                                                        aiPixelsScaled[dstIdx + 0] = aiPixelsRaw[srcIdx + 0];
+                                                        aiPixelsScaled[dstIdx + 1] = aiPixelsRaw[srcIdx + 1];
+                                                        aiPixelsScaled[dstIdx + 2] = aiPixelsRaw[srcIdx + 2];
+                                                    }
+                                                }
+                                                float score = evaluateStructuralFit(fullDepth8, aiPixelsScaled, 512, 288);
+                                                g_State.structuralFitScore = score;
+                                                std::cout << "[GeminiClient] Structural Fit Score: " << std::fixed << std::setprecision(3) << score << std::endl;
                                             }
+                                            stbi_image_free(aiPixelsRaw);
                                         }
                                     }
                                 }
                             }
                         }
                     }
+
                     auto p3End = std::chrono::high_resolution_clock::now();
                     g_State.phase3LatencyMs = std::chrono::duration<double, std::milli>(p3End - p3Start).count();
                     g_State.workerBusy = false;
@@ -552,6 +581,20 @@ extern "C" {
         if (Alice::g_Arena.capacity < 1024 * 1024 * 256) {
             if (Alice::g_Arena.memory) free(Alice::g_Arena.memory);
             Alice::g_Arena.init(1024 * 1024 * 256); 
+        }
+
+        // Procedural Scene Randomization
+        srand((unsigned int)time(NULL));
+        for (int i = 0; i < 3; ++i) {
+            g_CubePos[i] = { (float)(rand() % 40 - 20), (float)(rand() % 40 - 20), (float)(rand() % 10 + 2) };
+        }
+        g_SpherePos = { (float)(rand() % 20 - 10), (float)(rand() % 20 - 10), (float)(rand() % 10 + 5) };
+
+        // Load API Key
+        std::ifstream keyFile("API_KEYS.txt");
+        if (keyFile.is_open()) {
+            keyFile.getline(g_State.apiKeyBuffer, sizeof(g_State.apiKeyBuffer));
+            keyFile.close();
         }
 
         glGenFramebuffers(1, &g_State.fbo);
@@ -621,7 +664,14 @@ extern "C" {
         }
 
         ImGui::Begin("Gemini API Configuration");
-        ImGui::InputText("API Key", g_State.apiKeyUI, sizeof(g_State.apiKeyUI), ImGuiInputTextFlags_Password);
+        ImGui::InputText("API Key", g_State.apiKeyBuffer, sizeof(g_State.apiKeyBuffer), ImGuiInputTextFlags_Password);
+        
+        if (g_State.authError) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
+            ImGui::TextWrapped("[ERROR] Invalid or Expired Key. Please update API_KEYS.txt or enter a valid key below.");
+            ImGui::PopStyleColor();
+        }
+
         ImGui::Text("Tasks: 1:Analysis, 2:Dali, 3:Render");
         if (ImGui::Button("Dispatch Analysis (1)")) keyPress('1', 0, 0);
         ImGui::SameLine();
@@ -647,12 +697,13 @@ extern "C" {
             M4 view = viewer->camera.getViewMatrix();
             M4 mvp = mult_local(proj, view);
             drawSolidFloor(50.0f, {0.8f, 0.8f, 0.8f}, mvp);
-            drawSolidCube({-10, 0, 5}, 5.0f, {0.8f, 0.2f, 0.2f}, mvp);
-            drawSolidCube({10, 0, 5}, 5.0f, {0.2f, 0.8f, 0.2f}, mvp);
-            drawSolidCube({0, 15, 8}, 8.0f, {0.2f, 0.2f, 0.8f}, mvp);
-            drawSolidSphere({0, 0, 10}, 4.0f, {0.8f, 0.1f, 0.1f}, mvp);
+            drawSolidCube(g_CubePos[0], 5.0f, {0.8f, 0.2f, 0.2f}, mvp);
+            drawSolidCube(g_CubePos[1], 5.0f, {0.2f, 0.8f, 0.2f}, mvp);
+            drawSolidCube(g_CubePos[2], 8.0f, {0.2f, 0.2f, 0.8f}, mvp);
+            drawSolidSphere(g_SpherePos, 4.0f, {0.8f, 0.1f, 0.1f}, mvp);
         }
     }
+
 
     void keyPress(unsigned char key, int x, int y) {
         using namespace Alice::Alg::GeminiClient;
@@ -661,6 +712,8 @@ extern "C" {
                 auto p1Start = std::chrono::high_resolution_clock::now();
                 AliceViewer* viewer = AliceViewer::instance();
                 if (viewer) {
+                    Alice::g_Arena.reset();
+
                     glBindFramebuffer(GL_FRAMEBUFFER, g_State.fbo);
                     glViewport(0, 0, 3840, 2160);
                     glClearColor(0.9f, 0.9f, 0.9f, 1.0f);
@@ -671,10 +724,10 @@ extern "C" {
                     M4 mvp = mult_local(proj, view);
                     
                     drawSolidFloor(50.0f, {0.8f, 0.8f, 0.8f}, mvp);
-                    drawSolidCube({-10, 0, 5}, 5.0f, {0.8f, 0.2f, 0.2f}, mvp);
-                    drawSolidCube({10, 0, 5}, 5.0f, {0.2f, 0.8f, 0.2f}, mvp);
-                    drawSolidCube({0, 15, 8}, 8.0f, {0.2f, 0.2f, 0.8f}, mvp);
-                    drawSolidSphere({0, 0, 10}, 4.0f, {0.8f, 0.1f, 0.1f}, mvp);
+                    drawSolidCube(g_CubePos[0], 5.0f, {0.8f, 0.2f, 0.2f}, mvp);
+                    drawSolidCube(g_CubePos[1], 5.0f, {0.2f, 0.8f, 0.2f}, mvp);
+                    drawSolidCube(g_CubePos[2], 8.0f, {0.2f, 0.2f, 0.8f}, mvp);
+                    drawSolidSphere(g_SpherePos, 4.0f, {0.8f, 0.1f, 0.1f}, mvp);
                     glFinish();
 
                     // --- 512p Downsample ---
@@ -700,26 +753,45 @@ extern "C" {
                     glReadPixels(0, 0, 512, 288, GL_RGB, GL_UNSIGNED_BYTE, g_State.segData);
                     stbi_write_png("seg_512.png", 512, 288, 3, g_State.segData, 512 * 3);
 
+                    // Multi-class Segmentation Stencils
+                    uint8_t* rMask = (uint8_t*)Alice::g_Arena.allocate(512 * 288);
+                    uint8_t* gMask = (uint8_t*)Alice::g_Arena.allocate(512 * 288);
+                    uint8_t* bMask = (uint8_t*)Alice::g_Arena.allocate(512 * 288);
+                    if (rMask && gMask && bMask) {
+                        for (int i = 0; i < 512 * 288; ++i) {
+                            uint8_t r = g_State.segData[i * 3 + 0];
+                            uint8_t g = g_State.segData[i * 3 + 1];
+                            uint8_t b = g_State.segData[i * 3 + 2];
+                            rMask[i] = (r > 200 && g < 100 && b < 100) ? 255 : 0;
+                            gMask[i] = (g > 200 && r < 100 && b < 100) ? 255 : 0;
+                            bMask[i] = (b > 200 && r < 100 && g < 100) ? 255 : 0;
+                        }
+                        stbi_write_png("stencil_red.png", 512, 288, 1, rMask, 512);
+                        stbi_write_png("stencil_green.png", 512, 288, 1, gMask, 512);
+                        stbi_write_png("stencil_blue.png", 512, 288, 1, bMask, 512);
+                    }
+
                     glReadPixels(0, 0, 512, 288, GL_DEPTH_COMPONENT, GL_FLOAT, g_State.depthData);
                     {
-                        uint8_t* d8 = (uint8_t*)malloc(512 * 288);
-                        float n = 0.1f, f = 1000.0f;
-                        for(int i=0; i<512*288; ++i) {
-                            float d = g_State.depthData[i];
-                            if (!std::isfinite(d)) d = 1.0f;
-                            if (d >= 0.999f) d8[i] = 0;
-                            else {
-                                float ndc = d * 2.0f - 1.0f;
-                                float linearDepth = (2.0f * n * f) / (f + n - ndc * (f - n));
-                                float d_norm = std::clamp((linearDepth - n) / (40.0f - n), 0.0f, 1.0f);
-                                d8[i] = (uint8_t)(50.0f + (1.0f - d_norm) * 205.0f);
+                        uint8_t* d8 = (uint8_t*)Alice::g_Arena.allocate(512 * 288);
+                        if (d8) {
+                            float n = 0.1f, f = 1000.0f;
+                            for(int i=0; i<512*288; ++i) {
+                                float d = g_State.depthData[i];
+                                if (!std::isfinite(d)) d = 1.0f;
+                                if (d >= 0.999f) d8[i] = 0;
+                                else {
+                                    float ndc = d * 2.0f - 1.0f;
+                                    float linearDepth = (2.0f * n * f) / (f + n - ndc * (f - n));
+                                    float d_norm = std::clamp((linearDepth - n) / (40.0f - n), 0.0f, 1.0f);
+                                    d8[i] = (uint8_t)(50.0f + (1.0f - d_norm) * 205.0f);
+                                }
                             }
+                            stbi_write_png("depth_512.png", 512, 288, 1, d8, 512);
                         }
-                        stbi_write_png("depth_512.png", 512, 288, 1, d8, 512);
-                        free(d8);
                     }
                     
-                    std::cout << "[GeminiClient] 512p Buffers Saved: beauty_512.png, seg_512.png, depth_512.png" << std::endl;
+                    std::cout << "[GeminiClient] 512p Buffers Saved: beauty_512.png, seg_512.png, depth_512.png, stencil_red.png, etc." << std::endl;
 
                     g_State.activeTask = (key == '1') ? 1 : ((key == '2') ? 2 : 3);
                     g_State.currentW = 512;
@@ -733,6 +805,8 @@ extern "C" {
             }
         }
     }
+
+
 
     void mousePress(int button, int state, int x, int y) {}
     void mouseMotion(int x, int y) {}

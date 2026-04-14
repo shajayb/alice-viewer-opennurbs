@@ -1,9 +1,11 @@
+#define NOMINMAX
 #define ALICE_FRAMEWORK
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <opennurbs.h>
 #include "AliceViewer.h"
 #include <cstdio>
 #include <iostream>
@@ -140,16 +142,44 @@ struct PrimitiveBatch
             glBindVertexArray(vao);
             glBindBuffer(GL_ARRAY_BUFFER, vbo);
             
-            void* ptr = glMapBufferRange(GL_ARRAY_BUFFER, 0, count * sizeof(Vertex), GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
-            if (ptr)
-            {
-                memcpy(ptr, vertices, count * sizeof(Vertex));
-                glUnmapBuffer(GL_ARRAY_BUFFER);
-            }
+            // MEM-SWP-02: glBufferSubData implementation
+            glBufferSubData(GL_ARRAY_BUFFER, 0, count * sizeof(Vertex), vertices);
+
+            M4 view = g_instance->camera.getViewMatrix();
+            M4 proj = g_instance->makeInfiniteReversedZProjRH(g_instance->fov, 1280.0f/720.0f, g_instance->nearClip); // Simplification for sweep
 
             glUseProgram(g_instance->shaderProgram);
-            glUniformMatrix4fv(glGetUniformLocation(g_instance->shaderProgram, "mvp"), 1, 0, g_currentMVP.m);
-            glDrawArrays(type, 0, count);
+            glUniformMatrix4fv(glGetUniformLocation(g_instance->shaderProgram, "u_ModelView"), 1, 0, view.m);
+            glUniformMatrix4fv(glGetUniformLocation(g_instance->shaderProgram, "u_Projection"), 1, 0, proj.m);
+            GLint locAmb = glGetUniformLocation(g_instance->shaderProgram, "u_AmbientIntensity");
+            GLint locDif = glGetUniformLocation(g_instance->shaderProgram, "u_DiffuseIntensity");
+            glUniform1f(locAmb, g_instance->ambientIntensity);
+            glUniform1f(locDif, g_instance->diffuseIntensity);
+
+            if (type == GL_TRIANGLES)
+            {
+                // Pass 1: Fill
+                glEnable(GL_POLYGON_OFFSET_FILL);
+                glPolygonOffset(-1.0f, -1.0f); 
+                glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                glDrawArrays(GL_TRIANGLES, 0, count);
+
+                // Pass 2: Wireframe
+                glDisable(GL_POLYGON_OFFSET_FILL);
+                glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+                glUniform1f(locAmb, 0.0f);
+                glUniform1f(locDif, 0.0f);
+                glDrawArrays(GL_TRIANGLES, 0, count);
+
+                // Restore
+                glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                glUniform1f(locAmb, g_instance->ambientIntensity);
+                glUniform1f(locDif, g_instance->diffuseIntensity);
+            }
+            else
+            {
+                glDrawArrays(type, 0, count);
+            }
             count = 0;
 
             auto end = std::chrono::high_resolution_clock::now();
@@ -177,6 +207,7 @@ struct PrimitiveBatch
 
 static PrimitiveBatch g_pointBatch;
 static PrimitiveBatch g_lineBatch;
+static PrimitiveBatch g_triangleBatch;
 
 // --- V3 Implementation ---
 float V3::length() const
@@ -223,6 +254,13 @@ void drawLine(V3 a, V3 b)
 void drawPoint(V3 p) 
 { 
     g_pointBatch.add(p, g_currentVertexColor); 
+}
+
+extern "C" void drawTriangle(V3 a, V3 b, V3 c)
+{
+    g_triangleBatch.add(a, g_currentVertexColor);
+    g_triangleBatch.add(b, g_currentVertexColor);
+    g_triangleBatch.add(c, g_currentVertexColor);
 }
 
 void drawGrid(float size)
@@ -314,6 +352,18 @@ static M4 mult(M4 a, M4 b)
         }
     }
     return r;
+}
+
+M4 AliceViewer::makeInfiniteReversedZProjRH(float fovRadians, float aspect, float zNear)
+{
+    float f = 1.0f / tanf(fovRadians * 0.5f);
+    M4 res = { 0 };
+    res.m[0] = f / aspect;
+    res.m[5] = f;
+    res.m[10] = 0.0f;
+    res.m[11] = -1.0f;
+    res.m[14] = zNear;
+    return res;
 }
 
 static M4 invert(const M4& m)
@@ -428,15 +478,15 @@ void ArcballCamera::update(GLFWwindow* window, float deltaTime)
             V3 f = nrm_v(focusPoint - eye);
             V3 r = nrm_v(crs_v(f, { 0, 0, 1 }));
             V3 u = crs_v(r, f);
-            focusPoint -= (r * (dx * 0.02f)) + (u * (dy * 0.02f));
+            focusPoint -= (r * (dx * (distance * 0.001f))) + (u * (dy * (distance * 0.001f)));
         }
 
         if (isAlt && isRMB)
         {
-            distance += dy * 0.1f;
+            distance += dy * (distance * 0.005f);
         }
 
-        distance -= io.MouseWheel * 1.5f;
+        distance -= io.MouseWheel * (distance * 0.1f);
         pitch = std::clamp(pitch, -1.5f, 1.5f);
         distance = std::max(1.0f, distance);
     }
@@ -487,7 +537,7 @@ V3 AliceViewer::screenToWorld(int x, int y, float planeZ)
     glfwGetFramebufferSize(window, &w, &h);
     float nx = (2.0f * (float)x) / (float)w - 1.0f;
     float ny = 1.0f - (2.0f * (float)y) / (float)h;
-    M4 proj = perspective(fov, (float)w / (float)h, 0.1f, 1000.0f);
+    M4 proj = makeInfiniteReversedZProjRH(fov, (float)w / (float)h, nearClip);
     M4 view = camera.getViewMatrix();
     M4 invVP = invert(mult(proj, view));
 
@@ -505,8 +555,8 @@ V3 AliceViewer::screenToWorld(int x, int y, float planeZ)
         return V3(r[0] / r[3], r[1] / r[3], r[2] / r[3]);
     };
 
-    V3 p0 = unproj(nx, ny, -1.0f); 
-    V3 p1 = unproj(nx, ny, 1.0f);
+    V3 p0 = unproj(nx, ny, 1.0f); // Reversed-Z: Near is 1.0
+    V3 p1 = unproj(nx, ny, 0.0001f); // Reversed-Z: Far is near 0.0
     V3 D = p1 - p0; 
     if (fabsf(D.z) < 1e-6f) 
     {
@@ -518,26 +568,39 @@ V3 AliceViewer::screenToWorld(int x, int y, float planeZ)
 
 int AliceViewer::init()
 {
+    ON::Begin();
     g_instance = this;
-    printf(">>> AliceViewer Framework v2.0.4 Optimized <<<\n");
+    printf(">>> Alice Viewer 2 - Reversed-Z Pipeline <<<\n");
     if (!glfwInit()) 
     {
         return 1;
     }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4); 
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    window = glfwCreateWindow(1280, 720, "ALICE CAD ON FRAMEWORK 3.1", 0, 0);
+    glfwWindowHint(GLFW_SAMPLES, msaaSamples);
+    window = glfwCreateWindow(1280, 720, "ALICE VIEWER 2.0 - CAD RENDERING PIPELINE", 0, 0);
     if (!window) 
     {
+        printf("[FATAL] GLFW Window Creation Failed. Check OpenGL 4.5 support.\n");
         return 1;
     }
     glfwMakeContextCurrent(window); 
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+    
+    glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_GREATER);
+    glClearDepth(0.0);
+    glEnable(GL_MULTISAMPLE);
+
+    glGenQueries(1, &timerQuery);
+    glGenQueries(1, &resolveTimerQuery);
+
     IMGUI_CHECKVERSION(); 
     ImGui::CreateContext();
     ImGui_ImplGlfw_InitForOpenGL(window, false);
-    ImGui_ImplOpenGL3_Init("#version 400 core");
+    ImGui_ImplOpenGL3_Init("#version 430 core");
     glfwSetKeyCallback(window, key_cb); 
     glfwSetMouseButtonCallback(window, mouse_cb);
     glfwSetCursorPosCallback(window, cursor_cb); 
@@ -552,33 +615,63 @@ int AliceViewer::init()
     camera.lastMouseY = (float)my;
     
     const char* vsSrc = 
-        "#version 400 core\n"
-        "layout(location=0) in vec3 pos;\n"
-        "layout(location=1) in vec3 inColor;\n"
-        "uniform mat4 mvp;\n"
-        "out vec3 fragColor;\n"
+        "#version 430 core\n"
+        "layout(location=0) in vec3 a_Position;\n"
+        "layout(location=1) in vec3 a_Color;\n"
+        "uniform mat4 u_ModelView;\n"
+        "uniform mat4 u_Projection;\n"
+        "out vec3 v_ViewPos;\n"
+        "out vec3 v_Color;\n"
         "void main()\n"
         "{\n"
-        "    gl_Position = mvp * vec4(pos, 1.0);\n"
-        "    fragColor = inColor;\n"
+        "    vec4 viewPos = u_ModelView * vec4(a_Position, 1.0);\n"
+        "    v_ViewPos = viewPos.xyz;\n"
+        "    v_Color = a_Color;\n"
+        "    gl_Position = u_Projection * viewPos;\n"
         "}";
         
     const char* fsSrc = 
-        "#version 400 core\n"
-        "in vec3 fragColor;\n"
-        "out vec4 color;\n"
+        "#version 430 core\n"
+        "in vec3 v_ViewPos;\n"
+        "in vec3 v_Color;\n"
+        "out vec4 f_Color;\n"
+        "uniform float u_AmbientIntensity;\n"
+        "uniform float u_DiffuseIntensity;\n"
         "void main()\n"
         "{\n"
-        "    color = vec4(fragColor, 1.0);\n"
+        "    vec3 dx = dFdx(v_ViewPos);\n"
+        "    vec3 dy = dFdy(v_ViewPos);\n"
+        "    vec3 normal = normalize(cross(dx, dy));\n"
+        "    vec3 viewDir = normalize(-v_ViewPos);\n"
+        "    float diff = max(dot(normal, viewDir), 0.0);\n"
+        "    vec3 finalColor = v_Color * (u_AmbientIntensity + (diff * u_DiffuseIntensity));\n"
+        "    f_Color = vec4(finalColor, 1.0);\n"
         "}";
+
+    int success;
+    char infoLog[512];
 
     unsigned int vs = glCreateShader(GL_VERTEX_SHADER); 
     glShaderSource(vs, 1, &vsSrc, 0); 
     glCompileShader(vs);
+    glGetShaderiv(vs, GL_COMPILE_STATUS, &success);
+    if (!success)
+    {
+        glGetShaderInfoLog(vs, 512, NULL, infoLog);
+        printf("[FATAL] VS Compilation Failed:\n%s\n", infoLog);
+        return 1;
+    }
     
     unsigned int fs = glCreateShader(GL_FRAGMENT_SHADER); 
     glShaderSource(fs, 1, &fsSrc, 0); 
     glCompileShader(fs);
+    glGetShaderiv(fs, GL_COMPILE_STATUS, &success);
+    if (!success)
+    {
+        glGetShaderInfoLog(fs, 512, NULL, infoLog);
+        printf("[FATAL] FS Compilation Failed:\n%s\n", infoLog);
+        return 1;
+    }
     
     shaderProgram = glCreateProgram(); 
     glAttachShader(shaderProgram, vs); 
@@ -587,6 +680,7 @@ int AliceViewer::init()
     
     g_pointBatch.init(GL_POINTS); 
     g_lineBatch.init(GL_LINES);
+    g_triangleBatch.init(GL_TRIANGLES);
     setup(); 
     return 0;
 }
@@ -604,32 +698,52 @@ void AliceViewer::run()
         ImGui::NewFrame();
         
         {
-            ImGui::Begin("Camera Controls");
-            if (ImGui::Button("Perspective")) camera.setBookmark("Perspective"); ImGui::SameLine();
-            if (ImGui::Button("Top")) camera.setBookmark("Top"); ImGui::SameLine();
-            if (ImGui::Button("Front")) camera.setBookmark("Front");
-            if (ImGui::Button("Back")) camera.setBookmark("Back"); ImGui::SameLine();
-            if (ImGui::Button("Left")) camera.setBookmark("Left"); ImGui::SameLine();
-            if (ImGui::Button("Right")) camera.setBookmark("Right");
+            ImGui::Begin("Pipeline Parameter Sweeps");
+            ImGui::Text("Domain 1: Reversed-Z");
+            ImGui::SliderFloat("NearClip", &nearClip, 0.001f, 1.0f);
+            
+            ImGui::Separator();
+            ImGui::Text("Domain 2: Shading");
+            ImGui::SliderFloat("Ambient", &ambientIntensity, 0.0f, 1.0f);
+            ImGui::SliderFloat("Diffuse", &diffuseIntensity, 0.0f, 1.0f);
+            ImGui::ColorEdit3("Background", &backColor.x);
+
+            ImGui::Separator();
+            ImGui::Text("Domain 3: AA Benchmarks");
+            ImGui::SliderInt("MSAA Samples", &msaaSamples, 1, 8);
+            if (ImGui::Button("Apply MSAA (Requires Restart)")) { /* In a real app we'd recreate the window */ }
             
             ImGui::Separator();
             ImGui::Text("Stats:");
-            ImGui::Text("LookAt: %.2f, %.2f, %.2f", camera.focusPoint.x, camera.focusPoint.y, camera.focusPoint.z);
-            ImGui::Text("Yaw: %.2f, Pitch: %.2f", camera.yaw, camera.pitch);
-            ImGui::Text("Distance: %.2f", camera.distance);
-            ImGui::SliderFloat("FoV", &fov, 0.1f, 2.0f);
+            ImGui::Text("Frame: %.2f ms (%.1f FPS)", dt * 1000.0f, 1.0f/dt);
+            
+            GLuint64 gpuTime = 0;
+            glGetQueryObjectui64v(timerQuery, GL_QUERY_RESULT_AVAILABLE, &gpuTime); // Dummy check
+            glGetQueryObjectui64v(timerQuery, GL_QUERY_RESULT, &gpuTime);
+            ImGui::Text("GPU Frame: %.3f ms", (double)gpuTime / 1000000.0);
+
             ImGui::End();
         }
 
         update(dt); 
-        backGround(0.9f); 
+        backGround(backColor.x, backColor.y, backColor.z);
         camera.update(window, dt);
         int w, h; 
         glfwGetFramebufferSize(window, &w, &h);
         if (w > 0 && h > 0) 
         {
             glViewport(0, 0, w, h);
-            g_currentMVP = mult(perspective(fov, (float)w / h, 0.1f, 1000.0f), camera.getViewMatrix());
+            M4 view = camera.getViewMatrix();
+            M4 proj = makeInfiniteReversedZProjRH(fov, (float)w / h, nearClip);
+            
+            glBeginQuery(GL_TIME_ELAPSED, timerQuery);
+
+            glUseProgram(shaderProgram);
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_ModelView"), 1, 0, view.m);
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_Projection"), 1, 0, proj.m);
+            glUniform1f(glGetUniformLocation(shaderProgram, "u_AmbientIntensity"), ambientIntensity);
+            glUniform1f(glGetUniformLocation(shaderProgram, "u_DiffuseIntensity"), diffuseIntensity);
+            
             glEnable(GL_DEPTH_TEST); 
 #ifdef ALICE_VIEWER_RUN_TEST
             void aliceTestDraw();
@@ -637,8 +751,11 @@ void AliceViewer::run()
 #else
             draw();
 #endif
+            g_triangleBatch.flush();
             g_lineBatch.flush(); 
             g_pointBatch.flush();
+
+            glEndQuery(GL_TIME_ELAPSED);
         }
 
         tuner.tune(dt, tuner.lastFlushTimeUs);

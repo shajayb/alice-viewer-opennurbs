@@ -1,0 +1,22 @@
+<snapshot>
+  <active_constraints>
+    <constraint>Execution speed priority (DOD, minimal memory footprint).</constraint>
+    <constraint>STRICT Ninja/LLVM pipeline in ./build/.</constraint>
+    <constraint>File-based JSON handoff (executor_report.json) for Orchestrator.</constraint>
+    <constraint>std::system() for TTY preservation.</constraint>
+  </active_constraints>
+  <key_knowledge>
+    <knowledge>AliceOrchestrator now uses std::system() to maintain native CLI formatting.</knowledge>
+    <knowledge>Build report is read from executor_report.json instead of stdout parsing.</knowledge>
+    <knowledge>Local build environment configured for LLVM 17 and Ninja on Windows.</knowledge>
+  </key_knowledge>
+  <artifact_trail>
+    <artifact>src/AliceOrchestrator.cpp (Refactored)</artifact>
+    <artifact>build_env_config.json (Environment configuration)</artifact>
+    <artifact>build/bin/AliceOrchestrator.exe (Compiled binary)</artifact>
+  </artifact_trail>
+  <task_state>
+    <state>PHASE 1 (Architecture Shift): COMPLETED</state>
+    <state>SOP Steps 1-7: COMPLETED</state>
+  </task_state>
+</snapshot>

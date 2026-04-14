@@ -22,7 +22,8 @@
       "name": "curl",
       "platform": "!windows"
     },
-    "stb"
+    "stb",
+    "nlohmann-json"
   ],
   "overrides": [
     {

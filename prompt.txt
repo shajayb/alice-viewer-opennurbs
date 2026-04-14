@@ -1,0 +1,15 @@
+[CLI AGENT PROMPT]
+CONTEXT: 
+Initialize according to `gemini.md`. The Human Lead has verified that the `AliceOrchestrator` autonomous visual QA loop is structurally sound, and the AABB visualizer test has passed Phase 3. 
+
+EXECUTION MANDATE:
+Execute SOP Steps 1 through 7 to secure the repository state.
+
+1. PHASE 1 (Version Control Security): 
+   - Perform a full workspace audit via `git status`.
+   - Stage all modified and untracked files (excluding those properly ignored in `.gitignore` like `API_KEYS.txt`).
+   - Commit the changes with a highly descriptive, conventional commit message detailing the completion of the `AliceOrchestrator` TTY file-based handoff and the successful AABB Phase 3 integration.
+   - Push the commit to the current tracking branch on the remote repository.
+   - You MUST write the strict JSON "Execution Reporting" schema to a file named `executor_report.json` in the repository root confirming the git push.
+
+Run the full sequence autonomously. DO NOT ask for permission. Proceed with the SOP and execute all shell commands immediately.

@@ -262,11 +262,10 @@ struct SelectionContext
     }
 };
 
-
-#ifdef SELECTION_CONTEXT_RUN_TEST
-
 static SelectionContext g_selCtx;
 static Alice::Buffer<V3> g_testCloud;
+
+#ifdef SELECTION_CONTEXT_RUN_TEST
 
 extern "C"
 {

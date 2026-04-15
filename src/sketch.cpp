@@ -5,8 +5,11 @@
 namespace Alice { LinearArena g_Arena; }
 
 // Active Test
-#define CAD_PIPELINE_TEST_RUN_TEST
-#include "CADPipelineTest.h"
+#define API_KEY_READER_TEST_RUN_TEST
+#include "ApiKeyReaderTest.h"
+
+//#define CAD_PIPELINE_TEST_RUN_TEST
+//#include "CADPipelineTest.h"
 
 //#define ECEF_TEST_RUN_TEST
 //#include "ECEFTest.h"

@@ -63,7 +63,20 @@ namespace Alice
                         Math::DVec3 targetEcef = Math::lla_to_ecef(targetLat, targetLon, 0.0);
 
                         printf("[TilesetTest] Traversing BVH toward St. Paul's...\n");
-                        TilesetLoader::TraverseAndGraft(rootIdx, nodes, targetEcef, activeNodeIndices, g_Arena);
+                        
+                        AliceViewer* av = AliceViewer::instance();
+                        float vHeight = 720.0f;
+                        float fov = 0.8f;
+                        if (av)
+                        {
+                            int w, h;
+                            glfwGetFramebufferSize(av->window, &w, &h);
+                            vHeight = (float)h;
+                            fov = av->fov;
+                        }
+
+                        int nodesVisited = 0;
+                        TilesetLoader::TraverseAndGraft(rootIdx, nodes, targetEcef, vHeight, fov, 16.0f, activeNodeIndices, g_Arena, 0, nodesVisited, 16384);
                         
                         double enuMat[16];
                         Math::denu_matrix(enuMat, targetLat, targetLon);
@@ -143,7 +156,7 @@ namespace Alice
                 }
 
                 Math::Vec3 mMin, mMax;
-                if (TilesetLoader::LoadGLBWithENU(glbUrl.c_str(), node.mesh, targetEcef, enuMat, node.transform, mMin, mMax, g_Arena))
+                if (TilesetLoader::LoadGLBWithENU(glbUrl.c_str(), node.mesh, targetEcef, enuMat, node.worldTransform, mMin, mMax, g_Arena))
                 {
                     node.isLoaded = true;
                     accumulatedMeshes.push_back(node.mesh);

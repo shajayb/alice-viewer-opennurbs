@@ -104,6 +104,35 @@ namespace Math
         for(int i=0; i<16; ++i) out[i] = res[i];
     }
 
+    inline void mat4d_identity(double* m)
+    {
+        for(int i=0; i<16; ++i) m[i] = 0.0;
+        m[0]=1.0; m[5]=1.0; m[10]=1.0; m[15]=1.0;
+    }
+
+    inline void mat4d_mul(double* out, const double* a, const double* b)
+    {
+        double res[16];
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                res[i + j * 4] = a[i + 0 * 4] * b[0 + j * 4] +
+                                 a[i + 1 * 4] * b[1 + j * 4] +
+                                 a[i + 2 * 4] * b[2 + j * 4] +
+                                 a[i + 3 * 4] * b[3 + j * 4];
+            }
+        }
+        for(int i=0; i<16; ++i) out[i] = res[i];
+    }
+
+    inline void mat4d_transform_point(DVec3& p, const double* m)
+    {
+        double x = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];
+        double y = m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13];
+        double z = m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14];
+        double w = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15];
+        p.x = x / w; p.y = y / w; p.z = z / w;
+    }
+
     inline void mat4_perspective(float* m, float fov, float aspect, float n, float f)
     {
         float t = tanf(fov * 0.5f);

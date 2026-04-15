@@ -21,6 +21,7 @@ namespace Alice
         double sphereRadius;
         float geometricError;
         double transform[16];
+        double worldTransform[16];
         const char* contentUri;
         const char* baseUrl;
         int firstChild;
@@ -58,7 +59,7 @@ namespace Alice
             }
         }
 
-        static int ParseRecursive(const json& t, Buffer<TileNode>& nodes, LinearArena& arena, const std::string& baseUrl)
+        static int ParseRecursive(const json& t, Buffer<TileNode>& nodes, LinearArena& arena, const std::string& baseUrl, const double* parentTransform = nullptr)
         {
             if (nodes.count >= nodes.capacity) 
             {
@@ -71,10 +72,21 @@ namespace Alice
             memset(&node, 0, sizeof(TileNode));
 
             // Default transform to identity
-            for (int i = 0; i < 16; ++i) node.transform[i] = (i % 5 == 0) ? 1.0 : 0.0;
+            double localTransform[16];
+            Math::mat4d_identity(localTransform);
             if (t.contains("transform") && t["transform"].is_array())
             {
-                for (int i = 0; i < 16; ++i) node.transform[i] = t["transform"][i].get<double>();
+                for (int i = 0; i < 16; ++i) localTransform[i] = t["transform"][i].get<double>();
+            }
+            for (int i = 0; i < 16; ++i) node.transform[i] = localTransform[i];
+
+            if (parentTransform)
+            {
+                Math::mat4d_mul(node.worldTransform, parentTransform, localTransform);
+            }
+            else
+            {
+                for (int i = 0; i < 16; ++i) node.worldTransform[i] = localTransform[i];
             }
 
             // Store baseUrl
@@ -100,6 +112,9 @@ namespace Alice
                     double hx = b[3].get<double>(), hy = b[7].get<double>(), hz = b[11].get<double>();
                     node.sphereRadius = sqrt(hx*hx + hy*hy + hz*hz);
                 }
+
+                // Transform sphereCenter to world space (ECEF)
+                Math::mat4d_transform_point(node.sphereCenter, node.worldTransform);
             }
 
             node.geometricError = t.value("geometricError", 0.0f);
@@ -128,7 +143,7 @@ namespace Alice
                 node.firstChild = (int)nodes.count;
                 for (const auto& c : t["children"])
                 {
-                    if (ParseRecursive(c, nodes, arena, baseUrl) == -1) return -1;
+                    if (ParseRecursive(c, nodes, arena, baseUrl, node.worldTransform) == -1) return -1;
                 }
             }
 
@@ -157,7 +172,7 @@ namespace Alice
                 size_t pos = newBaseUrl.find_last_of('/');
                 if (pos != std::string::npos) newBaseUrl = newBaseUrl.substr(0, pos + 1);
 
-                int externalRootIdx = ParseRecursive(external["root"], nodes, arena, newBaseUrl);
+                int externalRootIdx = ParseRecursive(external["root"], nodes, arena, newBaseUrl, nodes[nodeIdx].worldTransform);
                 
                 nodes[nodeIdx].firstChild = externalRootIdx;
                 nodes[nodeIdx].childCount = 1;
@@ -166,52 +181,84 @@ namespace Alice
             }
         }
 
-        static void TraverseAndGraft(int nodeIdx, Buffer<TileNode>& nodes, Math::DVec3 target, Buffer<int>& activeNodes, LinearArena& arena)
+
+        static bool TraverseAndGraft(int nodeIdx, Buffer<TileNode>& nodes, Math::DVec3 cameraPos, float viewportHeight, float fov, float sseThreshold, Buffer<int>& activeNodes, LinearArena& arena, int depth, int& nodesVisited, int maxNodes)
         {
-            if (nodeIdx < 0 || nodeIdx >= (int)nodes.count) return;
-            
-            double dx = nodes[nodeIdx].sphereCenter.x - target.x;
-            double dy = nodes[nodeIdx].sphereCenter.y - target.y;
-            double dz = nodes[nodeIdx].sphereCenter.z - target.z;
-            double distSq = dx*dx + dy*dy + dz*dz;
+            if (nodeIdx < 0 || nodeIdx >= (int)nodes.count || nodesVisited >= maxNodes || depth > 32) return false;
+            nodesVisited++;
 
-            // Target radius for St. Paul's cluster (approx 500m)
-            const double targetRadius = 500.0;
+            // 1. Calculate Screen Space Error (SSE)
+            double dx = nodes[nodeIdx].sphereCenter.x - cameraPos.x;
+            double dy = nodes[nodeIdx].sphereCenter.y - cameraPos.y;
+            double dz = nodes[nodeIdx].sphereCenter.z - cameraPos.z;
+            double distSq = dx * dx + dy * dy + dz * dz;
+            double distance = sqrt(distSq);
+            distance = (std::max)(distance, 1e-6);
 
-            // Decision: Descend if we are coarse OR if we are close to the target
-            bool shouldDescend = (nodes[nodeIdx].geometricError > 50.0f) || (distSq < nodes[nodeIdx].sphereRadius * nodes[nodeIdx].sphereRadius);
-            
-            // Only descend if there are children to descend into
+            // SSE Formula: (geometricError * viewportHeight) / (distance * 2 * tan(fov/2))
+            float geometricError = nodes[nodeIdx].geometricError;
+            double sse = (geometricError * viewportHeight) / (distance * 2.0 * tan(fov * 0.5));
+
+            bool shouldDescend = sse > sseThreshold;
+
+            // 2. Recursive FetchAndGraft: Immediate descent into new subtree
             if (shouldDescend && nodes[nodeIdx].isExternal)
             {
                 FetchAndGraft(nodeIdx, nodes, arena);
             }
 
             bool hasChildren = (nodes[nodeIdx].childCount > 0);
-            
+            bool refined = false;
+
             if (shouldDescend && hasChildren)
             {
-                // If it's ADD, we add ourselves AND descend
-                if (nodes[nodeIdx].refineAdd && nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal)
-                {
-                    activeNodes.push_back(nodeIdx);
-                }
-
                 int first = nodes[nodeIdx].firstChild;
                 int count = nodes[nodeIdx].childCount;
+                
+                bool allChildrenProcessed = true;
                 for (int i = 0; i < count; ++i)
                 {
-                    TraverseAndGraft(first + i, nodes, target, activeNodes, arena);
+                    if (!TraverseAndGraft(first + i, nodes, cameraPos, viewportHeight, fov, sseThreshold, activeNodes, arena, depth + 1, nodesVisited, maxNodes))
+                    {
+                        allChildrenProcessed = false;
+                    }
+                }
+
+                if (nodes[nodeIdx].refineAdd)
+                {
+                    // ADD: Render both parent and children
+                    if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal)
+                    {
+                        activeNodes.push_back(nodeIdx);
+                    }
+                    refined = true;
+                }
+                else
+                {
+                    // REPLACE: If children were processed, parent is omitted
+                    if (allChildrenProcessed)
+                    {
+                        refined = true;
+                    }
+                    else if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal)
+                    {
+                        // Fallback to parent if children couldn't be processed
+                        activeNodes.push_back(nodeIdx);
+                        refined = true;
+                    }
                 }
             }
             else
             {
-                // Terminal node or we decided not to descend: add if it has content
+                // Terminal node or decided not to descend: add if it has content
                 if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal)
                 {
                     activeNodes.push_back(nodeIdx);
+                    refined = true;
                 }
             }
+
+            return refined;
         }
 
         static bool LoadGLBWithENU(const char* url, MeshPrimitive& out_mesh, Math::DVec3 centerEcef, double* enuMat, const double* transform, Math::Vec3& out_min, Math::Vec3& out_max, LinearArena& arena)

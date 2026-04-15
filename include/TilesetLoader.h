@@ -326,27 +326,30 @@ namespace Alice
             if (data->meshes_count == 0 || data->meshes[0].primitives_count == 0) { cgltf_free(data); return false; }
 
             cgltf_primitive* prim = &data->meshes[0].primitives[0];
-            cgltf_accessor *pos_acc = NULL, *norm_acc = NULL;
+            cgltf_accessor *pos_acc = NULL, *norm_acc = NULL, *uv_acc = NULL;
 
             for (int i = 0; i < (int)prim->attributes_count; ++i)
             {
                 if (prim->attributes[i].type == cgltf_attribute_type_position) pos_acc = prim->attributes[i].data;
                 if (prim->attributes[i].type == cgltf_attribute_type_normal) norm_acc = prim->attributes[i].data;
+                if (prim->attributes[i].type == cgltf_attribute_type_texcoord) uv_acc = prim->attributes[i].data;
             }
 
             if (!pos_acc) { cgltf_free(data); return false; }
 
             size_t vcount = pos_acc->count;
-            float* verts = (float*)arena.allocate(vcount * 6 * sizeof(float));
+            int stride = 8; // pos(3) + norm(3) + uv(2)
+            float* verts = (float*)arena.allocate(vcount * stride * sizeof(float));
 
             out_min = { 1e30f, 1e30f, 1e30f };
             out_max = { -1e30f, -1e30f, -1e30f };
 
             for (size_t i = 0; i < vcount; ++i)
             {
-                float p[3], n[3] = { 0,0,1 };
+                float p[3], n[3] = { 0,0,1 }, uv[2] = { 0,0 };
                 cgltf_accessor_read_float(pos_acc, i, p, 3);
                 if (norm_acc) cgltf_accessor_read_float(norm_acc, i, n, 3);
+                if (uv_acc) cgltf_accessor_read_float(uv_acc, i, uv, 2);
 
                 // 1. Positions: Calculate relative translation in double precision
                 double relX = transform[12] - centerEcef.x;
@@ -367,7 +370,7 @@ namespace Alice
                 float gy = (float)lz;    // Up -> Y
                 float gz = (float)(-ly); // North -> -Z
 
-                verts[i * 6 + 0] = gx; verts[i * 6 + 1] = gy; verts[i * 6 + 2] = gz;
+                verts[i * stride + 0] = gx; verts[i * stride + 1] = gy; verts[i * stride + 2] = gz;
 
                 if (gx < out_min.x) out_min.x = gx;
                 if (gy < out_min.y) out_min.y = gy;
@@ -392,7 +395,10 @@ namespace Alice
                 float ngz = (float)(-eny);
 
                 float ilen = 1.0f / sqrtf(ngx * ngx + ngy * ngy + ngz * ngz + 1e-12f);
-                verts[i * 6 + 3] = ngx * ilen; verts[i * 6 + 4] = ngy * ilen; verts[i * 6 + 5] = ngz * ilen;
+                verts[i * stride + 3] = ngx * ilen; verts[i * stride + 4] = ngy * ilen; verts[i * stride + 5] = ngz * ilen;
+
+                // 7. UVs
+                verts[i * stride + 6] = uv[0]; verts[i * stride + 7] = uv[1];
             }
 
             size_t icount = prim->indices ? prim->indices->count : 0;
@@ -406,13 +412,16 @@ namespace Alice
             glGenBuffers(1, &out_mesh.ebo);
             glBindVertexArray(out_mesh.vao);
             glBindBuffer(GL_ARRAY_BUFFER, out_mesh.vbo);
-            glBufferData(GL_ARRAY_BUFFER, vcount * 6 * sizeof(float), verts, GL_STATIC_DRAW);
+            glBufferData(GL_ARRAY_BUFFER, vcount * stride * sizeof(float), verts, GL_STATIC_DRAW);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, out_mesh.ebo);
             glBufferData(GL_ELEMENT_ARRAY_BUFFER, icount * sizeof(unsigned int), indices, GL_STATIC_DRAW);
+            
             glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride * sizeof(float), (void*)0);
             glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride * sizeof(float), (void*)(3 * sizeof(float)));
+            glEnableVertexAttribArray(2);
+            glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride * sizeof(float), (void*)(6 * sizeof(float)));
 
             cgltf_free(data);
             return true;

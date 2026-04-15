@@ -15,23 +15,7 @@
             "boundingVolume": { "sphere": [3977271, -8888, 4967916, 500] },     
             "geometricError": 500,
             "refine": "REPLACE",
-            "content": { "uri": "test_tile.glb" },
-            "children": [
-               {
-                 "boundingVolume": { "sphere": [3977271, -8888, 4967916, 250] },
-                 "geometricError": 250,
-                 "refine": "REPLACE",
-                 "content": { "uri": "test_tile.glb" },
-                 "children": [
-                    {
-                      "boundingVolume": { "sphere": [3977271, -8888, 4967916, 125] },
-                      "geometricError": 125,
-                      "refine": "REPLACE",
-                      "content": { "uri": "test_tile.glb" }
-                    }
-                 ]
-               }
-            ]
+            "content": { "uri": "MOCK_CATHEDRAL" }
           }
         ]
       }

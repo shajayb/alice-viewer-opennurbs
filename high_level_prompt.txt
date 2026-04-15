@@ -1,0 +1,10 @@
+[GOAL]
+Test the orchestrator.ps1 loop by successfully creating and compiling a minimal C++ "Hello World" application.
+
+[PLAN]
+1. Scaffolding: Create a basic `CMakeLists.txt` and a `src/main.cpp` file.
+2. Build Verification: Compile the executable using CMake and Ninja.
+3. Documentation: Generate a `README.md` confirming the build is successful.
+
+[BOOTSTRAP]
+Step 1: Create a standard `CMakeLists.txt` configured for a C++17 executable named `OrchestratorTest`. Create a `src` directory and write a minimal `src/main.cpp` that simply prints "Orchestrator Test Successful" to the console. Attempt to build it locally using Ninja to verify there are no syntax errors. Do not add any external dependencies or libraries.

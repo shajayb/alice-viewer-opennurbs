@@ -1,14 +1,7 @@
-#include "AliceViewer.h"
-#include <cstdlib>
+#include <cstdio>
 
-int main(int argc, char** argv)
+int main()
 {
-    AliceViewer viewer;
-    if (viewer.init(argc, argv) != 0)
-    {
-        return EXIT_FAILURE;
-    }
-    viewer.run();
-    viewer.cleanup();
+    printf("Orchestrator Test Successful\n");
     return 0;
 }

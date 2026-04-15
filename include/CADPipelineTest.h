@@ -2,17 +2,21 @@
 #define CAD_PIPELINE_TEST_H
 
 #include "AliceViewer.h"
-#include "TilesetLoader.h"
+#include "Tileset.h"
 #include "NormalShader.h"
 
 struct CADPipelineTest
 {
-    MeshPrimitive rootTile;
+    Alice::Alg::Tileset tileset;
     Math::Vec3 min, max;
     NormalShader shader;
 
     void frame()
     {
+        if(!tileset.root) return;
+        min = tileset.root->min;
+        max = tileset.root->max;
+
         float dx = max.x - min.x, dy = max.y - min.y, dz = max.z - min.z;
         float radius = sqrtf(dx*dx + dy*dy + dz*dz) * 0.5f;
         if (radius < 1e-3f) radius = 10.0f; // Prevent division by zero or tiny framing
@@ -32,11 +36,11 @@ struct CADPipelineTest
 
     void init()
     {
-        // 1. PHASE 1: Fetch and parse tileset.json
+        // 1. PHASE 3: Hierarchical Tileset Traversal
         const char* url = "test_tileset.json";
-        if(!TilesetLoader::load(url, rootTile, min, max))
+        if(!tileset.load(url))
         {
-            fprintf(stderr, "[CADPipelineTest] Failed to load tileset.\n");
+            fprintf(stderr, "[CADPipelineTest] Failed to load tileset: %s\n", url);
         }
 
         shader.init();
@@ -75,7 +79,7 @@ struct CADPipelineTest
         shader.setMVP(mvp);
         shader.setNormalMatrix(n);
         
-        rootTile.draw();
+        tileset.draw();
     }
 };
 

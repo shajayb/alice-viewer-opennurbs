@@ -1,8 +1,10 @@
 {
-  "host_os": "windows",
-  "compiler_c": "clang-cl.exe",
-  "compiler_cxx": "clang-cl.exe",
-  "linker": "lld-link.exe",
-  "toolchain": "../vcpkg/scripts/buildsystems/vcpkg.cmake",
-  "ninja_path": "$env:LOCALAPPDATA\\Microsoft\\WinGet\\Packages\\Ninja-build.Ninja_Microsoft.Winget.Source_8wekyb3d8bbwe\\ninja.exe"
+  "host_os": "Windows",
+  "CMAKE_C_COMPILER": "clang-cl.exe",
+  "CMAKE_CXX_COMPILER": "clang-cl.exe",
+  "CMAKE_LINKER": "lld-link.exe",
+  "CMAKE_TOOLCHAIN_FILE": "../vcpkg/scripts/buildsystems/vcpkg.cmake",
+  "NINJA_PATH": "%LOCALAPPDATA%\\Microsoft\\WinGet\\Packages\\Ninja-build.Ninja_Microsoft.Winget.Source_8wekyb3d8bbwe\\ninja.exe",
+  "LLVM_BIN": "C:\\Program Files\\LLVM\\bin",
+  "CMAKE_BIN": "C:\\Program Files\\CMake\\bin"
 }

@@ -1,1 +1,1 @@
-handoff
+Handoff triggered. Task completed.

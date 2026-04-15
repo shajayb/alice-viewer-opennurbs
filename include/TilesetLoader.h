@@ -190,10 +190,51 @@ namespace Alice
         }
 
 
-        static bool TraverseAndGraft(int nodeIdx, Buffer<TileNode>& nodes, Math::DVec3 cameraPos, float viewportHeight, float fov, float sseThreshold, Buffer<int>& activeNodes, LinearArena& arena, int depth, int& nodesVisited, int maxNodes)
+        static void ExtractFrustumPlanes(const float* m, float planes[6][4])
+        {
+            // Left
+            planes[0][0] = m[3] + m[0]; planes[0][1] = m[7] + m[4]; planes[0][2] = m[11] + m[8]; planes[0][3] = m[15] + m[12];
+            // Right
+            planes[1][0] = m[3] - m[0]; planes[1][1] = m[7] - m[4]; planes[1][2] = m[11] - m[8]; planes[1][3] = m[15] - m[12];
+            // Bottom
+            planes[2][0] = m[3] + m[1]; planes[2][1] = m[7] + m[5]; planes[2][2] = m[11] + m[9]; planes[2][3] = m[15] + m[13];
+            // Top
+            planes[3][0] = m[3] - m[1]; planes[3][1] = m[7] - m[5]; planes[3][2] = m[11] - m[9]; planes[3][3] = m[15] - m[13];
+            // Near (Directive: M[3]-M[2] for Reversed-Z with glClipControl(GL_ZERO_TO_ONE))
+            planes[4][0] = m[3] - m[2]; planes[4][1] = m[7] - m[6]; planes[4][2] = m[11] - m[10]; planes[4][3] = m[15] - m[14];
+            // Far (Directive: M[2])
+            planes[5][0] = m[2]; planes[5][1] = m[6]; planes[5][2] = m[10]; planes[5][3] = m[14];
+
+            for (int i = 0; i < 6; ++i)
+            {
+                float len = sqrtf(planes[i][0] * planes[i][0] + planes[i][1] * planes[i][1] + planes[i][2] * planes[i][2]);
+                planes[i][0] /= len; planes[i][1] /= len; planes[i][2] /= len; planes[i][3] /= len;
+            }
+        }
+
+        static bool IsSphereInFrustum(const float planes[6][4], double cx, double cy, double cz, double radius)
+        {
+            for (int i = 0; i < 6; ++i)
+            {
+                if (planes[i][0] * cx + planes[i][1] * cy + planes[i][2] * cz + planes[i][3] <= -radius) return false;
+            }
+            return true;
+        }
+
+        static bool TraverseAndGraft(int nodeIdx, Buffer<TileNode>& nodes, Math::DVec3 cameraPos, float viewportHeight, float fov, float sseThreshold, const float frustumPlanes[6][4], Buffer<int>& activeNodes, LinearArena& arena, int depth, int& nodesVisited, int maxNodes)
         {
             if (nodeIdx < 0 || nodeIdx >= (int)nodes.count || nodesVisited >= maxNodes || depth > 32) return false;
             nodesVisited++;
+
+            // 0. Frustum Culling (Mandate: Skip nodes and children entirely outside)
+            // Note: sphereCenter is in world ECEF, but for the frustum check to be effective against our ENU-mapped view, 
+            // we should ideally use the ENU-mapped sphere center. However, if the viewProj is built from the ECEF camera,
+            // we use ECEF center. If viewProj is ENU-local, we need the center relative to the ENU origin.
+            // Directive assumes the frustum planes are compatible with the node's worldTransform space (ECEF).
+            if (!IsSphereInFrustum(frustumPlanes, nodes[nodeIdx].sphereCenter.x, nodes[nodeIdx].sphereCenter.y, nodes[nodeIdx].sphereCenter.z, nodes[nodeIdx].sphereRadius))
+            {
+                return false;
+            }
 
             // 1. Calculate Screen Space Error (SSE)
             double dx = nodes[nodeIdx].sphereCenter.x - cameraPos.x;
@@ -226,7 +267,7 @@ namespace Alice
                 bool allChildrenProcessed = true;
                 for (int i = 0; i < count; ++i)
                 {
-                    if (!TraverseAndGraft(first + i, nodes, cameraPos, viewportHeight, fov, sseThreshold, activeNodes, arena, depth + 1, nodesVisited, maxNodes))
+                    if (!TraverseAndGraft(first + i, nodes, cameraPos, viewportHeight, fov, sseThreshold, frustumPlanes, activeNodes, arena, depth + 1, nodesVisited, maxNodes))
                     {
                         allChildrenProcessed = false;
                     }
@@ -272,35 +313,17 @@ namespace Alice
         static bool LoadGLBWithENU(const char* url, MeshPrimitive& out_mesh, Math::DVec3 centerEcef, double* enuMat, const double* transform, Math::Vec3& out_min, Math::Vec3& out_max, LinearArena& arena)
         {
             std::vector<uint8_t> buffer;
-            if (!Network::Fetch(url, buffer)) 
-            {
-                fprintf(stderr, "[TilesetLoader] ERROR: Fetch failed for %s\n", url);
-                return false;
-            }
+            if (!Network::Fetch(url, buffer)) return false;
 
             cgltf_options options = {};
             cgltf_data* data = NULL;
             cgltf_result result = cgltf_parse(&options, buffer.data(), buffer.size(), &data);
-            if (result != cgltf_result_success) 
-            {
-                fprintf(stderr, "[TilesetLoader] ERROR: cgltf_parse failed for %s\n", url);
-                return false;
-            }
+            if (result != cgltf_result_success) return false;
 
             result = cgltf_load_buffers(&options, data, NULL);
-            if (result != cgltf_result_success) 
-            {
-                fprintf(stderr, "[TilesetLoader] ERROR: cgltf_load_buffers failed for %s\n", url);
-                cgltf_free(data); 
-                return false; 
-            }
+            if (result != cgltf_result_success) { cgltf_free(data); return false; }
 
-            if (data->meshes_count == 0 || data->meshes[0].primitives_count == 0) 
-            {
-                fprintf(stderr, "[TilesetLoader] ERROR: No meshes in %s\n", url);
-                cgltf_free(data); 
-                return false; 
-            }
+            if (data->meshes_count == 0 || data->meshes[0].primitives_count == 0) { cgltf_free(data); return false; }
 
             cgltf_primitive* prim = &data->meshes[0].primitives[0];
             cgltf_accessor *pos_acc = NULL, *norm_acc = NULL;
@@ -325,8 +348,7 @@ namespace Alice
                 cgltf_accessor_read_float(pos_acc, i, p, 3);
                 if (norm_acc) cgltf_accessor_read_float(norm_acc, i, n, 3);
 
-                // 1. Positions: Calculate relative translation first in double precision to prevent jitter
-                // (T_tile - centerEcef) + R_tile * p_local
+                // 1. Positions: Calculate relative translation in double precision
                 double relX = transform[12] - centerEcef.x;
                 double relY = transform[13] - centerEcef.y;
                 double relZ = transform[14] - centerEcef.z;
@@ -340,20 +362,10 @@ namespace Alice
                 double ly = enuMat[4] * dx + enuMat[5] * dy + enuMat[6] * dz; // North
                 double lz = enuMat[8] * dx + enuMat[9] * dy + enuMat[10] * dz; // Up
 
-                if (i == 0) 
-                {
-                    printf("[TilesetLoader] URL: %s\n", url);
-                    printf("[TilesetLoader] centerEcef: (%.2f, %.2f, %.2f)\n", centerEcef.x, centerEcef.y, centerEcef.z);
-                    printf("[TilesetLoader] relTranslation: (%.2f, %.2f, %.2f)\n", relX, relY, relZ);
-                    printf("[TilesetLoader] delta: (%.2f, %.2f, %.2f), ENU: (%.2f, %.2f, %.2f)\n", dx, dy, dz, lx, ly, lz);
-                }
-
-                // 3. Map to OpenGL (Directive: Y and Z matching inverted ECEF Z and X respectively)
-                // At Lon 0, Lat 0: East=Y_ecef, North=Z_ecef, Up=X_ecef
-                // So Y_gl = -North (-Z_ecef), Z_gl = -Up (-X_ecef), X_gl = East (Y_ecef)
-                float gx = (float)lx;
-                float gy = (float)(-ly);
-                float gz = (float)(-lz);
+                // 3. Map to OpenGL (Directive: Up -> Y, East -> X, North -> -Z)
+                float gx = (float)lx;    // East -> X
+                float gy = (float)lz;    // Up -> Y
+                float gz = (float)(-ly); // North -> -Z
 
                 verts[i * 6 + 0] = gx; verts[i * 6 + 1] = gy; verts[i * 6 + 2] = gz;
 
@@ -364,20 +376,20 @@ namespace Alice
                 if (gy > out_max.y) out_max.y = gy;
                 if (gz > out_max.z) out_max.z = gz;
 
-                // 4. Normals: Apply the rotation part of the 'transform' to 'n'
+                // 4. Normals: Rotate part of transform
                 double nx_rot = transform[0] * n[0] + transform[4] * n[1] + transform[8] * n[2];
                 double ny_rot = transform[1] * n[0] + transform[5] * n[1] + transform[9] * n[2];
                 double nz_rot = transform[2] * n[0] + transform[6] * n[1] + transform[10] * n[2];
 
-                // 5. Apply the ENU rotation to the rotated normal
+                // 5. Apply ENU rotation
                 double enx = enuMat[0] * nx_rot + enuMat[1] * ny_rot + enuMat[2] * nz_rot;
                 double eny = enuMat[4] * nx_rot + enuMat[5] * ny_rot + enuMat[6] * nz_rot;
                 double enz = enuMat[8] * nx_rot + enuMat[9] * ny_rot + enuMat[10] * nz_rot;
 
-                // 6. Map normal to OpenGL consistent with vertices (X=East, Y=-North, Z=-Up)
+                // 6. Map normal consistent with vertices (X=East, Y=Up, Z=-North)
                 float ngx = (float)enx;
-                float ngy = (float)(-eny);
-                float ngz = (float)(-enz);
+                float ngy = (float)enz;
+                float ngz = (float)(-eny);
 
                 float ilen = 1.0f / sqrtf(ngx * ngx + ngy * ngy + ngz * ngz + 1e-12f);
                 verts[i * 6 + 3] = ngx * ilen; verts[i * 6 + 4] = ngy * ilen; verts[i * 6 + 5] = ngz * ilen;

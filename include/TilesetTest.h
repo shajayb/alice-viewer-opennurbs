@@ -5,6 +5,7 @@
 #include "TilesetLoader.h"
 #include "AliceViewer.h"
 #include "ApiKeyReader.h"
+#include "NormalShader.h"
 
 namespace Alice
 {
@@ -14,12 +15,13 @@ namespace Alice
         Buffer<int> activeNodeIndices;
         Buffer<MeshPrimitive> accumulatedMeshes;
         Math::Vec3 meshMin, meshMax;
+        NormalShader normalShader;
         int meshCount = 0;
         bool initialized = false;
 
         void init()
         {
-            printf("[TilesetTest] Starting Targeted BVH Traversal (St. Paul's)...\n");
+            printf("[TilesetTest] Starting Optimized BVH Traversal (St. Paul's)...\n");
             
             if (!g_Arena.memory) 
             {
@@ -31,6 +33,7 @@ namespace Alice
             }
             
             if (!g_Arena.memory) { printf("[TilesetTest] FATAL: Failed to init arena\n"); exit(1); }
+            if (!normalShader.init()) { printf("[TilesetTest] FATAL: Failed to init NormalShader\n"); exit(1); }
 
             nodes.init(g_Arena, 32768);
             activeNodeIndices.init(g_Arena, 32768);
@@ -73,24 +76,63 @@ namespace Alice
                         double targetLon = -0.0983 * Math::DEG2RAD;
                         Math::DVec3 targetEcef = Math::lla_to_ecef(targetLat, targetLon, 0.0);
 
-                        printf("[TilesetTest] Traversing BVH toward St. Paul's...\n");
+                        double enuMat[16];
+                        Math::denu_matrix(enuMat, targetLat, targetLon);
+
+                        printf("[TilesetTest] Traversing BVH toward St. Paul's with Frustum Culling...\n");
                         
                         AliceViewer* av = AliceViewer::instance();
                         float vHeight = 720.0f;
                         float fov = 0.8f;
+                        float aspect = 16.0f / 9.0f;
                         if (av)
                         {
                             int w, h;
                             glfwGetFramebufferSize(av->window, &w, &h);
                             vHeight = (float)h;
                             fov = av->fov;
+                            aspect = (float)w / (float)h;
                         }
 
+                        // Extract Frustum Planes in ECEF Space
+                        // 1. ECEF to ENU
+                        double mEcefToEnu[16];
+                        for(int i=0; i<16; ++i) mEcefToEnu[i] = enuMat[i];
+                        mEcefToEnu[12] = -(enuMat[0]*targetEcef.x + enuMat[1]*targetEcef.y + enuMat[2]*targetEcef.z);
+                        mEcefToEnu[13] = -(enuMat[4]*targetEcef.x + enuMat[5]*targetEcef.y + enuMat[6]*targetEcef.z);
+                        mEcefToEnu[14] = -(enuMat[8]*targetEcef.x + enuMat[9]*targetEcef.y + enuMat[10]*targetEcef.z);
+
+                        // 2. ENU to GL (X=E, Y=U, Z=-N)
+                        double mEnuToGl[16] = {0};
+                        mEnuToGl[0] = 1.0;  // X = E
+                        mEnuToGl[6] = -1.0; // Z = -N
+                        mEnuToGl[9] = 1.0;  // Y = U
+                        mEnuToGl[15] = 1.0;
+
+                        // 3. View (GL to View)
+                        M4 vMat = av->camera.getViewMatrix();
+                        double dvMat[16];
+                        for(int i=0; i<16; ++i) dvMat[i] = (double)vMat.m[i];
+
+                        // 4. Projection (View to Clip)
+                        float pMat[16];
+                        Math::mat4_perspective(pMat, fov, aspect, 0.1f, 10000.0f);
+                        double dpMat[16];
+                        for(int i=0; i<16; ++i) dpMat[i] = (double)pMat[i];
+
+                        // Combine: P * V * EnuToGl * EcefToEnu
+                        double mTemp[16], mTemp2[16], mFinal[16];
+                        Math::mat4d_mul(mTemp, dvMat, mEnuToGl);
+                        Math::mat4d_mul(mTemp2, mTemp, mEcefToEnu);
+                        Math::mat4d_mul(mFinal, dpMat, mTemp2);
+
+                        float fFinal[16], planes[6][4];
+                        for(int i=0; i<16; ++i) fFinal[i] = (float)mFinal[i];
+                        TilesetLoader::ExtractFrustumPlanes(fFinal, planes);
+
                         int nodesVisited = 0;
-                        TilesetLoader::TraverseAndGraft(rootIdx, nodes, targetEcef, vHeight, fov, 4.0f, activeNodeIndices, g_Arena, 0, nodesVisited, 32768);
+                        TilesetLoader::TraverseAndGraft(rootIdx, nodes, targetEcef, vHeight, fov, 4.0f, planes, activeNodeIndices, g_Arena, 0, nodesVisited, 32768);
                         
-                        double enuMat[16];
-                        Math::denu_matrix(enuMat, targetLat, targetLon);
                         printf("[TilesetTest] Calling loadMeshes with targetEcef: (%.2f, %.2f, %.2f)\n", targetEcef.x, targetEcef.y, targetEcef.z);
                         loadMeshes(targetEcef, enuMat);
                     }
@@ -110,16 +152,17 @@ namespace Alice
                     int rootIdx = TilesetLoader::ParseRecursive(rootJson["root"], nodes, g_Arena, "./");
                     if (rootIdx != -1)
                     {
-                        // Use center from mock tileset for fallback
                         Math::DVec3 targetEcef = nodes[rootIdx].sphereCenter;
                         Math::LLA lla = Math::ecef_to_lla(targetEcef);
                         double enuMat[16];
                         Math::denu_matrix(enuMat, lla.lat, lla.lon);
 
+                        float planes[6][4];
+                        for(int i=0; i<6; ++i) { planes[i][0]=0; planes[i][1]=0; planes[i][2]=0; planes[i][3]=1e30f; } 
+
                         printf("[TilesetTest] Loading fallback meshes via TraverseAndGraft...\n");
                         int nodesVisited = 0;
-                        // Force descent with high viewportHeight and low threshold
-                        TilesetLoader::TraverseAndGraft(rootIdx, nodes, targetEcef, 1000.0f, 0.8f, 1.0f, activeNodeIndices, g_Arena, 0, nodesVisited, 16384);
+                        TilesetLoader::TraverseAndGraft(rootIdx, nodes, targetEcef, 1000.0f, 0.8f, 1.0f, planes, activeNodeIndices, g_Arena, 0, nodesVisited, 16384);
                         
                         printf("[TilesetTest] Calling loadMeshes (Fallback) with targetEcef: (%.2f, %.2f, %.2f)\n", targetEcef.x, targetEcef.y, targetEcef.z);
                         loadMeshes(targetEcef, enuMat);
@@ -140,9 +183,9 @@ namespace Alice
                 float dz = meshMax.z - meshMin.z;
                 float radius = sqrtf(dx*dx + dy*dy + dz*dz) * 0.5f;
 
-                av->camera.distance = radius * 1.8f; // Closer for more detail
-                av->camera.yaw = 0.6f;   // Slight offset
-                av->camera.pitch = 0.4f; // Lower angle for cinematic feel
+                av->camera.distance = radius * 1.8f; 
+                av->camera.yaw = 0.6f;   
+                av->camera.pitch = 0.4f; 
                 printf("[TilesetTest] Cinematic camera framed at (%.2f, %.2f, %.2f) with distance %.2f\n", 
                     av->camera.focusPoint.x, av->camera.focusPoint.y, av->camera.focusPoint.z, av->camera.distance);
             }
@@ -202,7 +245,31 @@ namespace Alice
             backGround(0.9f);
             if (!initialized) return;
 
-            aliceColor3f(0.176f, 0.176f, 0.176f); // Deep Charcoal
+            AliceViewer* av = AliceViewer::instance();
+            if(!av) return;
+
+            glEnable(GL_DEPTH_TEST);
+            
+            int w, h;
+            glfwGetFramebufferSize(av->window, &w, &h);
+            float aspect = (float)w / (float)h;
+
+            float p[16], v[16], pv[16];
+            Math::mat4_perspective(p, av->fov, aspect, 0.1f, 10000.0f);
+            M4 viewMat = av->camera.getViewMatrix();
+            for(int i=0; i<16; ++i) v[i] = viewMat.m[i];
+            Math::mat4_mul(pv, p, v);
+
+            normalShader.use();
+            
+            float m[16], mvp[16], n[9];
+            Math::mat4_identity(m); 
+            Math::mat4_mul(mvp, pv, m);
+            Math::mat3_normal(n, m);
+            
+            normalShader.setMVP(mvp);
+            normalShader.setNormalMatrix(n);
+
             for (int i = 0; i < (int)accumulatedMeshes.count; ++i)
             {
                 accumulatedMeshes[i].draw();

@@ -20,6 +20,8 @@ namespace Alice
     {
         Math::DVec3 sphereCenter;
         double sphereRadius;
+        Math::Vec3 aabbMin;
+        Math::Vec3 aabbMax;
         float geometricError;
         double transform[16];
         double worldTransform[16];
@@ -35,8 +37,88 @@ namespace Alice
         bool refineAdd; // true for ADD, false for REPLACE
     };
 
+    struct ActiveNode
+    {
+        int index;
+        float sse;
+    };
+
     struct TilesetLoader
     {
+        static void CalculateAABB(int nodeIdx, Buffer<TileNode>& nodes, Math::DVec3 targetEcef, double* enuMat)
+        {
+            if (nodeIdx < 0 || nodeIdx >= (int)nodes.count) return;
+            TileNode& node = nodes[nodeIdx];
+            
+            // If it has content and is loaded, we could use mesh bounds, 
+            // but for now let's combine from children if they exist.
+            // If it's a leaf and loaded, use the mesh bounds.
+
+            if (node.isLoaded && node.mesh.vao != 0 && node.childCount == 0)
+            {
+                // Mesh bounds are already relative to targetEcef/ENU (see ProcessAsyncLoad)
+                // They should be stored in node.aabbMin/Max during upload.
+            }
+            else
+            {
+                // Compute initial AABB from the sphere in world-space, but converted to local GL-space
+                double dx = node.sphereCenter.x - targetEcef.x;
+                double dy = node.sphereCenter.y - targetEcef.y;
+                double dz = node.sphereCenter.z - targetEcef.z;
+                
+                double lx = enuMat[0] * dx + enuMat[1] * dy + enuMat[2] * dz;
+                double ly = enuMat[4] * dx + enuMat[5] * dy + enuMat[6] * dz;
+                double lz = enuMat[8] * dx + enuMat[9] * dy + enuMat[10] * dz;
+
+                float gx = (float)lx;    // East -> X
+                float gy = (float)lz;    // Up -> Y
+                float gz = (float)(-ly); // North -> -Z
+                float r = (float)node.sphereRadius;
+
+                node.aabbMin = { gx - r, gy - r, gz - r };
+                node.aabbMax = { gx + r, gy + r, gz + r };
+            }
+
+            for (int i = 0; i < node.childCount; ++i)
+            {
+                int cIdx = node.firstChild + i;
+                CalculateAABB(cIdx, nodes, targetEcef, enuMat);
+                TileNode& child = nodes[cIdx];
+                if (child.aabbMin.x < node.aabbMin.x) node.aabbMin.x = child.aabbMin.x;
+                if (child.aabbMin.y < node.aabbMin.y) node.aabbMin.y = child.aabbMin.y;
+                if (child.aabbMin.z < node.aabbMin.z) node.aabbMin.z = child.aabbMin.z;
+                if (child.aabbMax.x > node.aabbMax.x) node.aabbMax.x = child.aabbMax.x;
+                if (child.aabbMax.y > node.aabbMax.y) node.aabbMax.y = child.aabbMax.y;
+                if (child.aabbMax.z > node.aabbMax.z) node.aabbMax.z = child.aabbMax.z;
+            }
+        }
+
+        static bool IsBelowHorizon(Math::DVec3 nodeCenter, Math::DVec3 cameraPos, double radius)
+        {
+            double d2 = cameraPos.x * cameraPos.x + cameraPos.y * cameraPos.y + cameraPos.z * cameraPos.z;
+            double r = 6378137.0; 
+            if (d2 < r * r) return false; 
+
+            double distToHorizon = sqrt(d2 - r * r);
+            double d = sqrt((nodeCenter.x - cameraPos.x) * (nodeCenter.x - cameraPos.x) +
+                            (nodeCenter.y - cameraPos.y) * (nodeCenter.y - cameraPos.y) +
+                            (nodeCenter.z - cameraPos.z) * (nodeCenter.z - cameraPos.z));
+            
+            if (d > distToHorizon + radius)
+            {
+                Math::DVec3 nnc = { nodeCenter.x, nodeCenter.y, nodeCenter.z };
+                double nlen = sqrt(nnc.x*nnc.x + nnc.y*nnc.y + nnc.z*nnc.z);
+                nnc.x /= nlen; nnc.y /= nlen; nnc.z /= nlen;
+
+                Math::DVec3 ncp = { cameraPos.x, cameraPos.y, cameraPos.z };
+                double clen = sqrt(ncp.x*ncp.x + ncp.y*ncp.y + ncp.z*ncp.z);
+                ncp.x /= clen; ncp.y /= clen; ncp.z /= clen;
+
+                double dot = nnc.x * ncp.x + nnc.y * ncp.y + nnc.z * ncp.z;
+                if (dot < -0.1) return true; 
+            }
+            return false;
+        }
         static std::string ConstructGoogleTilesetURL()
         {
             char key[256];
@@ -234,13 +316,19 @@ namespace Alice
             return true;
         }
 
-        static bool TraverseAndGraft(int nodeIdx, Buffer<TileNode>& nodes, Math::DVec3 cameraPos, float viewportHeight, float fov, float sseThreshold, const float frustumPlanes[6][4], Buffer<int>& activeNodes, LinearArena& arena, int depth, int& nodesVisited, int maxNodes)
+        static bool TraverseAndGraft(int nodeIdx, Buffer<TileNode>& nodes, Math::DVec3 cameraPos, float viewportHeight, float fov, float sseThreshold, const float frustumPlanes[6][4], Buffer<ActiveNode>& activeNodes, LinearArena& arena, int depth, int& nodesVisited, int maxNodes)
         {
             if (nodeIdx < 0 || nodeIdx >= (int)nodes.count || nodesVisited >= maxNodes || depth > 32) return false;
             nodesVisited++;
 
             // 0. Frustum Culling
             if (!IsSphereInFrustum(frustumPlanes, nodes[nodeIdx].sphereCenter.x, nodes[nodeIdx].sphereCenter.y, nodes[nodeIdx].sphereCenter.z, nodes[nodeIdx].sphereRadius))
+            {
+                return false;
+            }
+
+            // 0b. Horizon Culling
+            if (IsBelowHorizon(nodes[nodeIdx].sphereCenter, cameraPos, nodes[nodeIdx].sphereRadius))
             {
                 return false;
             }
@@ -258,9 +346,9 @@ namespace Alice
 
             bool shouldDescend = sse > sseThreshold;
             
-            if (nodes[nodeIdx].isExternal && !nodes[nodeIdx].isLoaded)
+            if (!nodes[nodeIdx].isLoaded && (nodes[nodeIdx].isExternal || nodes[nodeIdx].hasContent))
             {
-                activeNodes.push_back(nodeIdx);
+                activeNodes.push_back({ nodeIdx, (float)sse });
             }
 
             bool hasChildren = (nodes[nodeIdx].childCount > 0);
@@ -277,11 +365,8 @@ namespace Alice
                     // Recursively process children
                     if (!TraverseAndGraft(first + i, nodes, cameraPos, viewportHeight, fov, sseThreshold, frustumPlanes, activeNodes, arena, depth + 1, nodesVisited, maxNodes))
                     {
-                        // If a child didn't refine (e.g. culled or didn't meet SSE), it's "ready" in the sense it doesn't need to be rendered
                     }
                     
-                    // Crucial: In REPLACE mode, if any child that SHOULD be rendered is NOT loaded, we cannot cull the parent.
-                    // This prevents holes/popping and Z-fighting if parent and children are both rendered.
                     if (!nodes[first + i].isLoaded && nodes[first + i].hasContent && !nodes[first + i].isExternal)
                     {
                         allChildrenReady = false;
@@ -290,34 +375,30 @@ namespace Alice
 
                 if (nodes[nodeIdx].refineAdd)
                 {
-                    // ADD: Render both parent and children
                     if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal && nodes[nodeIdx].isLoaded)
                     {
-                        activeNodes.push_back(nodeIdx);
+                        activeNodes.push_back({ nodeIdx, (float)sse });
                     }
                     refined = true;
                 }
                 else
                 {
-                    // REPLACE: If children were processed AND are loaded, parent is omitted
                     if (allChildrenReady)
                     {
                         refined = true;
                     }
                     else if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal && nodes[nodeIdx].isLoaded)
                     {
-                        // Fallback to parent if children aren't ready
-                        activeNodes.push_back(nodeIdx);
+                        activeNodes.push_back({ nodeIdx, (float)sse });
                         refined = true;
                     }
                 }
             }
             else
             {
-                // Terminal node or decided not to descend: add if it has content
                 if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal && nodes[nodeIdx].isLoaded)
                 {
-                    activeNodes.push_back(nodeIdx);
+                    activeNodes.push_back({ nodeIdx, (float)sse });
                     refined = true;
                 }
             }

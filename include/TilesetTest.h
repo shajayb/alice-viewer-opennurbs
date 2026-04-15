@@ -51,7 +51,7 @@ namespace Alice
             program = glCreateProgram(); glAttachShader(program, v); glAttachShader(program, f); glLinkProgram(program);
         }
 
-        void update(const Buffer<int>& activeIndices, const Buffer<TileNode>& nodes, V3 lightDir)
+        void update(const Buffer<ActiveNode>& activeIndices, const Buffer<TileNode>& nodes, V3 lightDir)
         {
             if (activeIndices.count == 0) return;
 
@@ -65,7 +65,7 @@ namespace Alice
             float totalWeight = 0;
             for(int i=0; i<(int)activeIndices.count; ++i)
             {
-                int nIdx = activeIndices[i];
+                int nIdx = activeIndices[i].index;
                 focus.x += (float)nodes[nIdx].sphereCenter.x;
                 focus.y += (float)nodes[nIdx].sphereCenter.y;
                 focus.z += (float)nodes[nIdx].sphereCenter.z;
@@ -87,7 +87,7 @@ namespace Alice
             float minX = 1e30f, maxX = -1e30f, minY = 1e30f, maxY = -1e30f, minZ = 1e30f, maxZ = -1e30f;
             for(int i=0; i<(int)activeIndices.count; ++i)
             {
-                int nIdx = activeIndices[i];
+                int nIdx = activeIndices[i].index;
                 V3 c = { (float)nodes[nIdx].sphereCenter.x, (float)nodes[nIdx].sphereCenter.y, (float)nodes[nIdx].sphereCenter.z };
                 float r = (float)nodes[nIdx].sphereRadius;
 
@@ -108,7 +108,7 @@ namespace Alice
     struct TilesetTestApp
     {
         Buffer<TileNode> nodes;
-        Buffer<int> activeNodeIndices;
+        Buffer<ActiveNode> activeNodeIndices;
         Buffer<uint32_t> nodeLastFrameActive;
         Math::Vec3 meshMin, meshMax;
         int meshCount = 0;
@@ -133,6 +133,31 @@ namespace Alice
         std::thread workerThread;
         bool stopWorker = false;
         int activeRequests = 0;
+
+        // Task 1: Architectural Purity - Pool for AsyncLoadRequest
+        TilesetLoader::AsyncLoadRequest requestPool[64];
+        bool requestPoolInUse[64];
+
+        TilesetLoader::AsyncLoadRequest* allocateRequest()
+        {
+            for (int i = 0; i < 64; ++i)
+            {
+                if (!requestPoolInUse[i])
+                {
+                    requestPoolInUse[i] = true;
+                    memset(&requestPool[i], 0, sizeof(TilesetLoader::AsyncLoadRequest));
+                    return &requestPool[i];
+                }
+            }
+            return nullptr;
+        }
+
+        void freeRequest(TilesetLoader::AsyncLoadRequest* req)
+        {
+            if (!req) return;
+            int idx = (int)(req - &requestPool[0]);
+            if (idx >= 0 && idx < 64) requestPoolInUse[idx] = false;
+        }
 
         void workerFunc()
         {
@@ -168,16 +193,16 @@ namespace Alice
             float gx = camera.focusPoint.x + camera.distance * cp * sy;       
             float gy = camera.focusPoint.y + camera.distance * sp;            
             float gz = camera.focusPoint.z - camera.distance * cp * cy;       
-            
+
             double east = (double)gx;
             double north = (double)(-gz); 
             double up = (double)gy;
-            
+
             Math::DVec3 eyeEcef;
             eyeEcef.x = targetEcef.x + east * enuMat[0] + north * enuMat[4] + up * enuMat[8];
             eyeEcef.y = targetEcef.y + east * enuMat[1] + north * enuMat[5] + up * enuMat[9];
             eyeEcef.z = targetEcef.z + east * enuMat[2] + north * enuMat[6] + up * enuMat[10];
-            
+
             return eyeEcef;
         }
 
@@ -192,6 +217,7 @@ namespace Alice
             activeNodeIndices.init(g_Arena, 32768);
             nodeLastFrameActive.init(g_Arena, 32768);
             memset(nodeLastFrameActive.data, 0, 32768 * sizeof(uint32_t));
+            memset(requestPoolInUse, 0, sizeof(requestPoolInUse));
 
             AliceViewer* av = AliceViewer::instance();
             int w, h;
@@ -224,7 +250,37 @@ namespace Alice
                         double targetLat = 51.5138 * Math::DEG2RAD; // London
                         double targetLon = -0.0983 * Math::DEG2RAD;
                         targetEcef = Math::lla_to_ecef(targetLat, targetLon, 0.0);
-                        Math::denu_matrix(enuMat, targetLat, targetLon);        
+                        Math::denu_matrix(enuMat, targetLat, targetLon);
+
+                        // Task 4: Calculate AABBs with relative coords
+                        TilesetLoader::CalculateAABB(rootIdx, nodes, targetEcef, enuMat);
+
+                        // Task 3: Auto-Framing
+                        // Find node closest to London target (51.5138, -0.0983)
+                        int bestNode = rootIdx;
+                        double minDist = 1e30;
+                        for (int i = 0; i < (int)nodes.count; ++i)
+                        {
+                            if (nodes[i].hasContent)
+                            {
+                                double dx = nodes[i].sphereCenter.x - targetEcef.x;
+                                double dy = nodes[i].sphereCenter.y - targetEcef.y;
+                                double dz = nodes[i].sphereCenter.z - targetEcef.z;
+                                double d = dx*dx + dy*dy + dz*dz;
+                                if (d < minDist) { minDist = d; bestNode = i; }
+                            }
+                        }
+
+                        // Frame bestNode AABB
+                        TileNode& bn = nodes[bestNode];
+                        av->camera.focusPoint = { (bn.aabbMin.x + bn.aabbMax.x) * 0.5f, (bn.aabbMin.y + bn.aabbMax.y) * 0.5f, (bn.aabbMin.z + bn.aabbMax.z) * 0.5f };
+                        V3 size = { bn.aabbMax.x - bn.aabbMin.x, bn.aabbMax.y - bn.aabbMin.y, bn.aabbMax.z - bn.aabbMin.z };
+                        float maxDim = (std::max)(size.x, (std::max)(size.y, size.z));
+
+                        av->camera.distance = maxDim * 2.0f;
+                        av->camera.pitch = -0.65f;
+                        av->camera.yaw = 0.25f;
+                        printf("[Auto-Framing] Best node: %d, distance: %.2f\n", bestNode, av->camera.distance);
                     }
                     else isFallback = true;
                 }
@@ -243,6 +299,19 @@ namespace Alice
                         targetEcef = nodes[rootIdx].sphereCenter;   
                         Math::LLA lla = Math::ecef_to_lla(targetEcef);
                         Math::denu_matrix(enuMat, lla.lat, lla.lon);
+                        TilesetLoader::CalculateAABB(rootIdx, nodes, targetEcef, enuMat);
+
+                        // Auto-Framing for Fallback
+                        int bestNode = rootIdx;
+                        for(int i=0; i<(int)nodes.count; ++i) if(nodes[i].hasContent) { bestNode = i; break; }
+
+                        TileNode& bn = nodes[bestNode];
+                        av->camera.focusPoint = { (bn.aabbMin.x + bn.aabbMax.x) * 0.5f, (bn.aabbMin.y + bn.aabbMax.y) * 0.5f, (bn.aabbMin.z + bn.aabbMax.z) * 0.5f };
+                        float maxDim = (std::max)(bn.aabbMax.x - bn.aabbMin.x, (std::max)(bn.aabbMax.y - bn.aabbMin.y, bn.aabbMax.z - bn.aabbMin.z));
+                        
+                        av->camera.distance = (maxDim > 1.0f ? maxDim * 2.5f : 450.0f);
+                        av->camera.pitch = -0.65f;
+                        av->camera.yaw = 0.25f;
                     }
                 }
             }
@@ -256,20 +325,6 @@ namespace Alice
                 printf("[TilesetTest] FALLBACK: Using %s\n", rootUrl.c_str());
             }
 
-            if (rootIdx != -1)
-            {
-                printf("[TilesetTest] Root node parsed. Total nodes: %d\n", (int)nodes.count);
-                meshMin = { -100, -100, -100 }; meshMax = { 100, 100, 100 };
-                av->camera.focusPoint = { 0, 0, 0 };
-                av->camera.distance = 450.0f;
-                av->camera.pitch = -0.65f;
-                av->camera.yaw = 0.25f;
-            }
-            else
-            {
-                printf("[TilesetTest] ERROR: Failed to load any tileset root.\n");
-            }
-
             workerThread = std::thread(&TilesetTestApp::workerFunc, this);
             initialized = true;
         }
@@ -279,8 +334,7 @@ namespace Alice
             std::vector<TilesetLoader::AsyncLoadRequest*> ready;
             {
                 std::lock_guard<std::mutex> lock(queueMutex);
-                ready = completedRequests;
-                completedRequests.clear();
+                ready.swap(completedRequests);
             }
 
             int uploadBudget = 2; // Max 2 GLB GPU uploads per frame
@@ -306,11 +360,14 @@ namespace Alice
                         node.isLoaded = true;
                         node.isExternal = false;
                         printf("[Async] JSON Grafted: %s (Root Idx: %d)\n", req->url, extRoot);
+                        
+                        // Recalculate AABBs after grafting
+                        TilesetLoader::CalculateAABB(rootIdx, nodes, targetEcef, enuMat);
                     }
                     node.isLoading = false;
                     activeRequests--;
                     free(req->jsonBuffer);
-                    delete req;
+                    freeRequest(req);
                     continue;
                 }
 
@@ -333,13 +390,17 @@ namespace Alice
                     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
                     glEnableVertexAttribArray(2);
                     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
-                    
+
                     if (req->hasTexture)
                     {
                         node.mesh.albedoTex = TextureCache::Get().Acquire(req->texKey, req->texData, req->texWidth, req->texHeight, req->texChannels);
                         printf("[Async] Texture Uploaded: %s (%dx%d, handle: %u)\n", req->texKey, req->texWidth, req->texHeight, node.mesh.albedoTex);
                         stbi_image_free(req->texData);
                     }
+
+                    // Task 4: AABB Refinement from glTF mesh bounds
+                    node.aabbMin = req->min;
+                    node.aabbMax = req->max;
 
                     node.isLoaded = true;
                     node.isLoading = false;
@@ -348,13 +409,15 @@ namespace Alice
 
                     free(req->verts);
                     free(req->indices);
-                    delete req;
+                    freeRequest(req);
+
+                    // Optional: Propagate tighter bounds? Usually better to just re-CalculateAABB occasionally or once per frame if many loaded.
                 }
                 else if (!req->success)
                 {
                     nodes[req->nodeIdx].isLoading = false;
                     activeRequests--;
-                    delete req;
+                    freeRequest(req);
                 }
                 else
                 {
@@ -365,23 +428,41 @@ namespace Alice
                 }
             }
 
-            char key[256];
-            bool hasKey = ApiKeyReader::GetGoogleKey(key, 256);
+            // Task 3: Performance - SSE Prioritization for pending nodes only
+            std::vector<int> pending;
             for (int i = 0; i < (int)activeNodeIndices.count; ++i)
             {
-                int nIdx = activeNodeIndices[i];
-                if (nodes[nIdx].isLoading || nodes[nIdx].isLoaded) continue;
-                if (!nodes[nIdx].hasContent && !nodes[nIdx].isExternal) continue;
+                int nIdx = activeNodeIndices[i].index;
+                if (!nodes[nIdx].isLoading && !nodes[nIdx].isLoaded && (nodes[nIdx].hasContent || nodes[nIdx].isExternal))
+                {
+                    pending.push_back(i);
+                }
+            }
+
+            if (!pending.empty())
+            {
+                std::sort(pending.begin(), pending.end(), [&](int a, int b) {
+                    return activeNodeIndices[a].sse > activeNodeIndices[b].sse;
+                });
+            }
+
+            char key[256];
+            bool hasKey = ApiKeyReader::GetGoogleKey(key, 256);
+            for (int i : pending)
+            {
+                int nIdx = activeNodeIndices[i].index;
                 if (activeRequests >= 8) break;
 
-                if (nodes[nIdx].hasContent && std::string(nodes[nIdx].contentUri) == "MOCK_CATHEDRAL")
+                if (nodes[nIdx].hasContent && nodes[nIdx].contentUri && std::string(nodes[nIdx].contentUri) == "MOCK_CATHEDRAL")
                 {
                     MockCathedral::Generate(nodes[nIdx].mesh, g_Arena);
                     nodes[nIdx].isLoaded = true;
                     continue;
                 }
 
-                auto req = new TilesetLoader::AsyncLoadRequest();
+                auto req = allocateRequest();
+                if (!req) break;
+
                 req->nodeIdx = nIdx;
                 req->isJson = nodes[nIdx].isExternal;
 
@@ -407,6 +488,7 @@ namespace Alice
                 }
             }
         }
+
 
         void unloadOldMeshes()
         {
@@ -464,7 +546,7 @@ namespace Alice
             int nodesVisited = 0;
             TilesetLoader::TraverseAndGraft(rootIdx, nodes, getEyeEcef(av->camera), (float)h, av->fov, 16.0f, planes, activeNodeIndices, g_Arena, 0, nodesVisited, 32768);
 
-            for(int i=0; i<(int)activeNodeIndices.count; ++i) nodeLastFrameActive[activeNodeIndices[i]] = currentFrame;
+            for(int i=0; i<(int)activeNodeIndices.count; ++i) nodeLastFrameActive[activeNodeIndices[i].index] = currentFrame;
 
             updateAsyncLoading();
             unloadOldMeshes();
@@ -480,7 +562,7 @@ namespace Alice
             glUniformMatrix4fv(glGetUniformLocation(shadow.program, "uLightSpaceMatrix"), 1, GL_FALSE, shadow.lightSpaceMat);
             for (int i = 0; i < (int)activeNodeIndices.count; ++i)
             {
-                int nIdx = activeNodeIndices[i];
+                int nIdx = activeNodeIndices[i].index;
                 if (nodes[nIdx].isLoaded) nodes[nIdx].mesh.draw();
             }
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -491,7 +573,7 @@ namespace Alice
             float ident[16]; Math::mat4_identity(ident);
             for (int i = 0; i < (int)activeNodeIndices.count; ++i)
             {
-                int nIdx = activeNodeIndices[i];
+                int nIdx = activeNodeIndices[i].index;
                 if (nodes[nIdx].isLoaded) ssao.addObject(&nodes[nIdx].mesh, ident, 0.7f, 0.7f, 0.7f, 0, false, nodes[nIdx].mesh.albedoTex);
             }
 

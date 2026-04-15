@@ -11,28 +11,31 @@ namespace Alice
     {
         static void Generate(MeshPrimitive& out_mesh, LinearArena& arena)
         {
-            // Simple assembly of boxes
-            // Nave, Transepts, Dome
-            
             struct Box { Math::Vec3 center; Math::Vec3 size; };
             std::vector<Box> boxes;
-            
-            // Nave
-            boxes.push_back({ {0, 0, 15}, {80, 20, 30} });
-            // Transepts
-            boxes.push_back({ {0, 0, 15}, {20, 60, 30} });
-            // Dome Base
-            boxes.push_back({ {0, 0, 35}, {30, 30, 10} });
-            // Dome
-            boxes.push_back({ {0, 0, 50}, {25, 25, 20} });
-            // Towers
-            boxes.push_back({ {-35, 0, 25}, {10, 10, 50} });
-            boxes.push_back({ {35, 0, 25}, {10, 10, 50} });
 
-            // Each box is 24 vertices, 36 indices
+            // Nave (Long central part)
+            boxes.push_back({ {0, 0, 15}, {80, 20, 30} });
+            // Transepts (Cross part)
+            boxes.push_back({ {0, 0, 15}, {20, 60, 30} });
+
+            // Dome Base
+            boxes.push_back({ {0, 0, 32}, {28, 28, 4} });
+            // Dome (Multiple boxes to approximate a dome shape)
+            boxes.push_back({ {0, 0, 38}, {24, 24, 8} });
+            boxes.push_back({ {0, 0, 46}, {18, 18, 8} });
+            boxes.push_back({ {0, 0, 52}, {10, 10, 4} });
+
+            // Front Towers (Two tall thin towers at one end of the Nave)
+            boxes.push_back({ {-35, -8, 30}, {10, 10, 60} });
+            boxes.push_back({ {35, -8, 30}, {10, 10, 60} });
+
+            // Spire on top of Dome
+            boxes.push_back({ {0, 0, 60}, {2, 2, 20} });
+
             int totalV = (int)boxes.size() * 24;
             int totalI = (int)boxes.size() * 36;
-            
+
             float* vdata = (float*)arena.allocate(totalV * 8 * sizeof(float));
             unsigned int* idata = (unsigned int*)arena.allocate(totalI * sizeof(unsigned int));
 

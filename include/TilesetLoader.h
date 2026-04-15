@@ -29,6 +29,7 @@ namespace Alice
         MeshPrimitive mesh;
         bool isLoaded;
         bool isExternal;
+        bool isLoading;
         bool hasContent;
         bool refineAdd; // true for ADD, false for REPLACE
     };
@@ -58,11 +59,17 @@ namespace Alice
             try
             {
                 out_tileset = json::parse(buffer.begin(), buffer.end());
+                if (out_tileset.contains("error"))
+                {
+                    fprintf(stderr, "[TilesetLoader] ERROR: Google API returned error: %s\n", out_tileset["error"].dump().c_str());
+                    return false;
+                }
                 return true;
             }
             catch (...)
             {
                 fprintf(stderr, "[TilesetLoader] ERROR: JSON parse failed for %s\n", url.c_str());
+                if (!buffer.empty()) fprintf(stderr, "[TilesetLoader] Buffer (first 100): %.*s\n", (int)(std::min)((size_t)100, buffer.size()), (char*)buffer.data());
                 return false;
             }
         }
@@ -208,7 +215,7 @@ namespace Alice
             for (int i = 0; i < 6; ++i)
             {
                 float len = sqrtf(planes[i][0] * planes[i][0] + planes[i][1] * planes[i][1] + planes[i][2] * planes[i][2]);
-                planes[i][0] /= len; planes[i][1] /= len; planes[i][2] /= len; planes[i][3] /= len;
+                if (len > 1e-6f) { planes[i][0] /= len; planes[i][1] /= len; planes[i][2] /= len; planes[i][3] /= len; }
             }
         }
 
@@ -216,7 +223,12 @@ namespace Alice
         {
             for (int i = 0; i < 6; ++i)
             {
-                if (planes[i][0] * cx + planes[i][1] * cy + planes[i][2] * cz + planes[i][3] <= -radius) return false;
+                double dist = planes[i][0] * cx + planes[i][1] * cy + planes[i][2] * cz + planes[i][3];
+                if (dist <= -radius) 
+                {
+                    printf("[Culling] Node failed plane %d. Dist: %.2f, Radius: %.2f\n", i, (float)dist, (float)radius);
+                    return false;
+                }
             }
             return true;
         }
@@ -244,10 +256,10 @@ namespace Alice
             double sse = (geometricError * viewportHeight) / (distance * 2.0 * tan(fov * 0.5));
 
             bool shouldDescend = sse > sseThreshold;
-
-            if (shouldDescend && nodes[nodeIdx].isExternal)
+            
+            if (nodes[nodeIdx].isExternal && !nodes[nodeIdx].isLoaded)
             {
-                FetchAndGraft(nodeIdx, nodes, arena);
+                activeNodes.push_back(nodeIdx);
             }
 
             bool hasChildren = (nodes[nodeIdx].childCount > 0);
@@ -326,6 +338,9 @@ namespace Alice
             size_t vcount;
             size_t icount;
             Math::Vec3 min, max;
+            bool isJson;
+            uint8_t* jsonBuffer;
+            size_t jsonBufferSize;
             bool success;
             bool completed;
         };
@@ -334,6 +349,16 @@ namespace Alice
         {
             std::vector<uint8_t> buffer;
             if (!Network::Fetch(req->url, buffer)) { req->success = false; req->completed = true; return; }
+
+            if (req->isJson)
+            {
+                req->jsonBufferSize = buffer.size();
+                req->jsonBuffer = (uint8_t*)malloc(req->jsonBufferSize);
+                memcpy(req->jsonBuffer, buffer.data(), req->jsonBufferSize);
+                req->success = true;
+                req->completed = true;
+                return;
+            }
 
             cgltf_options options = {};
             cgltf_data* data = NULL;

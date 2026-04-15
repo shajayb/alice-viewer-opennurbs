@@ -50,17 +50,29 @@ namespace Alice
             program = glCreateProgram(); glAttachShader(program, v); glAttachShader(program, f); glLinkProgram(program);
         }
 
-        void update(V3 focus, V3 lightDir)
+        void update(const Buffer<int>& activeIndices, const Buffer<TileNode>& nodes, V3 lightDir)
         {
-            float size = 500.0f;
-            Math::mat4_ortho(lightProj, -size, size, -size, size, 1.0f, 2000.0f);
-            V3 eye = focus - lightDir * 1000.0f;
-            
+            if (activeIndices.count == 0) return;
+
             V3 f = lightDir;
             V3 worldUp = (fabsf(f.z) > 0.9f) ? V3(1,0,0) : V3(0,0,1);
-            V3 s = { f.y*worldUp.z - f.z*worldUp.y, f.z*worldUp.x - f.x*worldUp.z, f.x*worldUp.y - f.y*worldUp.x };
+            V3 s = crs(worldUp, f);
             float slen = sqrtf(s.x*s.x + s.y*s.y + s.z*s.z); s.x/=slen; s.y/=slen; s.z/=slen;
-            V3 u = { s.y*f.z - s.z*f.y, s.z*f.x - s.x*f.z, s.x*f.y - s.y*f.x };
+            V3 u = crs(f, s);
+
+            V3 focus = {0,0,0};
+            float totalWeight = 0;
+            for(int i=0; i<(int)activeIndices.count; ++i)
+            {
+                int nIdx = activeIndices[i];
+                focus.x += (float)nodes[nIdx].sphereCenter.x;
+                focus.y += (float)nodes[nIdx].sphereCenter.y;
+                focus.z += (float)nodes[nIdx].sphereCenter.z;
+                totalWeight += 1.0f;
+            }
+            focus.x /= totalWeight; focus.y /= totalWeight; focus.z /= totalWeight;
+
+            V3 eye = focus - f * 2000.0f;
             
             memset(lightView, 0, sizeof(lightView));
             lightView[0] = s.x; lightView[4] = s.y; lightView[8] = s.z;
@@ -71,6 +83,23 @@ namespace Alice
             lightView[14] = (f.x*eye.x + f.y*eye.y + f.z*eye.z);
             lightView[15] = 1.0f;
 
+            float minX = 1e30f, maxX = -1e30f, minY = 1e30f, maxY = -1e30f, minZ = 1e30f, maxZ = -1e30f;
+            for(int i=0; i<(int)activeIndices.count; ++i)
+            {
+                int nIdx = activeIndices[i];
+                V3 c = { (float)nodes[nIdx].sphereCenter.x, (float)nodes[nIdx].sphereCenter.y, (float)nodes[nIdx].sphereCenter.z };
+                float r = (float)nodes[nIdx].sphereRadius;
+
+                float cx = lightView[0]*c.x + lightView[4]*c.y + lightView[8]*c.z + lightView[12];
+                float cy = lightView[1]*c.x + lightView[5]*c.y + lightView[9]*c.z + lightView[13];
+                float cz = lightView[2]*c.x + lightView[6]*c.y + lightView[10]*c.z + lightView[14];
+
+                if(cx - r < minX) minX = cx - r; if(cx + r > maxX) maxX = cx + r;
+                if(cy - r < minY) minY = cy - r; if(cy + r > maxY) maxY = cy + r;
+                if(cz - r < minZ) minZ = cz - r; if(cz + r > maxZ) maxZ = cz + r;
+            }
+
+            Math::mat4_ortho(lightProj, minX, maxX, minY, maxY, -maxZ, -minZ);
             Math::mat4_mul(lightSpaceMat, lightProj, lightView);
         }
     };
@@ -215,11 +244,27 @@ namespace Alice
                 }
             }
 
+            if (isGoogle)
+            {
+                printf("[TilesetTest] Google Tileset Root Loaded. targetEcef: %.2f, %.2f, %.2f\n", targetEcef.x, targetEcef.y, targetEcef.z);
+            }
+            if (isFallback)
+            {
+                printf("[TilesetTest] FALLBACK: Using %s\n", rootUrl.c_str());
+            }
+
             if (rootIdx != -1)
             {
+                printf("[TilesetTest] Root node parsed. Total nodes: %d\n", (int)nodes.count);
                 meshMin = { -100, -100, -100 }; meshMax = { 100, 100, 100 };
                 av->camera.focusPoint = { 0, 0, 0 };
-                av->camera.distance = 500.0f;
+                av->camera.distance = 450.0f;
+                av->camera.pitch = -0.65f;
+                av->camera.yaw = 0.25f;
+            }
+            else
+            {
+                printf("[TilesetTest] ERROR: Failed to load any tileset root.\n");
             }
 
             workerThread = std::thread(&TilesetTestApp::workerFunc, this);
@@ -238,6 +283,34 @@ namespace Alice
             int uploadBudget = 2; // Max 2 GLB GPU uploads per frame
             for (auto req : ready)
             {
+                if (req->success && req->isJson)
+                {
+                    TileNode& node = nodes[req->nodeIdx];
+                    json ext;
+                    try {
+                        ext = json::parse(req->jsonBuffer, req->jsonBuffer + req->jsonBufferSize);
+                    } catch(...) { req->success = false; }
+
+                    if (req->success && ext.contains("root"))
+                    {
+                        std::string newBaseUrl = req->url;
+                        size_t pos = newBaseUrl.find_last_of('/');
+                        if (pos != std::string::npos) newBaseUrl = newBaseUrl.substr(0, pos + 1);
+
+                        int extRoot = TilesetLoader::ParseRecursive(ext["root"], nodes, g_Arena, newBaseUrl, node.worldTransform);
+                        node.firstChild = extRoot;
+                        node.childCount = 1;
+                        node.isLoaded = true;
+                        node.isExternal = false;
+                        printf("[Async] JSON Grafted: %s (Root Idx: %d)\n", req->url, extRoot);
+                    }
+                    node.isLoading = false;
+                    activeRequests--;
+                    free(req->jsonBuffer);
+                    delete req;
+                    continue;
+                }
+
                 if (uploadBudget > 0 && req->success)
                 {
                     TileNode& node = nodes[req->nodeIdx];
@@ -259,6 +332,7 @@ namespace Alice
                     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
                     
                     node.isLoaded = true;
+                    node.isLoading = false;
                     activeRequests--;
                     uploadBudget--;
 
@@ -268,6 +342,7 @@ namespace Alice
                 }
                 else if (!req->success)
                 {
+                    nodes[req->nodeIdx].isLoading = false;
                     activeRequests--;
                     delete req;
                 }
@@ -285,42 +360,40 @@ namespace Alice
             for (int i = 0; i < (int)activeNodeIndices.count; ++i)
             {
                 int nIdx = activeNodeIndices[i];
-                if (nodes[nIdx].hasContent && !nodes[nIdx].isExternal && !nodes[nIdx].isLoaded && activeRequests < 8)
+                if (nodes[nIdx].isLoading || nodes[nIdx].isLoaded) continue;
+                if (!nodes[nIdx].hasContent && !nodes[nIdx].isExternal) continue;
+                if (activeRequests >= 8) break;
+
+                if (nodes[nIdx].hasContent && std::string(nodes[nIdx].contentUri) == "MOCK_CATHEDRAL")
                 {
-                    // Check if already in requestQueue? For now, we use node.isLoaded check.
-                    // To prevent multiple requests for same node, we need a 'isLoading' flag.
-                    static std::vector<bool> isLoading;
-                    if (isLoading.size() < nodes.count) isLoading.resize(nodes.count, false);
-                    if (isLoading[nIdx]) continue;
+                    MockCathedral::Generate(nodes[nIdx].mesh, g_Arena);
+                    nodes[nIdx].isLoaded = true;
+                    continue;
+                }
 
-                    if (std::string(nodes[nIdx].contentUri) == "MOCK_CATHEDRAL")
-                    {
-                        MockCathedral::Generate(nodes[nIdx].mesh, g_Arena);
-                        nodes[nIdx].isLoaded = true;
-                        continue;
-                    }
+                auto req = new TilesetLoader::AsyncLoadRequest();
+                req->nodeIdx = nIdx;
+                req->isJson = nodes[nIdx].isExternal;
 
-                    auto req = new TilesetLoader::AsyncLoadRequest();
-                    req->nodeIdx = nIdx;
-                    std::string glbUrl = nodes[nIdx].contentUri;
-                    if (glbUrl.find("http") == std::string::npos) glbUrl = std::string(nodes[nIdx].baseUrl) + glbUrl;
-                    if (hasKey && glbUrl.find("googleapis.com") != std::string::npos)
-                    {
-                        glbUrl += (glbUrl.find('?') == std::string::npos ? "?" : "&");
-                        glbUrl += "key="; glbUrl += key;
-                    }
-                    strncpy(req->url, glbUrl.c_str(), 1024);
-                    req->centerEcef = targetEcef;
-                    memcpy(req->enuMat, enuMat, sizeof(enuMat));
-                    memcpy(req->transform, nodes[nIdx].worldTransform, sizeof(req->transform));
-                    req->success = false; req->completed = false;
+                std::string url = nodes[nIdx].contentUri ? nodes[nIdx].contentUri : "";
+                if (url.find("http") == std::string::npos) url = std::string(nodes[nIdx].baseUrl) + url;
+                if (hasKey && url.find("googleapis.com") != std::string::npos)
+                {
+                    url += (url.find('?') == std::string::npos ? "?" : "&");
+                    url += "key="; url += key;
+                }
+                strncpy(req->url, url.c_str(), 1024);
+                req->centerEcef = targetEcef;
+                memcpy(req->enuMat, enuMat, sizeof(enuMat));
+                memcpy(req->transform, nodes[nIdx].worldTransform, sizeof(req->transform));
+                req->success = false; req->completed = false;
+                req->jsonBuffer = nullptr;
 
-                    isLoading[nIdx] = true;
-                    activeRequests++;
-                    {
-                        std::lock_guard<std::mutex> lock(queueMutex);
-                        requestQueue.push(req);
-                    }
+                nodes[nIdx].isLoading = true;
+                activeRequests++;
+                {
+                    std::lock_guard<std::mutex> lock(queueMutex);
+                    requestQueue.push(req);
                 }
             }
         }
@@ -350,9 +423,11 @@ namespace Alice
 
             double mEcefToEnu[16];
             Math::mat4d_identity(mEcefToEnu);
-            mEcefToEnu[0] = enuMat[0]; mEcefToEnu[1] = enuMat[1]; mEcefToEnu[2] = enuMat[2];
-            mEcefToEnu[4] = enuMat[4]; mEcefToEnu[5] = enuMat[5]; mEcefToEnu[6] = enuMat[6];
-            mEcefToEnu[8] = enuMat[8]; mEcefToEnu[9] = enuMat[9]; mEcefToEnu[10] = enuMat[10];
+            // Rotation part: Row 0 = East, Row 1 = North, Row 2 = Up
+            mEcefToEnu[0] = enuMat[0]; mEcefToEnu[4] = enuMat[1]; mEcefToEnu[8] = enuMat[2];
+            mEcefToEnu[1] = enuMat[4]; mEcefToEnu[5] = enuMat[5]; mEcefToEnu[9] = enuMat[6];
+            mEcefToEnu[2] = enuMat[8]; mEcefToEnu[6] = enuMat[9]; mEcefToEnu[10] = enuMat[10];
+            // Translation part: T = -R * targetEcef
             mEcefToEnu[12] = -(enuMat[0]*targetEcef.x + enuMat[1]*targetEcef.y + enuMat[2]*targetEcef.z);
             mEcefToEnu[13] = -(enuMat[4]*targetEcef.x + enuMat[5]*targetEcef.y + enuMat[6]*targetEcef.z);
             mEcefToEnu[14] = -(enuMat[8]*targetEcef.x + enuMat[9]*targetEcef.y + enuMat[10]*targetEcef.z);
@@ -362,7 +437,8 @@ namespace Alice
 
             M4 vMat = av->camera.getViewMatrix();
             double dvMat[16]; for(int i=0; i<16; ++i) dvMat[i] = (double)vMat.m[i];   
-            float pMat[16]; Math::mat4_perspective(pMat, av->fov, aspect, 0.1f, 10000.0f);
+            M4 projM4 = AliceViewer::makeInfiniteReversedZProjRH(av->fov, aspect, 0.1f);
+            float pMat[16]; memcpy(pMat, projM4.m, sizeof(pMat));
             double dpMat[16]; for(int i=0; i<16; ++i) dpMat[i] = (double)pMat[i];     
 
             double mTemp[16], mTemp2[16], mFinal[16];
@@ -376,14 +452,14 @@ namespace Alice
 
             activeNodeIndices.clear();
             int nodesVisited = 0;
-            TilesetLoader::TraverseAndGraft(rootIdx, nodes, getEyeEcef(av->camera), (float)h, av->fov, 4.0f, planes, activeNodeIndices, g_Arena, 0, nodesVisited, 32768);
+            TilesetLoader::TraverseAndGraft(rootIdx, nodes, getEyeEcef(av->camera), (float)h, av->fov, 16.0f, planes, activeNodeIndices, g_Arena, 0, nodesVisited, 32768);
 
             for(int i=0; i<(int)activeNodeIndices.count; ++i) nodeLastFrameActive[activeNodeIndices[i]] = currentFrame;
 
             updateAsyncLoading();
             unloadOldMeshes();
 
-            shadow.update(av->camera.focusPoint, lightDir);
+            shadow.update(activeNodeIndices, nodes, lightDir);
 
             // Pass 1: Shadow Map
             glViewport(0, 0, shadow.width, shadow.height);

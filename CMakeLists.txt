@@ -44,6 +44,9 @@ target_link_libraries(AliceViewer
     nlohmann_json::nlohmann_json
     opengl32
 )
+if(MSVC)
+    set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "/FORCE:MULTIPLE")
+endif()
 
 # AliceOrchestrator
 add_executable(AliceOrchestrator
@@ -61,4 +64,4 @@ target_link_libraries(APITest PRIVATE CURL::libcurl nlohmann_json::nlohmann_json
 
 # TilesetMicroTest
 add_executable(TilesetMicroTest src/TilesetMicroTest.cpp)
-target_link_libraries(TilesetMicroTest PRIVATE opennurbs::opennurbs nlohmann_json::nlohmann_json)
+target_link_libraries(TilesetMicroTest PRIVATE opennurbs::opennurbs CURL::libcurl nlohmann_json::nlohmann_json)

@@ -21,7 +21,7 @@ namespace Alice
             return realsize;
         }
 
-        static bool Fetch(const char* url, std::vector<uint8_t>& buffer)
+        static bool Fetch(const char* url, std::vector<uint8_t>& buffer, long* out_status_code = nullptr, std::string* out_body = nullptr)
         {
             std::string sUrl = url;
             if (sUrl.find("http://") == 0 || sUrl.find("https://") == 0)
@@ -36,9 +36,19 @@ namespace Alice
                 curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
                 curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
                 curl_easy_setopt(curl, CURLOPT_USERAGENT, "AliceViewer/1.0");
-                // curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 
                 CURLcode res = curl_easy_perform(curl);
+                
+                if (out_status_code)
+                {
+                    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, out_status_code);
+                }
+                
+                if (out_body && !buffer.empty())
+                {
+                    *out_body = std::string((char*)buffer.data(), buffer.size());
+                }
+
                 curl_easy_cleanup(curl);
                 return (res == CURLE_OK);
             }

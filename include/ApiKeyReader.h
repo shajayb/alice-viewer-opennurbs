@@ -11,7 +11,14 @@ namespace Alice
     {
         static bool GetGoogleKey(char* outBuffer, size_t bufferSize)
         {
-            std::ifstream file("API_KEYS.txt");
+            const char* paths[] = { "API_KEYS.txt", "../../API_KEYS.txt", "../API_KEYS.txt" };
+            std::ifstream file;
+            for (const char* path : paths)
+            {
+                file.open(path);
+                if (file.is_open()) break;
+            }
+
             if (!file.is_open())
             {
                 return false;

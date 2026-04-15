@@ -166,7 +166,7 @@ while ($true)
 
     if (Test-Path "handoff.trigger") { Remove-Item "handoff.trigger" -Force }
 
-    Clear-GeminiSessions 
+    Clear-GeminiSessions # Wipe history so Executor starts fresh
 
     # ====================================================================
     # NATIVE FOREGROUND EXECUTION & BACKGROUND TIMEOUT WATCHER
@@ -174,7 +174,7 @@ while ($true)
     Write-Host "[EXECUTOR] Launching [$ExecutorMode] Natively..." -ForegroundColor Yellow
     
     $WatcherJob = Start-Job -ScriptBlock {
-        $MaxExecutionTimeSec = 1200 
+        $MaxExecutionTimeSec = 1200 # 20 Minute hard timeout
         $Elapsed = 0
         while ($Elapsed -lt $MaxExecutionTimeSec) {
             Start-Sleep -Seconds 1
@@ -223,7 +223,7 @@ while ($true)
     git reset HEAD GEMINI.md temp_*.txt executor_*.json executor_*.log *.png *.glb *.gltf *.b3dm *.pnts state_snapshots/ 2>$null
     
     # ====================================================================
-    # NEW: SURGICAL PAYLOAD EXTRACTION (No More Git Diffs)
+    # SURGICAL PAYLOAD EXTRACTION
     # ====================================================================
     $SourceCodeContext = ""
     try {
@@ -255,6 +255,16 @@ while ($true)
             $ConsoleLogContext = $RawLog
         }
     }
+
+    # Verify Visual Attachment
+    $ImageSize = 0
+    $ImageContext = "No visual output generated."
+    $ImageArg = ""
+    if (Test-Path "framebuffer.png") {
+        $ImageSize = (Get-Item "framebuffer.png").Length
+        $ImageContext = "framebuffer.png successfully generated and attached to this prompt for visual verification."
+        $ImageArg = " `"framebuffer.png`""
+    }
     
     $ArchitectContext = @"
 --- CURRENT SYSTEM STATE ---
@@ -273,6 +283,9 @@ $ReportContext
 === EXECUTOR CONSOLE LOG ===
 $ConsoleLogContext
 
+=== VISUAL OUTPUT ===
+$ImageContext
+
 === MODIFIED SOURCE CODE ===
 $SourceCodeContext
 "@
@@ -283,7 +296,7 @@ $SourceCodeContext
     $CleanArchitectPrompt = [regex]::Replace($CleanArchitectPrompt, '\n{3,}', "`n`n").Trim()
 
     # ====================================================================
-    # NEW: PAYLOAD TELEMETRY ENGINE
+    # PAYLOAD TELEMETRY ENGINE
     # ====================================================================
     $LenReport = $ReportContext.Length
     $LenLog = $ConsoleLogContext.Length
@@ -296,8 +309,11 @@ $SourceCodeContext
     Write-Host "  -> Executor Report:      $LenReport chars" -ForegroundColor DarkGray
     Write-Host "  -> Console Log:          $LenLog chars" -ForegroundColor DarkGray
     Write-Host "  -> Extracted C++ Code:   $LenCode chars" -ForegroundColor DarkGray
+    if ($ImageSize -gt 0) {
+        Write-Host "  -> Visual Attachment:    framebuffer.png ($([math]::Round($ImageSize / 1024, 2)) KB)" -ForegroundColor DarkGray
+    }
     Write-Host "  ---------------------------------------------------" -ForegroundColor Magenta
-    Write-Host "  TOTAL PAYLOAD SIZE:      ~$LenTotal chars (Approx $([math]::Round($LenTotal / 4)) tokens)" -ForegroundColor Magenta
+    Write-Host "  TOTAL TEXT PAYLOAD SIZE: ~$LenTotal chars (Approx $([math]::Round($LenTotal / 4)) tokens)" -ForegroundColor Magenta
     Write-Host "=======================================================" -ForegroundColor Magenta
     # ====================================================================
 
@@ -306,7 +322,7 @@ $SourceCodeContext
     $TempArchitectFile = "temp_architect_prompt.txt"
     [System.IO.File]::WriteAllText($TempArchitectFile, $CleanArchitectPrompt, $Utf8NoBomEncoding)
 
-    Clear-GeminiSessions 
+    Clear-GeminiSessions # Wipe history again so Architect starts fresh.
 
     # ====================================================================
     # CAPACITY AWARE JITTER BACKOFF
@@ -319,7 +335,8 @@ $SourceCodeContext
         $Attempt++
         Write-Host "Awaiting Architect evaluation (Attempt $Attempt/$MaxRetries)..." -ForegroundColor Cyan
         
-        $Pipeline = cmd.exe /c "gemini.cmd --approval-mode=yolo < `"$TempArchitectFile`" 2>&1"
+        # Inject the $ImageArg dynamically so the vision model can analyze the image
+        $Pipeline = cmd.exe /c "gemini.cmd --approval-mode=yolo$ImageArg < `"$TempArchitectFile`" 2>&1"
         $ArchitectResponseRaw = ""
         
         $Pipeline | ForEach-Object {

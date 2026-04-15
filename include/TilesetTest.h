@@ -24,11 +24,17 @@ namespace Alice
             if (!g_Arena.memory) 
             {
                 g_Arena.init(128 * 1024 * 1024);
-                if (!g_Arena.memory) { printf("[TilesetTest] FATAL: Failed to init arena\n"); exit(1); }
             }
-            nodes.init(g_Arena, 16384);
-            activeNodeIndices.init(g_Arena, 4096);
-            accumulatedMeshes.init(g_Arena, 4096);
+            else
+            {
+                g_Arena.reset();
+            }
+            
+            if (!g_Arena.memory) { printf("[TilesetTest] FATAL: Failed to init arena\n"); exit(1); }
+
+            nodes.init(g_Arena, 32768);
+            activeNodeIndices.init(g_Arena, 32768);
+            accumulatedMeshes.init(g_Arena, 32768);
 
             std::string rootUrl = TilesetLoader::ConstructGoogleTilesetURL();
             bool isFallback = false;
@@ -42,8 +48,13 @@ namespace Alice
             {
                 printf("[TilesetTest] Fetching root from Google 3D Tiles API...\n");
                 json rootJson;
-                if (!TilesetLoader::FetchRootTileset(rootUrl, rootJson) || rootJson.contains("error"))
+                bool fetchSuccess = TilesetLoader::FetchRootTileset(rootUrl, rootJson);
+                if (!fetchSuccess || rootJson.contains("error"))
                 {
+                    if (rootJson.contains("error")) 
+                    {
+                        fprintf(stderr, "[TilesetTest] Google API ERROR: %s\n", rootJson["error"].dump(2).c_str());
+                    }
                     fprintf(stderr, "[TilesetTest] WARNING: Google API Fetch failed. Using fallback.\n");
                     isFallback = true;
                 }
@@ -76,10 +87,11 @@ namespace Alice
                         }
 
                         int nodesVisited = 0;
-                        TilesetLoader::TraverseAndGraft(rootIdx, nodes, targetEcef, vHeight, fov, 16.0f, activeNodeIndices, g_Arena, 0, nodesVisited, 16384);
+                        TilesetLoader::TraverseAndGraft(rootIdx, nodes, targetEcef, vHeight, fov, 4.0f, activeNodeIndices, g_Arena, 0, nodesVisited, 32768);
                         
                         double enuMat[16];
                         Math::denu_matrix(enuMat, targetLat, targetLon);
+                        printf("[TilesetTest] Calling loadMeshes with targetEcef: (%.2f, %.2f, %.2f)\n", targetEcef.x, targetEcef.y, targetEcef.z);
                         loadMeshes(targetEcef, enuMat);
                     }
                 }
@@ -87,6 +99,10 @@ namespace Alice
 
             if (isFallback)
             {
+                nodes.clear();
+                activeNodeIndices.clear();
+                accumulatedMeshes.clear();
+
                 rootUrl = "test_tileset.json";
                 json rootJson;
                 if (TilesetLoader::FetchRootTileset(rootUrl, rootJson))
@@ -100,8 +116,12 @@ namespace Alice
                         double enuMat[16];
                         Math::denu_matrix(enuMat, lla.lat, lla.lon);
 
-                        printf("[TilesetTest] Loading fallback meshes...\n");
-                        activeNodeIndices.push_back(rootIdx); // Force load root for mock
+                        printf("[TilesetTest] Loading fallback meshes via TraverseAndGraft...\n");
+                        int nodesVisited = 0;
+                        // Force descent with high viewportHeight and low threshold
+                        TilesetLoader::TraverseAndGraft(rootIdx, nodes, targetEcef, 1000.0f, 0.8f, 1.0f, activeNodeIndices, g_Arena, 0, nodesVisited, 16384);
+                        
+                        printf("[TilesetTest] Calling loadMeshes (Fallback) with targetEcef: (%.2f, %.2f, %.2f)\n", targetEcef.x, targetEcef.y, targetEcef.z);
                         loadMeshes(targetEcef, enuMat);
                     }
                 }
@@ -120,10 +140,10 @@ namespace Alice
                 float dz = meshMax.z - meshMin.z;
                 float radius = sqrtf(dx*dx + dy*dy + dz*dz) * 0.5f;
 
-                av->camera.distance = radius * 2.5f; 
-                av->camera.yaw = 0.785f; // 45 degrees
-                av->camera.pitch = 0.523f; // 30 degrees
-                printf("[TilesetTest] Camera framed at (%.2f, %.2f, %.2f) with distance %.2f\n", 
+                av->camera.distance = radius * 1.8f; // Closer for more detail
+                av->camera.yaw = 0.6f;   // Slight offset
+                av->camera.pitch = 0.4f; // Lower angle for cinematic feel
+                printf("[TilesetTest] Cinematic camera framed at (%.2f, %.2f, %.2f) with distance %.2f\n", 
                     av->camera.focusPoint.x, av->camera.focusPoint.y, av->camera.focusPoint.z, av->camera.distance);
             }
             initialized = true;

@@ -1,21 +1,32 @@
 {
-  "asset": {
-    "version": "1.0"
-  },
+  "asset": { "version": "1.1" },
   "root": {
-    "transform": [
-      1.0, 0.0, 0.0, 0.0,
-      0.0, 1.0, 0.0, 0.0,
-      0.0, 0.0, 1.0, 0.0,
-      10.0, 20.0, 30.0, 1.0
-    ],
-    "boundingVolume": {
-      "sphere": [3977441, -6824, 4969318, 20000]
-    },
+    "boundingVolume": { "sphere": [3977271, -8888, 4967916, 2000] },
     "geometricError": 2000,
-    "refine": "ADD",
-    "content": {
-      "uri": "test_tile.glb"
-    }
+    "refine": "REPLACE",
+    "children": [
+      {
+        "boundingVolume": { "sphere": [3977271, -8888, 4967916, 1000] },
+        "geometricError": 1000,
+        "refine": "ADD",
+        "content": { "uri": "test_tile.glb" },
+        "children": [
+          {
+            "boundingVolume": { "sphere": [3977271, -8888, 4967916, 500] },
+            "geometricError": 500,
+            "refine": "REPLACE",
+            "content": { "uri": "test_tile.glb" },
+            "children": [
+               {
+                 "boundingVolume": { "sphere": [3977271, -8888, 4967916, 250] },
+                 "geometricError": 250,
+                 "refine": "REPLACE",
+                 "content": { "uri": "test_tile.glb" }
+               }
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

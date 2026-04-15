@@ -47,7 +47,14 @@ namespace Alice
         static bool FetchRootTileset(const std::string& url, json& out_tileset)
         {
             std::vector<uint8_t> buffer;
-            if (!Network::Fetch(url.c_str(), buffer)) return false;
+            long status = 0;
+            std::string body;
+            if (!Network::Fetch(url.c_str(), buffer, &status, &body)) 
+            {
+                fprintf(stderr, "[TilesetLoader] ERROR: Network::Fetch failed for %s (Status: %ld)\n", url.c_str(), status);
+                if (!body.empty()) fprintf(stderr, "[TilesetLoader] Response Body: %s\n", body.c_str());
+                return false;
+            }
             try
             {
                 out_tileset = json::parse(buffer.begin(), buffer.end());
@@ -55,6 +62,7 @@ namespace Alice
             }
             catch (...)
             {
+                fprintf(stderr, "[TilesetLoader] ERROR: JSON parse failed for %s\n", url.c_str());
                 return false;
             }
         }
@@ -317,30 +325,44 @@ namespace Alice
                 cgltf_accessor_read_float(pos_acc, i, p, 3);
                 if (norm_acc) cgltf_accessor_read_float(norm_acc, i, n, 3);
 
-                // 1. Positions: Multiply raw vertex 'p' by 'transform' to get absolute ECEF
-                // 3DTiles transform is 4x4 column-major
-                double px = transform[0] * p[0] + transform[4] * p[1] + transform[8] * p[2] + transform[12];
-                double py = transform[1] * p[0] + transform[5] * p[1] + transform[9] * p[2] + transform[13];
-                double pz = transform[2] * p[0] + transform[6] * p[1] + transform[10] * p[2] + transform[14];
+                // 1. Positions: Calculate relative translation first in double precision to prevent jitter
+                // (T_tile - centerEcef) + R_tile * p_local
+                double relX = transform[12] - centerEcef.x;
+                double relY = transform[13] - centerEcef.y;
+                double relZ = transform[14] - centerEcef.z;
 
-                // 2. Compute the delta from 'centerEcef'
-                double dx = px - centerEcef.x;
-                double dy = py - centerEcef.y;
-                double dz = pz - centerEcef.z;
+                double dx = transform[0] * p[0] + transform[4] * p[1] + transform[8] * p[2] + relX;
+                double dy = transform[1] * p[0] + transform[5] * p[1] + transform[9] * p[2] + relY;
+                double dz = transform[2] * p[0] + transform[6] * p[1] + transform[10] * p[2] + relZ;
 
-                // 3. Project to ENU
-                float lx = (float)(enuMat[0] * dx + enuMat[1] * dy + enuMat[2] * dz);
-                float ly = (float)(enuMat[4] * dx + enuMat[5] * dy + enuMat[6] * dz);
-                float lz = (float)(enuMat[8] * dx + enuMat[9] * dy + enuMat[10] * dz);
+                // 2. Project to ENU
+                double lx = enuMat[0] * dx + enuMat[1] * dy + enuMat[2] * dz; // East
+                double ly = enuMat[4] * dx + enuMat[5] * dy + enuMat[6] * dz; // North
+                double lz = enuMat[8] * dx + enuMat[9] * dy + enuMat[10] * dz; // Up
 
-                verts[i * 6 + 0] = lx; verts[i * 6 + 1] = ly; verts[i * 6 + 2] = lz;
+                if (i == 0) 
+                {
+                    printf("[TilesetLoader] URL: %s\n", url);
+                    printf("[TilesetLoader] centerEcef: (%.2f, %.2f, %.2f)\n", centerEcef.x, centerEcef.y, centerEcef.z);
+                    printf("[TilesetLoader] relTranslation: (%.2f, %.2f, %.2f)\n", relX, relY, relZ);
+                    printf("[TilesetLoader] delta: (%.2f, %.2f, %.2f), ENU: (%.2f, %.2f, %.2f)\n", dx, dy, dz, lx, ly, lz);
+                }
 
-                if (lx < out_min.x) out_min.x = lx;
-                if (ly < out_min.y) out_min.y = ly;
-                if (lz < out_min.z) out_min.z = lz;
-                if (lx > out_max.x) out_max.x = lx;
-                if (ly > out_max.y) out_max.y = ly;
-                if (lz > out_max.z) out_max.z = lz;
+                // 3. Map to OpenGL (Directive: Y and Z matching inverted ECEF Z and X respectively)
+                // At Lon 0, Lat 0: East=Y_ecef, North=Z_ecef, Up=X_ecef
+                // So Y_gl = -North (-Z_ecef), Z_gl = -Up (-X_ecef), X_gl = East (Y_ecef)
+                float gx = (float)lx;
+                float gy = (float)(-ly);
+                float gz = (float)(-lz);
+
+                verts[i * 6 + 0] = gx; verts[i * 6 + 1] = gy; verts[i * 6 + 2] = gz;
+
+                if (gx < out_min.x) out_min.x = gx;
+                if (gy < out_min.y) out_min.y = gy;
+                if (gz < out_min.z) out_min.z = gz;
+                if (gx > out_max.x) out_max.x = gx;
+                if (gy > out_max.y) out_max.y = gy;
+                if (gz > out_max.z) out_max.z = gz;
 
                 // 4. Normals: Apply the rotation part of the 'transform' to 'n'
                 double nx_rot = transform[0] * n[0] + transform[4] * n[1] + transform[8] * n[2];
@@ -348,12 +370,17 @@ namespace Alice
                 double nz_rot = transform[2] * n[0] + transform[6] * n[1] + transform[10] * n[2];
 
                 // 5. Apply the ENU rotation to the rotated normal
-                float nx = (float)(enuMat[0] * nx_rot + enuMat[1] * ny_rot + enuMat[2] * nz_rot);
-                float ny = (float)(enuMat[4] * nx_rot + enuMat[5] * ny_rot + enuMat[6] * nz_rot);
-                float nz = (float)(enuMat[8] * nx_rot + enuMat[9] * ny_rot + enuMat[10] * nz_rot);
+                double enx = enuMat[0] * nx_rot + enuMat[1] * ny_rot + enuMat[2] * nz_rot;
+                double eny = enuMat[4] * nx_rot + enuMat[5] * ny_rot + enuMat[6] * nz_rot;
+                double enz = enuMat[8] * nx_rot + enuMat[9] * ny_rot + enuMat[10] * nz_rot;
 
-                float ilen = 1.0f / sqrtf(nx * nx + ny * ny + nz * nz + 1e-12f);
-                verts[i * 6 + 3] = nx * ilen; verts[i * 6 + 4] = ny * ilen; verts[i * 6 + 5] = nz * ilen;
+                // 6. Map normal to OpenGL consistent with vertices (X=East, Y=-North, Z=-Up)
+                float ngx = (float)enx;
+                float ngy = (float)(-eny);
+                float ngz = (float)(-enz);
+
+                float ilen = 1.0f / sqrtf(ngx * ngx + ngy * ngy + ngz * ngz + 1e-12f);
+                verts[i * 6 + 3] = ngx * ilen; verts[i * 6 + 4] = ngy * ilen; verts[i * 6 + 5] = ngz * ilen;
             }
 
             size_t icount = prim->indices ? prim->indices->count : 0;

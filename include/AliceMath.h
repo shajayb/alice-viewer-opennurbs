@@ -54,26 +54,25 @@ namespace Math
         double sLat = sin(lat), cLat = cos(lat);
         double sLon = sin(lon), cLon = cos(lon);
         
-        // East (X):  [-sin(lon), cos(lon), 0]
-        // North (Y): [-sin(lat)cos(lon), -sin(lat)sin(lon), cos(lat)]
-        // Up (Z):    [cos(lat)cos(lon), cos(lat)sin(lon), sin(lat)]
-        
-        // m[0..2] = East
+        // m is treated as Row-Major for the projection step in TilesetLoader
+        // Row 0: East
         m[0] = -sLon;
         m[1] = cLon;
         m[2] = 0.0;
+        m[3] = 0.0;
         
-        // m[4..6] = North
+        // Row 1: North
         m[4] = -sLat * cLon;
         m[5] = -sLat * sLon;
         m[6] = cLat;
+        m[7] = 0.0;
         
-        // m[8..10] = Up
+        // Row 2: Up
         m[8] = cLat * cLon;
         m[9] = cLat * sLon;
         m[10] = sLat;
+        m[11] = 0.0;
         
-        m[3] = 0.0; m[7] = 0.0; m[11] = 0.0;
         m[12] = 0.0; m[13] = 0.0; m[14] = 0.0; m[15] = 1.0;
     }
 

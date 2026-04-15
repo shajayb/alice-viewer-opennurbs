@@ -7,15 +7,17 @@
 #include <cmath>
 
 #include "AliceMemory.h"
+#include "TextureCache.h"
 
 namespace Alice { extern LinearArena g_Arena; }
 
 struct MeshPrimitive
 {
     unsigned int vao, vbo, ebo, instanceVbo;
+    unsigned int albedoTex;
     int count;
 
-    MeshPrimitive() : vao(0), vbo(0), ebo(0), instanceVbo(0), count(0) {}
+    MeshPrimitive() : vao(0), vbo(0), ebo(0), instanceVbo(0), albedoTex(0), count(0) {}
 
     void initPlane(float size)
     {
@@ -225,7 +227,8 @@ struct MeshPrimitive
         if (vbo) glDeleteBuffers(1, &vbo);
         if (ebo) glDeleteBuffers(1, &ebo);
         if (instanceVbo) glDeleteBuffers(1, &instanceVbo);
-        vao = vbo = ebo = instanceVbo = 0;
+        if (albedoTex) Alice::TextureCache::Get().Release(albedoTex);
+        vao = vbo = ebo = instanceVbo = albedoTex = 0;
         count = 0;
     }
 };

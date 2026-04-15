@@ -71,7 +71,7 @@ struct SSAO
     struct GShader
     {
         unsigned int program;
-        int uMVP, uMV, uColor;
+        int uMVP, uMV, uColor, uAlbedo, uHasTexture;
 
         static void checkShader(unsigned int id, const char* type)
         {
@@ -104,6 +104,7 @@ layout(location=2) in vec2 aTexCoord;
 layout(location=3) in vec4 aInstanceData;
 out vec3 vPos;
 out vec3 vNorm;
+out vec2 vUV;
 uniform mat4 uMVP;
 uniform mat4 uMV;
 void main(){
@@ -111,6 +112,7 @@ void main(){
     vec4 viewPos = uMV * vec4(worldPos, 1.0);
     vPos = viewPos.xyz;
     vNorm = normalize(mat3(uMV) * aNormal);
+    vUV = aTexCoord;
     gl_Position = uMVP * vec4(worldPos, 1.0);
 })";
 
@@ -120,11 +122,15 @@ layout(location=1) out vec4 gNorm;
 layout(location=2) out vec4 gAlbedo;
 in vec3 vPos;
 in vec3 vNorm;
+in vec2 vUV;
 uniform vec3 uColor;
+uniform sampler2D uAlbedo;
+uniform bool uHasTexture;
 void main(){
     gPos = vec4(vPos, 1.0);
     gNorm = vec4(normalize(vNorm), 1.0);
-    gAlbedo = vec4(uColor, 1.0);
+    if(uHasTexture) gAlbedo = texture(uAlbedo, vUV);
+    else gAlbedo = vec4(uColor, 1.0);
 })";
 
         void init()
@@ -148,6 +154,8 @@ void main(){
             uMVP = glGetUniformLocation(program, "uMVP");
             uMV = glGetUniformLocation(program, "uMV");
             uColor = glGetUniformLocation(program, "uColor");
+            uAlbedo = glGetUniformLocation(program, "uAlbedo");
+            uHasTexture = glGetUniformLocation(program, "uHasTexture");
         }
     } gs;
 
@@ -563,13 +571,14 @@ void main(){
         MeshPrimitive* meshes[1024];
         float modelMatrices[1024][16];
         float colors[1024][3];
+        unsigned int textures[1024];
         int instanceCounts[1024];
         bool isPointLayer[1024];
         int count = 0;
 
         void reset() { count = 0; }
 
-        void add(MeshPrimitive* mesh, const float* modelMatrix, float r, float g, float b, int instanceCount = 0, bool isPoint = false)
+        void add(MeshPrimitive* mesh, const float* modelMatrix, float r, float g, float b, int instanceCount = 0, bool isPoint = false, unsigned int tex = 0)
         {
             if (count >= 1024) return;
             meshes[count] = mesh;
@@ -584,15 +593,16 @@ void main(){
             colors[count][0] = r;
             colors[count][1] = g;
             colors[count][2] = b;
+            textures[count] = tex;
             instanceCounts[count] = instanceCount;
             isPointLayer[count] = isPoint;
             count++;
         }
     } queue;
 
-    void addObject(MeshPrimitive* mesh, const float* modelMatrix, float r, float g, float b, int instanceCount = 0, bool isPoint = false)
+    void addObject(MeshPrimitive* mesh, const float* modelMatrix, float r, float g, float b, int instanceCount = 0, bool isPoint = false, unsigned int tex = 0)
     {
-        queue.add(mesh, modelMatrix, r, g, b, instanceCount, isPoint);
+        queue.add(mesh, modelMatrix, r, g, b, instanceCount, isPoint, tex);
     }
 
     void clearQueue()

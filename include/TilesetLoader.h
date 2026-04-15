@@ -10,6 +10,7 @@
 #include "AliceMemory.h"
 #include "MeshPrimitive.h"
 #include "cgltf.h"
+#include "stb_image.h"
 
 using json = nlohmann::json;
 
@@ -341,12 +342,21 @@ namespace Alice
             bool isJson;
             uint8_t* jsonBuffer;
             size_t jsonBufferSize;
+
+            // Texture output
+            uint8_t* texData;
+            int texWidth, texHeight, texChannels;
+            char texKey[1024];
+            bool hasTexture;
+
             bool success;
             bool completed;
         };
 
         static void ProcessAsyncLoad(AsyncLoadRequest* req)
         {
+            req->texData = nullptr;
+            req->hasTexture = false;
             std::vector<uint8_t> buffer;
             if (!Network::Fetch(req->url, buffer)) { req->success = false; req->completed = true; return; }
 
@@ -441,6 +451,28 @@ namespace Alice
             req->icount = prim->indices ? prim->indices->count : 0;
             req->indices = (unsigned int*)malloc(req->icount * sizeof(unsigned int));
             for (size_t i = 0; i < req->icount; ++i) req->indices[i] = (unsigned int)cgltf_accessor_read_index(prim->indices, i);
+
+            // Texture Extraction
+            if (prim->material && prim->material->has_pbr_metallic_roughness)
+            {
+                cgltf_texture* tex = prim->material->pbr_metallic_roughness.base_color_texture.texture;
+                if (tex && tex->image)
+                {
+                    cgltf_image* img = tex->image;
+                    if (img->buffer_view)
+                    {
+                        uint8_t* start = (uint8_t*)img->buffer_view->buffer->data + img->buffer_view->offset;
+                        size_t size = img->buffer_view->size;
+                        req->texData = stbi_load_from_memory(start, (int)size, &req->texWidth, &req->texHeight, &req->texChannels, 4);
+                        if (req->texData)
+                        {
+                            req->hasTexture = true;
+                            req->texChannels = 4;
+                            snprintf(req->texKey, 1024, "%s_tex_%d", req->url, (int)img->buffer_view->offset);
+                        }
+                    }
+                }
+            }
 
             cgltf_free(data);
             req->success = true;

@@ -15,6 +15,7 @@
 #include "NormalShader.h"
 #include "SSAO.h"
 #include "MockCathedral.h"
+#include "TileShader.h"
 
 namespace Alice
 {
@@ -122,6 +123,7 @@ namespace Alice
 
         SSAO ssao;
         ShadowMap shadow;
+        TileShader tileShader;
         V3 lightDir = { 0.5f, 0.8f, -0.4f };
 
         // Async Loading
@@ -196,6 +198,7 @@ namespace Alice
             glfwGetFramebufferSize(av->window, &w, &h);
             ssao.init(w, h);
             shadow.init();
+            tileShader.init();
 
             lightDir.normalise();
 
@@ -331,6 +334,13 @@ namespace Alice
                     glEnableVertexAttribArray(2);
                     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
                     
+                    if (req->hasTexture)
+                    {
+                        node.mesh.albedoTex = TextureCache::Get().Acquire(req->texKey, req->texData, req->texWidth, req->texHeight, req->texChannels);
+                        printf("[Async] Texture Uploaded: %s (%dx%d, handle: %u)\n", req->texKey, req->texWidth, req->texHeight, node.mesh.albedoTex);
+                        stbi_image_free(req->texData);
+                    }
+
                     node.isLoaded = true;
                     node.isLoading = false;
                     activeRequests--;
@@ -482,7 +492,7 @@ namespace Alice
             for (int i = 0; i < (int)activeNodeIndices.count; ++i)
             {
                 int nIdx = activeNodeIndices[i];
-                if (nodes[nIdx].isLoaded) ssao.addObject(&nodes[nIdx].mesh, ident, 0.7f, 0.7f, 0.7f);
+                if (nodes[nIdx].isLoaded) ssao.addObject(&nodes[nIdx].mesh, ident, 0.7f, 0.7f, 0.7f, 0, false, nodes[nIdx].mesh.albedoTex);
             }
 
             float fvMat[16]; for(int i=0; i<16; ++i) fvMat[i] = (float)dvMat[i];
@@ -499,6 +509,19 @@ namespace Alice
                 glUniformMatrix4fv(ssao.gs.uMV, 1, GL_FALSE, mv);
                 glUniformMatrix4fv(ssao.gs.uMVP, 1, GL_FALSE, mvp);
                 glUniform3fv(ssao.gs.uColor, 1, ssao.queue.colors[i]);
+
+                if (ssao.queue.textures[i])
+                {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, ssao.queue.textures[i]);
+                    glUniform1i(ssao.gs.uAlbedo, 0);
+                    glUniform1i(ssao.gs.uHasTexture, 1);
+                }
+                else
+                {
+                    glUniform1i(ssao.gs.uHasTexture, 0);
+                }
+
                 ssao.queue.meshes[i]->draw();
             }
             ssao.gBuffer.unbind();
@@ -519,24 +542,27 @@ namespace Alice
 
             // Final Composite with Shadow
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            glUseProgram(ssao.bs.program);
+            glUseProgram(tileShader.program);
             
-            // Need to update SSAO blur shader to handle shadow mapping composite
-            // For now, we reuse composite but with shadow map bound to unit 4
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, ssao.ssaoFbo.textures[0]);
             glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, ssao.gBuffer.textures[2]);
             glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, ssao.gBuffer.textures[0]);
             glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, ssao.gBuffer.textures[1]);
             glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, shadow.depthTex);
             
-            glUniform1i(glGetUniformLocation(ssao.bs.program, "sSSAO"), 0);
-            glUniform1i(glGetUniformLocation(ssao.bs.program, "sAlbedo"), 1);
-            glUniform1i(glGetUniformLocation(ssao.bs.program, "gPos"), 2);
-            glUniform1i(glGetUniformLocation(ssao.bs.program, "gNorm"), 3);
-            glUniform1i(glGetUniformLocation(ssao.bs.program, "sShadow"), 4);
-            glUniformMatrix4fv(glGetUniformLocation(ssao.bs.program, "uLightSpaceMatrix"), 1, GL_FALSE, shadow.lightSpaceMat);
-            glUniform3fv(glGetUniformLocation(ssao.bs.program, "uLightDir"), 1, &lightDir.x);
-            glUniform1i(ssao.bs.uDir, 2); 
+            glUniform1i(tileShader.sSSAO, 0);
+            glUniform1i(tileShader.sAlbedo, 1);
+            glUniform1i(tileShader.gPos, 2);
+            glUniform1i(tileShader.gNorm, 3);
+            glUniform1i(tileShader.sShadow, 4);
+            glUniformMatrix4fv(tileShader.uLightSpaceMatrix, 1, GL_FALSE, shadow.lightSpaceMat);
+            glUniform3fv(tileShader.uLightDir, 1, &lightDir.x);
+            
+            Math::DVec3 eyeEcef = getEyeEcef(av->camera);
+            V3 eyeRel = { (float)(eyeEcef.x - targetEcef.x), (float)(eyeEcef.y - targetEcef.y), (float)(eyeEcef.z - targetEcef.z) };
+            glUniform3fv(tileShader.uEyePos, 1, &eyeRel.x);
+            glUniform2f(tileShader.uRes, (float)w, (float)h);
+            
             ssao.quad.draw();
         }
 

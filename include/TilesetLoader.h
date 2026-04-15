@@ -388,65 +388,80 @@ namespace Alice
             float geometricError = nodes[nodeIdx].geometricError;
             double sse = (geometricError * viewportHeight) / (distance * 2.0 * tan(fov * 0.5));
 
-            bool shouldDescend = sse > sseThreshold;
+            bool shouldDescend = (sse > sseThreshold) && (nodes[nodeIdx].childCount > 0);
             
             if (!nodes[nodeIdx].isLoaded && (nodes[nodeIdx].isExternal || nodes[nodeIdx].hasContent))
             {
+                // Request load if not loaded
                 activeNodes.push_back({ nodeIdx, (float)sse });
             }
 
-            bool hasChildren = (nodes[nodeIdx].childCount > 0);
-            bool refined = false;
-
-            if (shouldDescend && hasChildren)
+            if (shouldDescend)
             {
+                bool allChildrenReady = true;
                 int first = nodes[nodeIdx].firstChild;
                 int count = nodes[nodeIdx].childCount;
-                
-                bool allChildrenReady = true;
+
                 for (int i = 0; i < count; ++i)
                 {
-                    if (!TraverseAndGraft(first + i, nodes, cameraPos, viewportHeight, fov, sseThreshold, frustumPlanes, activeNodes, arena, depth + 1, nodesVisited, maxNodes))
-                    {
-                    }
-                    
-                    if (!nodes[first + i].isLoaded && nodes[first + i].hasContent && !nodes[first + i].isExternal)
+                    int cIdx = first + i;
+                    // For REPLACE, we strictly need all children with content to be loaded
+                    if (nodes[cIdx].hasContent && !nodes[cIdx].isLoaded && !nodes[cIdx].isExternal)
                     {
                         allChildrenReady = false;
+                        break;
                     }
                 }
 
                 if (nodes[nodeIdx].refineAdd)
                 {
-                    if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal && nodes[nodeIdx].isLoaded)
+                    // ADD: Render parent if loaded
+                    if (nodes[nodeIdx].isLoaded && nodes[nodeIdx].hasContent)
                     {
                         activeNodes.push_back({ nodeIdx, (float)sse });
                     }
-                    refined = true;
+                    // And always try to render children
+                    for (int i = 0; i < count; ++i)
+                    {
+                        TraverseAndGraft(first + i, nodes, cameraPos, viewportHeight, fov, sseThreshold, frustumPlanes, activeNodes, arena, depth + 1, nodesVisited, maxNodes);
+                    }
+                    return true;
                 }
                 else
                 {
+                    // REPLACE
                     if (allChildrenReady)
                     {
-                        refined = true;
+                        // All children loaded, descend to them
+                        for (int i = 0; i < count; ++i)
+                        {
+                            TraverseAndGraft(first + i, nodes, cameraPos, viewportHeight, fov, sseThreshold, frustumPlanes, activeNodes, arena, depth + 1, nodesVisited, maxNodes);
+                        }
+                        return true;
                     }
-                    else if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal && nodes[nodeIdx].isLoaded)
+                    else
                     {
-                        activeNodes.push_back({ nodeIdx, (float)sse });
-                        refined = true;
+                        // Children NOT ready, render parent as fallback
+                        if (nodes[nodeIdx].isLoaded && nodes[nodeIdx].hasContent)
+                        {
+                            activeNodes.push_back({ nodeIdx, (float)sse });
+                            return true;
+                        }
+                        return false; 
                     }
                 }
             }
             else
             {
-                if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal && nodes[nodeIdx].isLoaded)
+                // Leaf or SSE satisfied: render this node if loaded
+                if (nodes[nodeIdx].isLoaded && nodes[nodeIdx].hasContent)
                 {
                     activeNodes.push_back({ nodeIdx, (float)sse });
-                    refined = true;
+                    return true;
                 }
             }
 
-            return refined;
+            return false;
         }
 
         struct AsyncLoadRequest

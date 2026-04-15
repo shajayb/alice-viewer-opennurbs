@@ -172,6 +172,49 @@ namespace Alice
             if (idx >= 0 && idx < 64) requestPoolInUse[idx] = false;
         }
 
+        void FitCameraToActiveNodes()
+        {
+            if (activeNodeIndices.count == 0) 
+            {
+                printf("[TilesetTest] FitCameraToActiveNodes: No active nodes found at frame %u.\n", currentFrame);
+                return;
+            }
+
+            V3 min = { 1e30f, 1e30f, 1e30f };
+            V3 max = { -1e30f, -1e30f, -1e30f };
+
+            int count = 0;
+            for (int i = 0; i < (int)activeNodeIndices.count; ++i)
+            {
+                int nIdx = activeNodeIndices[i].index;
+                if (nodes[nIdx].isLoaded)
+                {
+                    if (nodes[nIdx].aabbMin.x < min.x) min.x = nodes[nIdx].aabbMin.x;
+                    if (nodes[nIdx].aabbMin.y < min.y) min.y = nodes[nIdx].aabbMin.y;
+                    if (nodes[nIdx].aabbMin.z < min.z) min.z = nodes[nIdx].aabbMin.z;
+                    if (nodes[nIdx].aabbMax.x > max.x) max.x = nodes[nIdx].aabbMax.x;
+                    if (nodes[nIdx].aabbMax.y > max.y) max.y = nodes[nIdx].aabbMax.y;
+                    if (nodes[nIdx].aabbMax.z > max.z) max.z = nodes[nIdx].aabbMax.z;
+                    count++;
+                }
+            }
+
+            if (count > 0)
+            {
+                AliceViewer* av = AliceViewer::instance();
+                av->camera.focusPoint = (min + max) * 0.5f;
+                V3 size = max - min;
+                float maxDim = (std::max)(size.x, (std::max)(size.y, size.z));
+                av->camera.distance = maxDim * 1.5f / tanf(av->fov * 0.5f);
+                printf("[TilesetTest] FitCameraToActiveNodes: Focus(%.2f, %.2f, %.2f) Distance(%.2f)\n", 
+                    av->camera.focusPoint.x, av->camera.focusPoint.y, av->camera.focusPoint.z, av->camera.distance);
+            }
+            else
+            {
+                printf("[TilesetTest] FitCameraToActiveNodes: No loaded nodes found at frame %u.\n", currentFrame);
+            }
+        }
+
         void workerFunc()
         {
             while (!stopWorker)
@@ -240,6 +283,13 @@ namespace Alice
         void init()
         {
             printf("[TilesetTest] Initializing Async Tileset + Shadows (London Focus)...\n");
+
+            // Task 5: API Diagnosis
+            char dummy[256];
+            if (!ApiKeyReader::GetGoogleKey(dummy, 256))
+            {
+                fprintf(stderr, "[TilesetTest] WARNING: API_KEYS.txt missing or GOOGLE_API_KEY not found. Google Tiles will fail.\n");
+            }
 
             if (!g_Arena.memory) g_Arena.init(128 * 1024 * 1024);
             else g_Arena.reset();
@@ -525,6 +575,8 @@ namespace Alice
             updateAsyncLoading();
             unloadOldMeshes();
 
+            if (currentFrame == 120) FitCameraToActiveNodes();
+
             shadow.update(activeNodeIndices, nodes, lightDir);
 
             // Shadow Pass
@@ -564,6 +616,7 @@ namespace Alice
                 Math::mat4_mul(mvp, pMat, mv);
                 glUniformMatrix4fv(ssao.gs.uMV, 1, GL_FALSE, mv);
                 glUniformMatrix4fv(ssao.gs.uMVP, 1, GL_FALSE, mvp);
+                glUniformMatrix4fv(ssao.gs.uModel, 1, GL_FALSE, ssao.queue.modelMatrices[i]);
                 glUniform3fv(ssao.gs.uColor, 1, ssao.queue.colors[i]);
                 if (ssao.queue.textures[i])
                 {

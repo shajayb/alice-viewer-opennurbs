@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <mutex>
 
 namespace Alice
 {
@@ -25,6 +26,7 @@ namespace Alice
 
         GLuint Acquire(const std::string& key, const uint8_t* data, int width, int height, int channels)
         {
+            std::lock_guard<std::mutex> lock(m_mutex);
             if (m_cache.count(key))
             {
                 m_cache[key].refCount++;
@@ -54,6 +56,7 @@ namespace Alice
 
         void Release(const std::string& key)
         {
+            std::lock_guard<std::mutex> lock(m_mutex);
             if (m_cache.count(key))
             {
                 m_cache[key].refCount--;
@@ -67,6 +70,7 @@ namespace Alice
 
         void Release(GLuint handle)
         {
+            std::lock_guard<std::mutex> lock(m_mutex);
             for (auto it = m_cache.begin(); it != m_cache.end(); ++it)
             {
                 if (it->second.handle == handle)
@@ -85,6 +89,7 @@ namespace Alice
     private:
         TextureCache() {}
         std::unordered_map<std::string, CachedTexture> m_cache;
+        std::mutex m_mutex;
     };
 }
 

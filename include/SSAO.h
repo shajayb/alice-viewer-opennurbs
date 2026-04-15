@@ -71,7 +71,7 @@ struct SSAO
     struct GShader
     {
         unsigned int program;
-        int uMVP, uMV, uColor, uAlbedo, uHasTexture;
+        int uMVP, uMV, uModel, uColor, uAlbedo, uHasTexture;
 
         static void checkShader(unsigned int id, const char* type)
         {
@@ -101,19 +101,18 @@ struct SSAO
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 layout(location=2) in vec2 aTexCoord;
-layout(location=3) in vec4 aInstanceData;
 out vec3 vPos;
 out vec3 vNorm;
 out vec2 vUV;
 uniform mat4 uMVP;
 uniform mat4 uMV;
+uniform mat4 uModel;
 void main(){
-    vec3 worldPos = (aPos * aInstanceData.w) + aInstanceData.xyz;
-    vec4 viewPos = uMV * vec4(worldPos, 1.0);
-    vPos = viewPos.xyz;
-    vNorm = normalize(mat3(uMV) * aNormal);
+    vec4 worldPos = uModel * vec4(aPos, 1.0);
+    vPos = (uMV * vec4(aPos, 1.0)).xyz;
+    vNorm = normalize(mat3(uModel) * aNormal);
     vUV = aTexCoord;
-    gl_Position = uMVP * vec4(worldPos, 1.0);
+    gl_Position = uMVP * vec4(aPos, 1.0);
 })";
 
         static constexpr const char* fsrc = R"(#version 400 core
@@ -153,6 +152,7 @@ void main(){
 
             uMVP = glGetUniformLocation(program, "uMVP");
             uMV = glGetUniformLocation(program, "uMV");
+            uModel = glGetUniformLocation(program, "uModel");
             uColor = glGetUniformLocation(program, "uColor");
             uAlbedo = glGetUniformLocation(program, "uAlbedo");
             uHasTexture = glGetUniformLocation(program, "uHasTexture");

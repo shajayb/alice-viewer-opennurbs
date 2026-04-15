@@ -925,6 +925,8 @@ cgltf_size cgltf_animation_channel_index(const cgltf_animation* animation, const
 #endif
 
 #ifdef CGLTF_IMPLEMENTATION
+#ifndef CGLTF_IMPLEMENTATION_INCLUDED__
+#define CGLTF_IMPLEMENTATION_INCLUDED__
 
 #include <assert.h> /* For assert */
 #include <string.h> /* For strncpy */
@@ -7214,6 +7216,7 @@ static void jsmn_init(jsmn_parser *parser) {
  * -- jsmn.c end --
  */
 
+#endif /* #ifndef CGLTF_IMPLEMENTATION_INCLUDED__ */
 #endif /* #ifdef CGLTF_IMPLEMENTATION */
 
 /* cgltf is distributed under MIT license:

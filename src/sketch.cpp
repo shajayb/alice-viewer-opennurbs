@@ -1,6 +1,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "GLBLoader.h"
+
 #include "AliceMemory.h"
 namespace Alice { LinearArena g_Arena; }
 

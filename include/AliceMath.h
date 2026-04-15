@@ -32,6 +32,23 @@ namespace Math
         return { lat, lon, alt };
     }
 
+    inline DVec3 lla_to_ecef(double lat, double lon, double alt)
+    {
+        const double a = 6378137.0;
+        const double e2 = 0.0066943799901413165; 
+        double sLat = sin(lat), cLat = cos(lat);
+        double sLon = sin(lon), cLon = cos(lon);
+        double N = a / sqrt(1.0 - e2 * sLat * sLat);
+        return {
+            (N + alt) * cLat * cLon,
+            (N + alt) * cLat * sLon,
+            (N * (1.0 - e2) + alt) * sLat
+        };
+    }
+
+    constexpr double DEG2RAD = 0.017453292519943295;
+    constexpr double RAD2DEG = 57.29577951308232;
+
     inline void denu_matrix(double* m, double lat, double lon)
     {
         double sLat = sin(lat), cLat = cos(lat);

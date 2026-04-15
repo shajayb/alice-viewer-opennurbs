@@ -2,15 +2,16 @@
 Implement a C++ graphics application that authenticates with the Google Maps Platform, fetches, and renders Google Earth 3D Tiles for the city of London (specifically centering the camera on St. Paul's Cathedral).
 
 [PLAN]
-1. Security & Scaffolding: Configure `.gitignore` to protect credentials. Implement a secure runtime utility to parse `API_KEYS.txt` and extract the Google 3D Tiles API Key.
-2. Network Integration: Integrate a minimal, cross-platform HTTP client (e.g., via standard libraries or lightweight headers) to request the root tileset JSON from the Google 3D Tiles API.
-3. Tile Parsing & glTF Decoding: Implement parsing logic for the 3D Tiles bounding volume hierarchy and decode the initial spatial payload (extracting vertex, index, and normal data).
-4. Render Pipeline Integration: Load the decoded geometry into the OpenGL data structures, ensuring strict zero-heap-allocation rules in the hot loop.
-5. Camera Framing & Verification: Compute the bounding extents of the loaded St. Paul's Cathedral tile, explicitly set the camera target to frame it, and output the final `framebuffer.png` for visual verification.
+1. Security & Scaffolding: Configure `.gitignore` to protect credentials. Implement a secure runtime utility to parse `API_KEYS.txt` and extract the Google 3D Tiles API Key. (COMPLETED)
+2. Network Integration: Integrate a minimal HTTP client to request the root tileset JSON from the Google 3D Tiles API. (COMPLETED)
+3. Tile Parsing & glTF Decoding: Decode the spatial payload (extracting vertex, index, and normal data) and implement ECEF-to-ENU transforms to prevent floating-point jitter. (COMPLETED)
+4. Hierarchical Traversal (BVH): Implement a memory-efficient tree structure to parse the `tileset.json` Bounding Volume Hierarchy. Evaluate geometric error/distance to selectively fetch high-resolution children tiles specifically intersecting London.
+5. Render Pipeline Integration & Camera Framing: Render the traversed leaf nodes into the OpenGL pipeline. Compute the bounding extents of the St. Paul's Cathedral tiles, explicitly set the camera target to frame it, and output the final `framebuffer.png` for visual verification.
+
 
 [BOOTSTRAP]
-Step 1: Create or update a `.gitignore` file in the repository root to explicitly ignore `API_KEYS.txt`. 
-Step 2: Create a new header `include/ApiKeyReader.h`. Implement a robust, lightweight function that reads `API_KEYS.txt` from the root directory at runtime and extracts the Google API key.
-Step 3: Modify `src/sketch.cpp` to invoke this reader. Print a masked version of the key (e.g., first 4 characters followed by asterisks) to the console to verify successful extraction without leaking the key in the logs.
-Step 4: Ensure the core rendering loop is intact. Set up a default camera viewport and output an empty or default `framebuffer.png` to verify the build and execution pipeline is stable before we introduce HTTP dependencies. 
-Step 5: Execute the local build via Ninja, ensure 0 compiler errors, and trigger the handoff.
+Step 1: (COMPLETED) Refactor `TilesetLoader.h` to define a `TileNode` structure capable of representing the Bounding Volume Hierarchy (BVH). It must store the tile's bounding volume (sphere/box), geometric error, transform, and content URI. Ensure these nodes are stored in a cache-friendly way (e.g., flat array/arena) to obey Data-Oriented Design rules.
+Step 2: (COMPLETED) Implement a traversal function that evaluates a tile's bounding volume against a target coordinate. Convert the LLA coordinates of St. Paul's Cathedral (Lat: 51.5138, Lon: -0.0983) to ECEF, and write logic to recursively parse and fetch `children` tiles that contain or are closest to this target.
+Step 3: (COMPLETED) Update the fetch logic to handle external tilesets. If a child tile's URI points to another `.json` file instead of a `.glb`, the loader must fetch and seamlessly graft that external tileset into the current BVH tree.
+Step 4: Update `TilesetTest.h` to initiate this targeted traversal, accumulating all resolved `.glb` meshes into an array of `MeshPrimitive`s.
+Step 5: Set the camera `focusPoint` to the ENU center of the St. Paul's tile cluster, loop through the active meshes in the `draw()` call, and capture `framebuffer.png`.

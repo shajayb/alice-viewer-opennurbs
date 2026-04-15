@@ -6,13 +6,13 @@
     "refine": "REPLACE",
     "children": [
       {
-        "boundingVolume": { "sphere": [3977271, -8888, 4967916, 1000] },
+        "boundingVolume": { "sphere": [3977271, -8888, 4967916, 1000] },        
         "geometricError": 1000,
         "refine": "ADD",
         "content": { "uri": "test_tile.glb" },
         "children": [
           {
-            "boundingVolume": { "sphere": [3977271, -8888, 4967916, 500] },
+            "boundingVolume": { "sphere": [3977271, -8888, 4967916, 500] },     
             "geometricError": 500,
             "refine": "REPLACE",
             "content": { "uri": "test_tile.glb" },
@@ -21,7 +21,15 @@
                  "boundingVolume": { "sphere": [3977271, -8888, 4967916, 250] },
                  "geometricError": 250,
                  "refine": "REPLACE",
-                 "content": { "uri": "test_tile.glb" }
+                 "content": { "uri": "test_tile.glb" },
+                 "children": [
+                    {
+                      "boundingVolume": { "sphere": [3977271, -8888, 4967916, 125] },
+                      "geometricError": 125,
+                      "refine": "REPLACE",
+                      "content": { "uri": "test_tile.glb" }
+                    }
+                 ]
                }
             ]
           }

@@ -135,6 +135,16 @@ struct MeshPrimitive
         glBindVertexArray(vao); 
         glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, 0); 
     }
+
+    void cleanup()
+    {
+        if (vao) glDeleteVertexArrays(1, &vao);
+        if (vbo) glDeleteBuffers(1, &vbo);
+        if (ebo) glDeleteBuffers(1, &ebo);
+        if (instanceVbo) glDeleteBuffers(1, &instanceVbo);
+        vao = vbo = ebo = instanceVbo = 0;
+        count = 0;
+    }
 };
 
 #endif

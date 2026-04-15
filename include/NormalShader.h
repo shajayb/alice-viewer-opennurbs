@@ -12,7 +12,7 @@
 struct NormalShader
 {
     unsigned int program;
-    int uMVP, uNormalMatrix;
+    int uMVP, uNormalMatrix, uLightDir, uLightColor;
 
     static constexpr const char* vsrc = R"(#version 400 core
 layout(location=0) in vec3 aPos;
@@ -30,11 +30,14 @@ void main(){
     static constexpr const char* fsrc = R"(#version 400 core
 out vec4 FragColor;
 in vec3 Normal;
+uniform vec3 uLightDir;
+uniform vec3 uLightColor;
 void main(){
     vec3 n = normalize(Normal);
-    // PHASE 2 CAD MANDATE: +X: Red, +Y: Green, +Z: Blue
-    // Clamping is implicit, negative components will be 0.
-    FragColor = vec4(n, 1.0);
+    vec3 l = normalize(uLightDir);
+    float diffuse = max(dot(n, l), 0.0);
+    vec3 color = (diffuse * 0.8 + 0.2) * uLightColor;
+    FragColor = vec4(color, 1.0);
 })";
 
     bool init()
@@ -53,12 +56,16 @@ void main(){
         glDeleteShader(fs);
         uMVP = glGetUniformLocation(program, "uMVP");
         uNormalMatrix = glGetUniformLocation(program, "uNormalMatrix");
+        uLightDir = glGetUniformLocation(program, "uLightDir");
+        uLightColor = glGetUniformLocation(program, "uLightColor");
         return true;
     }
 
     void use() const { glUseProgram(program); }
     void setMVP(const float* m) const { glUniformMatrix4fv(uMVP, 1, GL_FALSE, m); }
     void setNormalMatrix(const float* m) const { glUniformMatrix3fv(uNormalMatrix, 1, GL_FALSE, m); }
+    void setLightDir(float x, float y, float z) const { glUniform3f(uLightDir, x, y, z); }
+    void setLightColor(float r, float g, float b) const { glUniform3f(uLightColor, r, g, b); }
 };
 
 #ifdef NORMAL_SHADER_RUN_TEST
@@ -104,6 +111,8 @@ extern "C" void draw()
     Math::mat4_mul(pv, p, v);
 
     g_NormalShader.use();
+    g_NormalShader.setLightDir(0.5f, 1.0f, 0.2f);
+    g_NormalShader.setLightColor(1.0f, 1.0f, 1.0f);
 
     float m[16], mvp[16], n[9];
     

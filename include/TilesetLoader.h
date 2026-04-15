@@ -20,6 +20,7 @@ namespace Alice
     {
         Math::DVec3 sphereCenter;
         double sphereRadius;
+        Math::Vec3 glCenter;
         Math::Vec3 aabbMin;
         Math::Vec3 aabbMax;
         float geometricError;
@@ -75,6 +76,7 @@ namespace Alice
                 float gz = (float)(-ly); // North -> -Z
                 float r = (float)node.sphereRadius;
 
+                node.glCenter = { gx, gy, gz };
                 node.aabbMin = { gx - r, gy - r, gz - r };
                 node.aabbMax = { gx + r, gy + r, gz + r };
             }
@@ -133,9 +135,12 @@ namespace Alice
             std::vector<uint8_t> buffer;
             long status = 0;
             std::string body;
-            if (!Network::Fetch(url.c_str(), buffer, &status, &body)) 
+            std::string headers;
+            if (!Network::Fetch(url.c_str(), buffer, &status, &body, &headers)) 
             {
-                fprintf(stderr, "[TilesetLoader] ERROR: Network::Fetch failed for %s (Status: %ld)\n", url.c_str(), status);
+                fprintf(stderr, "[TilesetLoader] ERROR: Network::Fetch failed for %s\n", url.c_str());
+                fprintf(stderr, "[TilesetLoader] Curl Status: %ld\n", status);
+                if (!headers.empty()) fprintf(stderr, "[TilesetLoader] Response Headers:\n%s\n", headers.c_str());
                 if (!body.empty()) fprintf(stderr, "[TilesetLoader] Response Body: %s\n", body.c_str());
                 return false;
             }
@@ -145,6 +150,7 @@ namespace Alice
                 if (out_tileset.contains("error"))
                 {
                     fprintf(stderr, "[TilesetLoader] ERROR: Google API returned error: %s\n", out_tileset["error"].dump().c_str());
+                    if (!headers.empty()) fprintf(stderr, "[TilesetLoader] Debug Headers:\n%s\n", headers.c_str());
                     return false;
                 }
                 return true;
@@ -152,7 +158,6 @@ namespace Alice
             catch (...)
             {
                 fprintf(stderr, "[TilesetLoader] ERROR: JSON parse failed for %s\n", url.c_str());
-                if (!buffer.empty()) fprintf(stderr, "[TilesetLoader] Buffer (first 100): %.*s\n", (int)(std::min)((size_t)100, buffer.size()), (char*)buffer.data());
                 return false;
             }
         }
@@ -307,13 +312,45 @@ namespace Alice
             for (int i = 0; i < 6; ++i)
             {
                 double dist = planes[i][0] * cx + planes[i][1] * cy + planes[i][2] * cz + planes[i][3];
-                if (dist <= -radius) 
-                {
-                    printf("[Culling] Node failed plane %d. Dist: %.2f, Radius: %.2f\n", i, (float)dist, (float)radius);
-                    return false;
-                }
+                if (dist <= -radius) return false;
             }
             return true;
+        }
+
+        static bool IsAABBInFrustum(const float planes[6][4], Math::Vec3 min, Math::Vec3 max)
+        {
+            for (int i = 0; i < 6; ++i)
+            {
+                Math::Vec3 p;
+                p.x = (planes[i][0] > 0) ? max.x : min.x;
+                p.y = (planes[i][1] > 0) ? max.y : min.y;
+                p.z = (planes[i][2] > 0) ? max.z : min.z;
+                if (planes[i][0] * p.x + planes[i][1] * p.y + planes[i][2] * p.z + planes[i][3] < 0) return false;
+            }
+            return true;
+        }
+
+        static void PropagateBounds(int nodeIdx, Buffer<TileNode>& nodes)
+        {
+            if (nodeIdx < 0 || nodeIdx >= (int)nodes.count) return;
+            TileNode& node = nodes[nodeIdx];
+            if (node.childCount > 0)
+            {
+                node.aabbMin = { 1e30f, 1e30f, 1e30f };
+                node.aabbMax = { -1e30f, -1e30f, -1e30f };
+                for (int i = 0; i < node.childCount; ++i)
+                {
+                    int cIdx = node.firstChild + i;
+                    PropagateBounds(cIdx, nodes);
+                    TileNode& child = nodes[cIdx];
+                    if (child.aabbMin.x < node.aabbMin.x) node.aabbMin.x = child.aabbMin.x;
+                    if (child.aabbMin.y < node.aabbMin.y) node.aabbMin.y = child.aabbMin.y;
+                    if (child.aabbMin.z < node.aabbMin.z) node.aabbMin.z = child.aabbMin.z;
+                    if (child.aabbMax.x > node.aabbMax.x) node.aabbMax.x = child.aabbMax.x;
+                    if (child.aabbMax.y > node.aabbMax.y) node.aabbMax.y = child.aabbMax.y;
+                    if (child.aabbMax.z > node.aabbMax.z) node.aabbMax.z = child.aabbMax.z;
+                }
+            }
         }
 
         static bool TraverseAndGraft(int nodeIdx, Buffer<TileNode>& nodes, Math::DVec3 cameraPos, float viewportHeight, float fov, float sseThreshold, const float frustumPlanes[6][4], Buffer<ActiveNode>& activeNodes, LinearArena& arena, int depth, int& nodesVisited, int maxNodes)
@@ -321,10 +358,17 @@ namespace Alice
             if (nodeIdx < 0 || nodeIdx >= (int)nodes.count || nodesVisited >= maxNodes || depth > 32) return false;
             nodesVisited++;
 
-            // 0. Frustum Culling
-            if (!IsSphereInFrustum(frustumPlanes, nodes[nodeIdx].sphereCenter.x, nodes[nodeIdx].sphereCenter.y, nodes[nodeIdx].sphereCenter.z, nodes[nodeIdx].sphereRadius))
+            // 0. Frustum Culling (Hierarchical AABB first)
+            if (nodes[nodeIdx].aabbMax.x > nodes[nodeIdx].aabbMin.x)
             {
-                return false;
+                if (!IsAABBInFrustum(frustumPlanes, nodes[nodeIdx].aabbMin, nodes[nodeIdx].aabbMax)) return false;
+            }
+            else // Fallback to sphere if AABB not yet ready
+            {
+                if (!IsSphereInFrustum(frustumPlanes, nodes[nodeIdx].glCenter.x, nodes[nodeIdx].glCenter.y, nodes[nodeIdx].glCenter.z, nodes[nodeIdx].sphereRadius))
+                {
+                    return false;
+                }
             }
 
             // 0b. Horizon Culling
@@ -362,7 +406,6 @@ namespace Alice
                 bool allChildrenReady = true;
                 for (int i = 0; i < count; ++i)
                 {
-                    // Recursively process children
                     if (!TraverseAndGraft(first + i, nodes, cameraPos, viewportHeight, fov, sseThreshold, frustumPlanes, activeNodes, arena, depth + 1, nodesVisited, maxNodes))
                     {
                     }
@@ -414,11 +457,14 @@ namespace Alice
             double enuMat[16];
             double transform[16];
             
-            // Output data
+            // Task 1: Arena-backed buffers
             float* verts;
             unsigned int* indices;
+            size_t maxVCount;
+            size_t maxICount;
             size_t vcount;
             size_t icount;
+            
             Math::Vec3 min, max;
             bool isJson;
             uint8_t* jsonBuffer;
@@ -438,6 +484,48 @@ namespace Alice
         {
             req->texData = nullptr;
             req->hasTexture = false;
+            
+            // Task 2: Procedural Mock
+            if (strncmp(req->url, "mock://", 7) == 0)
+            {
+                // Generate randomized cuboid building
+                req->vcount = 24;
+                req->icount = 36;
+                if (req->vcount > req->maxVCount || req->icount > req->maxICount) { req->success = false; req->completed = true; return; }
+
+                float h = 10.0f + (float)(rand() % 40);
+                float w = 5.0f + (float)(rand() % 15);
+                float d = 5.0f + (float)(rand() % 15);
+                
+                float cubeV[] = {
+                    -0.5f,-0.5f, 1.0f,  0, 0, 1,  0, 0,   0.5f,-0.5f, 1.0f,  0, 0, 1,  1, 0,   0.5f, 0.5f, 1.0f,  0, 0, 1,  1, 1,  -0.5f, 0.5f, 1.0f,  0, 0, 1,  0, 1,
+                    -0.5f,-0.5f, 0.0f,  0, 0,-1,  1, 0,  -0.5f, 0.5f, 0.0f,  0, 0,-1,  1, 1,   0.5f, 0.5f, 0.0f,  0, 0,-1,  0, 1,   0.5f,-0.5f, 0.0f,  0, 0,-1,  0, 0,
+                    -0.5f, 0.5f, 0.0f,  0, 1, 0,  0, 1,  -0.5f, 0.5f, 1.0f,  0, 1, 0,  0, 0,   0.5f, 0.5f, 1.0f,  0, 1, 0,  1, 0,   0.5f, 0.5f, 0.0f,  0, 1, 0,  1, 1,
+                    -0.5f,-0.5f, 0.0f,  0,-1, 0,  0, 0,   0.5f,-0.5f, 0.0f,  0,-1, 0,  1, 0,   0.5f,-0.5f, 1.0f,  0,-1, 0,  1, 1,  -0.5f,-0.5f, 1.0f,  0,-1, 0,  0, 1,
+                     0.5f,-0.5f, 0.0f,  1, 0, 0,  1, 0,   0.5f, 0.5f, 0.0f,  1, 0, 0,  1, 1,   0.5f, 0.5f, 1.0f,  1, 0, 0,  0, 1,   0.5f,-0.5f, 1.0f,  1, 0, 0,  0, 0,
+                    -0.5f,-0.5f, 0.0f, -1, 0, 0,  0, 0,  -0.5f,-0.5f, 1.0f, -1, 0, 0,  1, 0,  -0.5f, 0.5f, 1.0f, -1, 0, 0,  1, 1,  -0.5f, 0.5f, 0.0f, -1, 0, 0,  0, 1
+                };
+                unsigned int cubeI[] = { 0,1,2, 2,3,0, 4,5,6, 6,7,4, 8,9,10, 10,11,8, 12,13,14, 14,15,12, 16,17,18, 18,19,16, 20,21,22, 22,23,20 };
+
+                req->min = { -w*0.5f, -d*0.5f, 0.0f };
+                req->max = { w*0.5f, d*0.5f, h };
+
+                for(int i=0; i<24; ++i)
+                {
+                    req->verts[i*8+0] = cubeV[i*8+0] * w;
+                    req->verts[i*8+1] = cubeV[i*8+2] * h; // Up is Y in GL
+                    req->verts[i*8+2] = -cubeV[i*8+1] * d; // North is -Z
+                    req->verts[i*8+3] = cubeV[i*8+3];
+                    req->verts[i*8+4] = cubeV[i*8+5];
+                    req->verts[i*8+5] = -cubeV[i*8+4];
+                    req->verts[i*8+6] = cubeV[i*8+6];
+                    req->verts[i*8+7] = cubeV[i*8+7];
+                }
+                memcpy(req->indices, cubeI, 36 * sizeof(unsigned int));
+                req->success = true; req->completed = true;
+                return;
+            }
+
             std::vector<uint8_t> buffer;
             if (!Network::Fetch(req->url, buffer)) { req->success = false; req->completed = true; return; }
 
@@ -474,9 +562,9 @@ namespace Alice
             if (!pos_acc) { cgltf_free(data); req->success = false; req->completed = true; return; }
 
             req->vcount = pos_acc->count;
-            int stride = 8; 
-            req->verts = (float*)malloc(req->vcount * stride * sizeof(float));
+            if (req->vcount > req->maxVCount) { cgltf_free(data); req->success = false; req->completed = true; return; }
 
+            int stride = 8; 
             req->min = { 1e30f, 1e30f, 1e30f };
             req->max = { -1e30f, -1e30f, -1e30f };
 
@@ -530,7 +618,7 @@ namespace Alice
             }
 
             req->icount = prim->indices ? prim->indices->count : 0;
-            req->indices = (unsigned int*)malloc(req->icount * sizeof(unsigned int));
+            if (req->icount > req->maxICount) { cgltf_free(data); req->success = false; req->completed = true; return; }
             for (size_t i = 0; i < req->icount; ++i) req->indices[i] = (unsigned int)cgltf_accessor_read_index(prim->indices, i);
 
             // Texture Extraction

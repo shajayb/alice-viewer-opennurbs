@@ -329,15 +329,19 @@ $SourceCodeContext
     # ====================================================================
     $Attempt = 0
     $ArchitectSuccess = $false
+    
+    # Declare the raw response string OUTSIDE the loop so it can be parsed later
     $ArchitectResponseRaw = ""
 
     while (-not $ArchitectSuccess -and $Attempt -lt $MaxRetries) {
         $Attempt++
         Write-Host "Awaiting Architect evaluation (Attempt $Attempt/$MaxRetries)..." -ForegroundColor Cyan
         
+        # CRITICAL FIX: Reset the string inside the loop so 429 stack traces don't poison subsequent successful JSON parses
+        $ArchitectResponseRaw = ""
+        
         # Inject the $ImageArg dynamically so the vision model can analyze the image
         $Pipeline = cmd.exe /c "gemini.cmd --approval-mode=yolo$ImageArg < `"$TempArchitectFile`" 2>&1"
-        $ArchitectResponseRaw = ""
         
         $Pipeline | ForEach-Object {
             Write-Host "  > $_" -ForegroundColor DarkGray

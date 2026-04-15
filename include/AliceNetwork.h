@@ -21,7 +21,15 @@ namespace Alice
             return realsize;
         }
 
-        static bool Fetch(const char* url, std::vector<uint8_t>& buffer, long* out_status_code = nullptr, std::string* out_body = nullptr)
+        static size_t header_callback(void* contents, size_t size, size_t nmemb, void* userp)
+        {
+            size_t realsize = size * nmemb;
+            std::string* headers = (std::string*)userp;
+            headers->append((char*)contents, realsize);
+            return realsize;
+        }
+
+        static bool Fetch(const char* url, std::vector<uint8_t>& buffer, long* out_status_code = nullptr, std::string* out_body = nullptr, std::string* out_headers = nullptr)
         {
             std::string sUrl = url;
             if (sUrl.find("http://") == 0 || sUrl.find("https://") == 0)
@@ -32,6 +40,13 @@ namespace Alice
                 curl_easy_setopt(curl, CURLOPT_URL, url);
                 curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
                 curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&buffer);
+                
+                if (out_headers)
+                {
+                    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_callback);
+                    curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)out_headers);
+                }
+
                 curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
                 curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
                 curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);

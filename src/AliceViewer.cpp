@@ -839,7 +839,10 @@ void AliceViewer::run()
         if (m_headlessCapture)
         {
             static int captureFrame = 0;
-            if (captureFrame++ > 120)
+            static int capturedCount = 0;
+            captureFrame++;
+
+            if (captureFrame == 150 || captureFrame == 160 || captureFrame == 170)
             {
                 int width, height;
                 glfwGetFramebufferSize(window, &width, &height);
@@ -849,20 +852,25 @@ void AliceViewer::run()
                 {
                     glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixelBuffer);
                     stbi_flip_vertically_on_write(true);
-                    if (stbi_write_png("framebuffer.png", width, height, 3, pixelBuffer, width * 3))
+                    
+                    char filename[64];
+                    snprintf(filename, 64, "fb_%d.png", capturedCount * 120);
+                    
+                    if (stbi_write_png(filename, width, height, 3, pixelBuffer, width * 3))
                     {
-                        printf("[HEADLESS] Capture saved to framebuffer.png (%dx%d)\n", width, height);
+                        printf("[HEADLESS] Capture saved to %s (%dx%d)\n", filename, width, height);
+                    }
+                    
+                    capturedCount++;
+                    if (capturedCount < 3)
+                    {
+                        camera.yaw += 120.0f * (3.14159f / 180.0f);
                     }
                     else
                     {
-                        printf("[HEADLESS] ERROR: Failed to write framebuffer.png\n");
+                        glfwSetWindowShouldClose(window, true);
                     }
                 }
-                else
-                {
-                    printf("[HEADLESS] ERROR: Failed to allocate %zu bytes for capture\n", bufferSize);
-                }
-                glfwSetWindowShouldClose(window, true);
             }
         }
 

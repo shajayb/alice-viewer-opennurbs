@@ -173,6 +173,7 @@ namespace Alice
             
             TileNode& node = nodes[idx];
             memset(&node, 0, sizeof(TileNode));
+            node.firstChild = -1;
 
             // Default transform to identity
             double localTransform[16];
@@ -359,22 +360,26 @@ namespace Alice
             nodesVisited++;
 
             // 0. Frustum Culling (Hierarchical AABB first)
-            if (nodes[nodeIdx].aabbMax.x > nodes[nodeIdx].aabbMin.x)
+            // Bypass root culling to ensure we always enter the tree
+            if (depth > 0)
             {
-                if (!IsAABBInFrustum(frustumPlanes, nodes[nodeIdx].aabbMin, nodes[nodeIdx].aabbMax)) return false;
-            }
-            else // Fallback to sphere if AABB not yet ready
-            {
-                if (!IsSphereInFrustum(frustumPlanes, nodes[nodeIdx].glCenter.x, nodes[nodeIdx].glCenter.y, nodes[nodeIdx].glCenter.z, nodes[nodeIdx].sphereRadius))
+                if (nodes[nodeIdx].aabbMax.x > nodes[nodeIdx].aabbMin.x)
+                {
+                    if (!IsAABBInFrustum(frustumPlanes, nodes[nodeIdx].aabbMin, nodes[nodeIdx].aabbMax)) return false;
+                }
+                else // Fallback to sphere if AABB not yet ready
+                {
+                    if (!IsSphereInFrustum(frustumPlanes, nodes[nodeIdx].glCenter.x, nodes[nodeIdx].glCenter.y, nodes[nodeIdx].glCenter.z, nodes[nodeIdx].sphereRadius))
+                    {
+                        return false;
+                    }
+                }
+
+                // 0b. Horizon Culling
+                if (IsBelowHorizon(nodes[nodeIdx].sphereCenter, cameraPos, nodes[nodeIdx].sphereRadius))
                 {
                     return false;
                 }
-            }
-
-            // 0b. Horizon Culling
-            if (IsBelowHorizon(nodes[nodeIdx].sphereCenter, cameraPos, nodes[nodeIdx].sphereRadius))
-            {
-                return false;
             }
 
             // 1. Calculate Screen Space Error (SSE)
@@ -388,7 +393,8 @@ namespace Alice
             float geometricError = nodes[nodeIdx].geometricError;
             double sse = (geometricError * viewportHeight) / (distance * 2.0 * tan(fov * 0.5));
 
-            bool shouldDescend = (sse > sseThreshold) && (nodes[nodeIdx].childCount > 0);
+            // Force descend if node has children AND (SSE > threshold OR it has no content to render)
+            bool shouldDescend = (nodes[nodeIdx].childCount > 0) && (sse > sseThreshold || !nodes[nodeIdx].hasContent);
             
             if (!nodes[nodeIdx].isLoaded && (nodes[nodeIdx].isExternal || nodes[nodeIdx].hasContent))
             {
@@ -405,8 +411,12 @@ namespace Alice
                 for (int i = 0; i < count; ++i)
                 {
                     int cIdx = first + i;
-                    // For REPLACE, we strictly need all children with content to be loaded
                     if (nodes[cIdx].hasContent && !nodes[cIdx].isLoaded && !nodes[cIdx].isExternal)
+                    {
+                        allChildrenReady = false;
+                        break;
+                    }
+                    if (nodes[cIdx].isExternal && (nodes[cIdx].firstChild == -1))
                     {
                         allChildrenReady = false;
                         break;
@@ -415,12 +425,10 @@ namespace Alice
 
                 if (nodes[nodeIdx].refineAdd)
                 {
-                    // ADD: Render parent if loaded
                     if (nodes[nodeIdx].isLoaded && nodes[nodeIdx].hasContent)
                     {
                         activeNodes.push_back({ nodeIdx, (float)sse });
                     }
-                    // And always try to render children
                     for (int i = 0; i < count; ++i)
                     {
                         TraverseAndGraft(first + i, nodes, cameraPos, viewportHeight, fov, sseThreshold, frustumPlanes, activeNodes, arena, depth + 1, nodesVisited, maxNodes);
@@ -429,10 +437,8 @@ namespace Alice
                 }
                 else
                 {
-                    // REPLACE
-                    if (allChildrenReady)
+                    if (allChildrenReady && (nodes[nodeIdx].firstChild != -1))
                     {
-                        // All children loaded, descend to them
                         for (int i = 0; i < count; ++i)
                         {
                             TraverseAndGraft(first + i, nodes, cameraPos, viewportHeight, fov, sseThreshold, frustumPlanes, activeNodes, arena, depth + 1, nodesVisited, maxNodes);
@@ -441,7 +447,11 @@ namespace Alice
                     }
                     else
                     {
-                        // Children NOT ready, render parent as fallback
+                        for (int i = 0; i < count; ++i)
+                        {
+                            TraverseAndGraft(first + i, nodes, cameraPos, viewportHeight, fov, sseThreshold, frustumPlanes, activeNodes, arena, depth + 1, nodesVisited, maxNodes);
+                        }
+
                         if (nodes[nodeIdx].isLoaded && nodes[nodeIdx].hasContent)
                         {
                             activeNodes.push_back({ nodeIdx, (float)sse });
@@ -453,7 +463,6 @@ namespace Alice
             }
             else
             {
-                // Leaf or SSE satisfied: render this node if loaded
                 if (nodes[nodeIdx].isLoaded && nodes[nodeIdx].hasContent)
                 {
                     activeNodes.push_back({ nodeIdx, (float)sse });
@@ -490,6 +499,8 @@ namespace Alice
             int texWidth, texHeight, texChannels;
             char texKey[1024];
             bool hasTexture;
+            float baseColorFactor[4];
+            float emissiveFactor[3];
 
             bool success;
             bool completed;
@@ -537,6 +548,10 @@ namespace Alice
                     req->verts[i*8+7] = cubeV[i*8+7];
                 }
                 memcpy(req->indices, cubeI, 36 * sizeof(unsigned int));
+
+                for (int i = 0; i < 4; ++i) req->baseColorFactor[i] = 1.0f;
+                for (int i = 0; i < 3; ++i) req->emissiveFactor[i] = 0.0f;
+
                 req->success = true; req->completed = true;
                 return;
             }
@@ -636,26 +651,41 @@ namespace Alice
             if (req->icount > req->maxICount) { cgltf_free(data); req->success = false; req->completed = true; return; }
             for (size_t i = 0; i < req->icount; ++i) req->indices[i] = (unsigned int)cgltf_accessor_read_index(prim->indices, i);
 
-            // Texture Extraction
-            if (prim->material && prim->material->has_pbr_metallic_roughness)
+            // Material Extraction
+            if (prim->material)
             {
-                cgltf_texture* tex = prim->material->pbr_metallic_roughness.base_color_texture.texture;
-                if (tex && tex->image)
+                if (prim->material->has_pbr_metallic_roughness)
                 {
-                    cgltf_image* img = tex->image;
-                    if (img->buffer_view)
+                    for (int i = 0; i < 4; ++i) req->baseColorFactor[i] = prim->material->pbr_metallic_roughness.base_color_factor[i];
+                    
+                    cgltf_texture* tex = prim->material->pbr_metallic_roughness.base_color_texture.texture;
+                    if (tex && tex->image)
                     {
-                        uint8_t* start = (uint8_t*)img->buffer_view->buffer->data + img->buffer_view->offset;
-                        size_t size = img->buffer_view->size;
-                        req->texData = stbi_load_from_memory(start, (int)size, &req->texWidth, &req->texHeight, &req->texChannels, 4);
-                        if (req->texData)
+                        cgltf_image* img = tex->image;
+                        if (img->buffer_view)
                         {
-                            req->hasTexture = true;
-                            req->texChannels = 4;
-                            snprintf(req->texKey, 1024, "%s_tex_%d", req->url, (int)img->buffer_view->offset);
+                            uint8_t* start = (uint8_t*)img->buffer_view->buffer->data + img->buffer_view->offset;
+                            size_t size = img->buffer_view->size;
+                            req->texData = stbi_load_from_memory(start, (int)size, &req->texWidth, &req->texHeight, &req->texChannels, 4);
+                            if (req->texData)
+                            {
+                                req->hasTexture = true;
+                                req->texChannels = 4;
+                                snprintf(req->texKey, 1024, "%s_tex_%d", req->url, (int)img->buffer_view->offset);
+                            }
                         }
                     }
                 }
+                else
+                {
+                    for (int i = 0; i < 4; ++i) req->baseColorFactor[i] = 1.0f;
+                }
+                for (int i = 0; i < 3; ++i) req->emissiveFactor[i] = prim->material->emissive_factor[i];
+            }
+            else
+            {
+                for (int i = 0; i < 4; ++i) req->baseColorFactor[i] = 1.0f;
+                for (int i = 0; i < 3; ++i) req->emissiveFactor[i] = 0.0f;
             }
 
             cgltf_free(data);

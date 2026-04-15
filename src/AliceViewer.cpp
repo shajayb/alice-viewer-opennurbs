@@ -322,11 +322,10 @@ static M4 lookAt(V3 eye, V3 target, V3 up)
     V3 s = nrm_v(crs_v(f, up));
     V3 v = crs_v(s, f);
     M4 r = { 0 };
-    r.m[0] = s.x; r.m[4] = s.y; r.m[8] = s.z;
-    r.m[1] = v.x; r.m[5] = v.y; r.m[9] = v.z;
-    r.m[2] = -f.x; r.m[6] = -f.y; r.m[10] = -f.z;
-    r.m[12] = -dot_v(s, eye); r.m[13] = -dot_v(v, eye); r.m[14] = dot_v(f, eye);
-    r.m[15] = 1.0f;
+    r.m[0] = s.x; r.m[1] = v.x; r.m[2] = -f.x; r.m[3] = 0.0f;
+    r.m[4] = s.y; r.m[5] = v.y; r.m[6] = -f.y; r.m[7] = 0.0f;
+    r.m[8] = s.z; r.m[9] = v.z; r.m[10] = -f.z; r.m[11] = 0.0f;
+    r.m[12] = -dot_v(s, eye); r.m[13] = -dot_v(v, eye); r.m[14] = dot_v(f, eye); r.m[15] = 1.0f;
     return r;
 }
 
@@ -339,15 +338,16 @@ static M4 perspective(float fov, float asp, float n, float f)
     r.m[10] = -(f + n) / (f - n);
     r.m[11] = -1.0f;
     r.m[14] = -(2.0f * f * n) / (f - n);
+    r.m[15] = 0.0f;
     return r;
 }
 
 static M4 mult(M4 a, M4 b)
 {
     M4 r = { 0 };
-    for (int i = 0; i < 4; i++)
+    for (int j = 0; j < 4; j++)
     {
-        for (int j = 0; j < 4; j++)
+        for (int i = 0; i < 4; i++)
         {
             r.m[j * 4 + i] = a.m[0 * 4 + i] * b.m[j * 4 + 0] +
                              a.m[1 * 4 + i] * b.m[j * 4 + 1] +
@@ -367,6 +367,7 @@ M4 AliceViewer::makeInfiniteReversedZProjRH(float fovRadians, float aspect, floa
     res.m[10] = 0.0f;
     res.m[11] = -1.0f;
     res.m[14] = zNear;
+    res.m[15] = 0.0f;
     return res;
 }
 
@@ -412,9 +413,9 @@ M4 ArcballCamera::getViewMatrix() const
     V3 eye; 
     float cp = cosf(pitch), sp = sinf(pitch), cy = cosf(yaw), sy = sinf(yaw);
     eye.x = focusPoint.x + distance * cp * sy; 
-    eye.y = focusPoint.y - distance * cp * cy; 
-    eye.z = focusPoint.z + distance * sp;
-    return lookAt(eye, focusPoint, { 0, 0, 1 });
+    eye.y = focusPoint.y + distance * sp;            
+    eye.z = focusPoint.z - distance * cp * cy;       
+    return lookAt(eye, focusPoint, { 0, 1, 0 });
 }
 
 void ArcballCamera::setBookmark(const char* name)
@@ -477,9 +478,12 @@ void ArcballCamera::update(GLFWwindow* window, float deltaTime)
         if (isMMB)
         {
             float cp = cosf(pitch), sp = sinf(pitch), cy = cosf(yaw), sy = sinf(yaw);
-            V3 eye = { focusPoint.x + distance * cp * sy, focusPoint.y - distance * cp * cy, focusPoint.z + distance * sp };
+            V3 eye;
+            eye.x = focusPoint.x + distance * cp * sy;
+            eye.y = focusPoint.y + distance * sp;
+            eye.z = focusPoint.z - distance * cp * cy;
             V3 f = nrm_v(focusPoint - eye);
-            V3 r = nrm_v(crs_v(f, { 0, 0, 1 }));
+            V3 r = nrm_v(crs_v(f, { 0, 1, 0 }));
             V3 u = crs_v(r, f);
             focusPoint -= (r * (dx * (distance * 0.001f))) + (u * (dy * (distance * 0.001f)));
         }
@@ -842,7 +846,7 @@ void AliceViewer::run()
             static int capturedCount = 0;
             captureFrame++;
 
-            if (captureFrame == 150 || captureFrame == 160 || captureFrame == 170)
+            if (captureFrame == 210 || captureFrame == 220 || captureFrame == 230)
             {
                 int width, height;
                 glfwGetFramebufferSize(window, &width, &height);

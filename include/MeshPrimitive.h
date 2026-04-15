@@ -15,9 +15,15 @@ struct MeshPrimitive
 {
     unsigned int vao, vbo, ebo, instanceVbo;
     unsigned int albedoTex;
+    float baseColorFactor[4];
+    float emissiveFactor[3];
     int count;
 
-    MeshPrimitive() : vao(0), vbo(0), ebo(0), instanceVbo(0), albedoTex(0), count(0) {}
+    MeshPrimitive() : vao(0), vbo(0), ebo(0), instanceVbo(0), albedoTex(0), count(0) 
+    {
+        baseColorFactor[0] = baseColorFactor[1] = baseColorFactor[2] = baseColorFactor[3] = 1.0f;
+        emissiveFactor[0] = emissiveFactor[1] = emissiveFactor[2] = 0.0f;
+    }
 
     void initPlane(float size)
     {

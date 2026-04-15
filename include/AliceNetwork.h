@@ -29,7 +29,7 @@ namespace Alice
             return realsize;
         }
 
-        static bool Fetch(const char* url, std::vector<uint8_t>& buffer, long* out_status_code = nullptr, std::string* out_body = nullptr, std::string* out_headers = nullptr)
+        static bool Fetch(const char* url, std::vector<uint8_t>& buffer, long* out_status_code = nullptr, std::string* out_body = nullptr, std::string* out_headers = nullptr, long timeout_seconds = 0)
         {
             std::string sUrl = url;
             if (sUrl.find("http://") == 0 || sUrl.find("https://") == 0)
@@ -45,6 +45,11 @@ namespace Alice
                 {
                     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_callback);
                     curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)out_headers);
+                }
+
+                if (timeout_seconds > 0)
+                {
+                    curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_seconds);
                 }
 
                 curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);

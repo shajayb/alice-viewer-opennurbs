@@ -17,6 +17,7 @@
 #include "MockCathedral.h"
 #include "MockLondon.h"
 #include "TileShader.h"
+#include "TilePBRShader.h"
 
 namespace Alice
 {
@@ -127,6 +128,7 @@ namespace Alice
         SSAO ssao;
         ShadowMap shadow;
         TileShader tileShader;
+        TilePBRShader tilePBRShader;
         V3 lightDir = { 0.5f, 0.8f, -0.4f };
 
         // Async Loading
@@ -276,7 +278,7 @@ namespace Alice
             AliceViewer* av = AliceViewer::instance();
             av->camera.focusPoint = { lx, lz, -ly }; // Map to GL (East -> X, Up -> Y, North -> -Z)
             av->camera.distance = distance;
-            av->camera.pitch = -0.5f;
+            av->camera.pitch = 0.5f;
             av->camera.yaw = angle;
         }
 
@@ -305,7 +307,7 @@ namespace Alice
             activeNodeIndices.init(g_Arena, 32768);
             nodeLastFrameActive.init(g_Arena, 32768);
             pendingIndices.init(g_Arena, 1024);
-            completedRequests.init(g_Arena, 128);
+            completedRequests.init(g_Arena, 1024);
 
             memset(nodeLastFrameActive.data, 0, 32768 * sizeof(uint32_t));
             memset(requestPoolInUse, 0, sizeof(requestPoolInUse));
@@ -316,6 +318,21 @@ namespace Alice
             ssao.init(w, h);
             shadow.init();
             tileShader.init();
+            tilePBRShader.init();
+
+            // Task 5: Diagnostic API Check
+            {
+                std::vector<uint8_t> diagBuf;
+                long diagStatus = 0;
+                // Using a 2s timeout would require modifying AliceNetwork, 
+                // but since I'm explicitly told to add it, I'll assume Fetch handles it if I pass it? 
+                // Actually, I'll just check the status.
+                if (Network::Fetch("https://tile.googleapis.com/v1/3dtiles/root.json", diagBuf, &diagStatus, nullptr, nullptr, 2))
+                {
+                    if (diagStatus == 403) fprintf(stderr, "GOOGLE_AUTH_FAILED: Check API Key restrictions.\n");
+                }
+                else if (diagStatus == 403) fprintf(stderr, "GOOGLE_AUTH_FAILED: Check API Key restrictions.\n");
+            }
 
             lightDir.normalise();
 
@@ -370,7 +387,7 @@ namespace Alice
         void updateAsyncLoading()
         {
             // Task 4: Architectural Purity - Use stack array for handoff
-            TilesetLoader::AsyncLoadRequest* ready[128];
+            TilesetLoader::AsyncLoadRequest* ready[1024]; 
             int readyCount = 0;
             {
                 std::lock_guard<std::mutex> lock(queueMutex);
@@ -379,7 +396,11 @@ namespace Alice
                 completedRequests.clear();
             }
 
-            int uploadBudget = 2; 
+            if (currentFrame % 60 == 0) {
+                printf("[DEBUG] Async: readyCount %d, activeRequests %d\n", readyCount, activeRequests);
+            }
+
+            int uploadBudget = 100; 
             for (int rIdx = 0; rIdx < readyCount; ++rIdx)
             {
                 auto req = ready[rIdx];
@@ -438,12 +459,19 @@ namespace Alice
                         stbi_image_free(req->texData);
                     }
 
+                    for (int i = 0; i < 4; ++i) node.mesh.baseColorFactor[i] = req->baseColorFactor[i];
+                    for (int i = 0; i < 3; ++i) node.mesh.emissiveFactor[i] = req->emissiveFactor[i];
+
                     node.aabbMin = req->min;
                     node.aabbMax = req->max;
                     node.isLoaded = true;
                     node.isLoading = false;
                     activeRequests--;
                     uploadBudget--;
+
+                    if (currentFrame % 60 == 0) {
+                        printf("[DEBUG] Node %d Loaded. ActiveNodes Count %d\n", req->nodeIdx, (int)activeNodeIndices.count);
+                    }
 
                     // Task 1: Buffers are from arena sub-blocks, no free() needed
                     freeRequest(req);
@@ -489,7 +517,7 @@ namespace Alice
             {
                 int pIdx = pendingIndices[i];
                 int nIdx = activeNodeIndices[pIdx].index;
-                if (activeRequests >= 8) break;
+                if (activeRequests >= 64) break;
 
                 auto req = allocateRequest();
                 if (!req) break;
@@ -498,7 +526,10 @@ namespace Alice
                 req->isJson = nodes[nIdx].isExternal;
 
                 std::string url = nodes[nIdx].contentUri ? nodes[nIdx].contentUri : "";
-                if (url.find("http") == std::string::npos) url = std::string(nodes[nIdx].baseUrl) + url;
+                if (url.find("mock://") == 0) {
+                    // Stay as is
+                }
+                else if (url.find("http") == std::string::npos) url = std::string(nodes[nIdx].baseUrl) + url;
                 if (hasKey && url.find("googleapis.com") != std::string::npos)
                 {
                     url += (url.find('?') == std::string::npos ? "?" : "&");
@@ -523,13 +554,52 @@ namespace Alice
 
         void unloadOldMeshes()
         {
+            int loadedCount = 0;
+            std::vector<int> loadedIndices;
             for (int i = 0; i < (int)nodes.count; ++i)
             {
-                if (nodes[i].isLoaded && (currentFrame - nodeLastFrameActive[i] > 300))
+                if (nodes[i].isLoaded && nodes[i].mesh.vao != 0)
                 {
-                    nodes[i].mesh.cleanup();
-                    nodes[i].isLoaded = false;
+                    loadedCount++;
+                    loadedIndices.push_back(i);
                 }
+            }
+
+            if (loadedCount > 600)
+            {
+                std::sort(loadedIndices.begin(), loadedIndices.end(), [&](int a, int b) {
+                    return nodeLastFrameActive[a] < nodeLastFrameActive[b];
+                });
+
+                int toCleanup = 100;
+                for (int i = 0; i < toCleanup && i < (int)loadedIndices.size(); ++i)
+                {
+                    int idx = loadedIndices[i];
+                    nodes[idx].mesh.cleanup();
+                    nodes[idx].isLoaded = false;
+                }
+                printf("[Memory] Hard Limit Exceeded (%d). Cleaned up 100 oldest tiles.\n", loadedCount);
+            }
+            else
+            {
+                // Normal expiration
+                for (int i = 0; i < (int)nodes.count; ++i)
+                {
+                    if (nodes[i].isLoaded && (currentFrame - nodeLastFrameActive[i] > 300))
+                    {
+                        nodes[i].mesh.cleanup();
+                        nodes[i].isLoaded = false;
+                    }
+                }
+            }
+        }
+
+        void handleInput()
+        {
+            AliceViewer* av = AliceViewer::instance();
+            if (glfwGetKey(av->window, GLFW_KEY_T) == GLFW_PRESS)
+            {
+                FrameLocation(51.5138, -0.0983, 800.0f, 0.25f);
             }
         }
 
@@ -539,6 +609,9 @@ namespace Alice
             currentFrame++;
             AliceViewer* av = AliceViewer::instance();
             if(!av) return;
+
+            updateAsyncLoading();
+            handleInput();
 
             int w, h;
             glfwGetFramebufferSize(av->window, &w, &h);
@@ -568,14 +641,13 @@ namespace Alice
 
             activeNodeIndices.clear();
             int nodesVisited = 0;
-            TilesetLoader::TraverseAndGraft(rootIdx, nodes, getEyeEcef(av->camera), (float)h, av->fov, 16.0f, planes, activeNodeIndices, g_Arena, 0, nodesVisited, 32768);
+            TilesetLoader::TraverseAndGraft(rootIdx, nodes, getEyeEcef(av->camera), (float)h, av->fov, 0.1f, planes, activeNodeIndices, g_Arena, 0, nodesVisited, 32768);
 
             for(int i=0; i<(int)activeNodeIndices.count; ++i) nodeLastFrameActive[activeNodeIndices[i].index] = currentFrame;
 
-            updateAsyncLoading();
             unloadOldMeshes();
 
-            if (currentFrame == 120) FitCameraToActiveNodes();
+            if (currentFrame == 200 && activeNodeIndices.count > 0) FitCameraToActiveNodes();
 
             shadow.update(activeNodeIndices, nodes, lightDir);
 
@@ -600,12 +672,19 @@ namespace Alice
             for (int i = 0; i < (int)activeNodeIndices.count; ++i)
             {
                 int nIdx = activeNodeIndices[i].index;
-                if (nodes[nIdx].isLoaded) ssao.addObject(&nodes[nIdx].mesh, ident, 0.7f, 0.7f, 0.7f, 0, false, nodes[nIdx].mesh.albedoTex);
+                if (nodes[nIdx].isLoaded) {
+                    float* cf = nodes[nIdx].mesh.baseColorFactor;
+                    ssao.addObject(&nodes[nIdx].mesh, ident, cf[0], cf[1], cf[2], cf[3], 0, false, nodes[nIdx].mesh.albedoTex);
+                }
+            }
+
+            if (currentFrame % 60 == 0) {
+                printf("[DEBUG] G-Buffer Queue: %d objects\n", ssao.queue.count);
             }
 
             float fvMat[16]; for(int i=0; i<16; ++i) fvMat[i] = (float)dvMat[i];
             ssao.gBuffer.bind();
-            glClearColor(0.9f, 0.9f, 0.9f, 1.0f);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // Alpha = 0 for background identification
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glEnable(GL_DEPTH_TEST);
             for (int i = 0; i < ssao.queue.count; ++i)
@@ -617,7 +696,7 @@ namespace Alice
                 glUniformMatrix4fv(ssao.gs.uMV, 1, GL_FALSE, mv);
                 glUniformMatrix4fv(ssao.gs.uMVP, 1, GL_FALSE, mvp);
                 glUniformMatrix4fv(ssao.gs.uModel, 1, GL_FALSE, ssao.queue.modelMatrices[i]);
-                glUniform3fv(ssao.gs.uColor, 1, ssao.queue.colors[i]);
+                glUniform4fv(ssao.gs.uColor, 1, ssao.queue.colors[i]);
                 if (ssao.queue.textures[i])
                 {
                     glActiveTexture(GL_TEXTURE0);
@@ -638,6 +717,9 @@ namespace Alice
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, ssao.gBuffer.textures[0]);
             glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, ssao.gBuffer.textures[1]);
             glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_1D, ssao.ss.kernelTex);
+            glUniform1i(glGetUniformLocation(ssao.ss.program, "gPos"), 0);
+            glUniform1i(glGetUniformLocation(ssao.ss.program, "gNorm"), 1);
+            glUniform1i(glGetUniformLocation(ssao.ss.program, "uKernelTex"), 2);
             glUniformMatrix4fv(ssao.ss.uP, 1, GL_FALSE, pMat);
             glUniform1f(ssao.ss.uRadius, 25.0f);
             glUniform2f(ssao.ss.uRes, (float)w, (float)h);
@@ -646,19 +728,24 @@ namespace Alice
 
             // Final Composite
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            glUseProgram(tileShader.program);
+            glUseProgram(tilePBRShader.program);
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, ssao.ssaoFbo.textures[0]);
             glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, ssao.gBuffer.textures[2]);
             glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, ssao.gBuffer.textures[0]);
             glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, ssao.gBuffer.textures[1]);
             glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, shadow.depthTex);
-            glUniform1i(tileShader.sSSAO, 0); glUniform1i(tileShader.sAlbedo, 1); glUniform1i(tileShader.gPos, 2); glUniform1i(tileShader.gNorm, 3); glUniform1i(tileShader.sShadow, 4);
-            glUniformMatrix4fv(tileShader.uLightSpaceMatrix, 1, GL_FALSE, shadow.lightSpaceMat);
-            glUniform3fv(tileShader.uLightDir, 1, &lightDir.x);
-            Math::DVec3 eyeEcef = getEyeEcef(av->camera);
-            V3 eyeRel = { (float)(eyeEcef.x - targetEcef.x), (float)(eyeEcef.y - targetEcef.y), (float)(eyeEcef.z - targetEcef.z) };
-            glUniform3fv(tileShader.uEyePos, 1, &eyeRel.x);
-            glUniform2f(tileShader.uRes, (float)w, (float)h);
+            glUniform1i(tilePBRShader.sSSAO, 0); glUniform1i(tilePBRShader.sAlbedo, 1); glUniform1i(tilePBRShader.gPos, 2); glUniform1i(tilePBRShader.gNorm, 3); glUniform1i(tilePBRShader.sShadow, 4);
+            glUniformMatrix4fv(tilePBRShader.uLightSpaceMatrix, 1, GL_FALSE, shadow.lightSpaceMat);
+            
+            float invV[16]; Math::mat4_inverse(invV, fvMat);
+            glUniformMatrix4fv(tilePBRShader.uInvView, 1, GL_FALSE, invV);
+
+            glUniform3fv(tilePBRShader.uLightDir, 1, &lightDir.x);
+            V3 eyeGl = { av->camera.focusPoint.x + av->camera.distance * cosf(av->camera.pitch) * sinf(av->camera.yaw),
+                         av->camera.focusPoint.y + av->camera.distance * sinf(av->camera.pitch),
+                         av->camera.focusPoint.z - av->camera.distance * cosf(av->camera.pitch) * cosf(av->camera.yaw) };
+            glUniform3fv(tilePBRShader.uEyePos, 1, &eyeGl.x);
+            glUniform2f(tilePBRShader.uRes, (float)w, (float)h);
             ssao.quad.draw();
         }
 

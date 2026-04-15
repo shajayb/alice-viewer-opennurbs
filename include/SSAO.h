@@ -122,14 +122,17 @@ layout(location=2) out vec4 gAlbedo;
 in vec3 vPos;
 in vec3 vNorm;
 in vec2 vUV;
-uniform vec3 uColor;
+uniform vec4 uColor;
 uniform sampler2D uAlbedo;
 uniform bool uHasTexture;
 void main(){
     gPos = vec4(vPos, 1.0);
     gNorm = vec4(normalize(vNorm), 1.0);
-    if(uHasTexture) gAlbedo = texture(uAlbedo, vUV);
-    else gAlbedo = vec4(uColor, 1.0);
+    if(uHasTexture) {
+        vec4 tex = texture(uAlbedo, vUV);
+        gAlbedo = tex * uColor;
+    }
+    else gAlbedo = uColor;
 })";
 
         void init()
@@ -570,7 +573,7 @@ void main(){
     {
         MeshPrimitive* meshes[1024];
         float modelMatrices[1024][16];
-        float colors[1024][3];
+        float colors[1024][4];
         unsigned int textures[1024];
         int instanceCounts[1024];
         bool isPointLayer[1024];
@@ -578,7 +581,7 @@ void main(){
 
         void reset() { count = 0; }
 
-        void add(MeshPrimitive* mesh, const float* modelMatrix, float r, float g, float b, int instanceCount = 0, bool isPoint = false, unsigned int tex = 0)
+        void add(MeshPrimitive* mesh, const float* modelMatrix, float r, float g, float b, float a = 1.0f, int instanceCount = 0, bool isPoint = false, unsigned int tex = 0)
         {
             if (count >= 1024) return;
             meshes[count] = mesh;
@@ -593,6 +596,7 @@ void main(){
             colors[count][0] = r;
             colors[count][1] = g;
             colors[count][2] = b;
+            colors[count][3] = a;
             textures[count] = tex;
             instanceCounts[count] = instanceCount;
             isPointLayer[count] = isPoint;
@@ -600,9 +604,9 @@ void main(){
         }
     } queue;
 
-    void addObject(MeshPrimitive* mesh, const float* modelMatrix, float r, float g, float b, int instanceCount = 0, bool isPoint = false, unsigned int tex = 0)
+    void addObject(MeshPrimitive* mesh, const float* modelMatrix, float r, float g, float b, float a = 1.0f, int instanceCount = 0, bool isPoint = false, unsigned int tex = 0)
     {
-        queue.add(mesh, modelMatrix, r, g, b, instanceCount, isPoint, tex);
+        queue.add(mesh, modelMatrix, r, g, b, a, instanceCount, isPoint, tex);
     }
 
     void clearQueue()

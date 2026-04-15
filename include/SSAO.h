@@ -397,15 +397,38 @@ uniform sampler2D sSSAO;
 uniform sampler2D sAlbedo;
 uniform sampler2D gPos;
 uniform sampler2D gNorm;
+uniform sampler2D sShadow;
+uniform mat4 uLightSpaceMatrix;
+uniform vec3 uLightDir;
 uniform vec2 uRes;
 uniform int uMode;
-uniform int uDir; // 0: Horizontal, 1: Vertical, 2: Final Composite
+uniform int uDir; 
 uniform int uAoType;
 
 vec3 falseColor(float v) {
-    vec3 c1 = vec3(0.0, 0.0, 0.5); // Deep Blue
-    vec3 c2 = vec3(0.0, 1.0, 0.0); // Bright Green
+    vec3 c1 = vec3(0.0, 0.0, 0.5); 
+    vec3 c2 = vec3(0.0, 1.0, 0.0); 
     return mix(c1, c2, v);
+}
+
+float shadowCalc(vec3 worldPos, vec3 normal) {
+    vec4 lightSpacePos = uLightSpaceMatrix * vec4(worldPos, 1.0);
+    vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+    projCoords = projCoords * 0.5 + 0.5;
+    if(projCoords.z > 1.0) return 0.0;
+    
+    float currentDepth = projCoords.z;
+    float bias = max(0.005 * (1.0 - dot(normal, uLightDir)), 0.0005);
+    
+    float shadow = 0.0;
+    vec2 texelSize = 1.0 / textureSize(sShadow, 0);
+    for(int x = -1; x <= 1; ++x) {
+        for(int y = -1; y <= 1; ++y) {
+            float pcfDepth = texture(sShadow, projCoords.xy + vec2(x, y) * texelSize).r; 
+            shadow += currentDepth - bias > pcfDepth  ? 1.0 : 0.0;        
+        }    
+    }
+    return shadow / 9.0;
 }
 
 void main(){
@@ -448,23 +471,21 @@ void main(){
         return;
     }
 
-    // False Color Mapping for Sky Visibility
     if (uMode == 1) {
         FragColor = vec4(falseColor(ao), 1.0);
         return;
     }
 
-    // Arctic Mode Lighting: Hemispherical Ambient
+    float shadow = shadowCalc(centerPos, centerNorm);
+    float lit = max(dot(centerNorm, uLightDir), 0.0) * (1.0 - shadow);
+
     float hemi = centerNorm.y * 0.5 + 0.5;
     vec3 skyColor = vec3(1.0, 1.0, 1.0);
     vec3 groundColor = vec3(0.5, 0.5, 0.5);
-    vec3 ambient = mix(groundColor, skyColor, hemi) * 0.95;
-
-    float vdn = 1.0 - max(dot(centerNorm, vec3(0.0, 0.0, 1.0)), 0.0);
-    float ink = smoothstep(0.5, 1.0, vdn) * 0.15;
+    vec3 ambient = mix(groundColor, skyColor, hemi) * 0.6;
 
     float finalAO = pow(ao, 3.5); 
-    vec3 finalLit = (ambient * finalAO) - ink;
+    vec3 finalLit = albedoSample.rgb * (ambient * finalAO + lit * 0.8);
 
     if (uMode == 0) FragColor = vec4(finalLit, 1.0);
     else if (uMode == 2) FragColor = vec4(vec3(ao), 1.0);

@@ -226,11 +226,7 @@ namespace Alice
             if (nodeIdx < 0 || nodeIdx >= (int)nodes.count || nodesVisited >= maxNodes || depth > 32) return false;
             nodesVisited++;
 
-            // 0. Frustum Culling (Mandate: Skip nodes and children entirely outside)
-            // Note: sphereCenter is in world ECEF, but for the frustum check to be effective against our ENU-mapped view, 
-            // we should ideally use the ENU-mapped sphere center. However, if the viewProj is built from the ECEF camera,
-            // we use ECEF center. If viewProj is ENU-local, we need the center relative to the ENU origin.
-            // Directive assumes the frustum planes are compatible with the node's worldTransform space (ECEF).
+            // 0. Frustum Culling
             if (!IsSphereInFrustum(frustumPlanes, nodes[nodeIdx].sphereCenter.x, nodes[nodeIdx].sphereCenter.y, nodes[nodeIdx].sphereCenter.z, nodes[nodeIdx].sphereRadius))
             {
                 return false;
@@ -244,13 +240,11 @@ namespace Alice
             double distance = sqrt(distSq);
             distance = (std::max)(distance, 1e-6);
 
-            // SSE Formula: (geometricError * viewportHeight) / (distance * 2 * tan(fov/2))
             float geometricError = nodes[nodeIdx].geometricError;
             double sse = (geometricError * viewportHeight) / (distance * 2.0 * tan(fov * 0.5));
 
             bool shouldDescend = sse > sseThreshold;
 
-            // 2. Recursive FetchAndGraft: Immediate descent into new subtree
             if (shouldDescend && nodes[nodeIdx].isExternal)
             {
                 FetchAndGraft(nodeIdx, nodes, arena);
@@ -264,19 +258,27 @@ namespace Alice
                 int first = nodes[nodeIdx].firstChild;
                 int count = nodes[nodeIdx].childCount;
                 
-                bool allChildrenProcessed = true;
+                bool allChildrenReady = true;
                 for (int i = 0; i < count; ++i)
                 {
+                    // Recursively process children
                     if (!TraverseAndGraft(first + i, nodes, cameraPos, viewportHeight, fov, sseThreshold, frustumPlanes, activeNodes, arena, depth + 1, nodesVisited, maxNodes))
                     {
-                        allChildrenProcessed = false;
+                        // If a child didn't refine (e.g. culled or didn't meet SSE), it's "ready" in the sense it doesn't need to be rendered
+                    }
+                    
+                    // Crucial: In REPLACE mode, if any child that SHOULD be rendered is NOT loaded, we cannot cull the parent.
+                    // This prevents holes/popping and Z-fighting if parent and children are both rendered.
+                    if (!nodes[first + i].isLoaded && nodes[first + i].hasContent && !nodes[first + i].isExternal)
+                    {
+                        allChildrenReady = false;
                     }
                 }
 
                 if (nodes[nodeIdx].refineAdd)
                 {
                     // ADD: Render both parent and children
-                    if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal)
+                    if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal && nodes[nodeIdx].isLoaded)
                     {
                         activeNodes.push_back(nodeIdx);
                     }
@@ -284,14 +286,14 @@ namespace Alice
                 }
                 else
                 {
-                    // REPLACE: If children were processed, parent is omitted
-                    if (allChildrenProcessed)
+                    // REPLACE: If children were processed AND are loaded, parent is omitted
+                    if (allChildrenReady)
                     {
                         refined = true;
                     }
-                    else if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal)
+                    else if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal && nodes[nodeIdx].isLoaded)
                     {
-                        // Fallback to parent if children couldn't be processed
+                        // Fallback to parent if children aren't ready
                         activeNodes.push_back(nodeIdx);
                         refined = true;
                     }
@@ -300,7 +302,7 @@ namespace Alice
             else
             {
                 // Terminal node or decided not to descend: add if it has content
-                if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal)
+                if (nodes[nodeIdx].hasContent && !nodes[nodeIdx].isExternal && nodes[nodeIdx].isLoaded)
                 {
                     activeNodes.push_back(nodeIdx);
                     refined = true;
@@ -308,6 +310,116 @@ namespace Alice
             }
 
             return refined;
+        }
+
+        struct AsyncLoadRequest
+        {
+            int nodeIdx;
+            char url[1024];
+            Math::DVec3 centerEcef;
+            double enuMat[16];
+            double transform[16];
+            
+            // Output data
+            float* verts;
+            unsigned int* indices;
+            size_t vcount;
+            size_t icount;
+            Math::Vec3 min, max;
+            bool success;
+            bool completed;
+        };
+
+        static void ProcessAsyncLoad(AsyncLoadRequest* req)
+        {
+            std::vector<uint8_t> buffer;
+            if (!Network::Fetch(req->url, buffer)) { req->success = false; req->completed = true; return; }
+
+            cgltf_options options = {};
+            cgltf_data* data = NULL;
+            cgltf_result result = cgltf_parse(&options, buffer.data(), buffer.size(), &data);
+            if (result != cgltf_result_success) { req->success = false; req->completed = true; return; }
+
+            result = cgltf_load_buffers(&options, data, NULL);
+            if (result != cgltf_result_success) { cgltf_free(data); req->success = false; req->completed = true; return; }
+
+            if (data->meshes_count == 0 || data->meshes[0].primitives_count == 0) { cgltf_free(data); req->success = false; req->completed = true; return; }
+
+            cgltf_primitive* prim = &data->meshes[0].primitives[0];
+            cgltf_accessor *pos_acc = NULL, *norm_acc = NULL, *uv_acc = NULL;
+
+            for (int i = 0; i < (int)prim->attributes_count; ++i)
+            {
+                if (prim->attributes[i].type == cgltf_attribute_type_position) pos_acc = prim->attributes[i].data;
+                if (prim->attributes[i].type == cgltf_attribute_type_normal) norm_acc = prim->attributes[i].data;
+                if (prim->attributes[i].type == cgltf_attribute_type_texcoord) uv_acc = prim->attributes[i].data;
+            }
+
+            if (!pos_acc) { cgltf_free(data); req->success = false; req->completed = true; return; }
+
+            req->vcount = pos_acc->count;
+            int stride = 8; 
+            req->verts = (float*)malloc(req->vcount * stride * sizeof(float));
+
+            req->min = { 1e30f, 1e30f, 1e30f };
+            req->max = { -1e30f, -1e30f, -1e30f };
+
+            for (size_t i = 0; i < req->vcount; ++i)
+            {
+                float p[3], n[3] = { 0,0,1 }, uv[2] = { 0,0 };
+                cgltf_accessor_read_float(pos_acc, i, p, 3);
+                if (norm_acc) cgltf_accessor_read_float(norm_acc, i, n, 3);
+                if (uv_acc) cgltf_accessor_read_float(uv_acc, i, uv, 2);
+
+                double relX = req->transform[12] - req->centerEcef.x;
+                double relY = req->transform[13] - req->centerEcef.y;
+                double relZ = req->transform[14] - req->centerEcef.z;
+
+                double dx = req->transform[0] * p[0] + req->transform[4] * p[1] + req->transform[8] * p[2] + relX;
+                double dy = req->transform[1] * p[0] + req->transform[5] * p[1] + req->transform[9] * p[2] + relY;
+                double dz = req->transform[2] * p[0] + req->transform[6] * p[1] + req->transform[10] * p[2] + relZ;
+
+                double lx = req->enuMat[0] * dx + req->enuMat[1] * dy + req->enuMat[2] * dz; 
+                double ly = req->enuMat[4] * dx + req->enuMat[5] * dy + req->enuMat[6] * dz; 
+                double lz = req->enuMat[8] * dx + req->enuMat[9] * dy + req->enuMat[10] * dz; 
+
+                float gx = (float)lx;    
+                float gy = (float)lz;    
+                float gz = (float)(-ly); 
+
+                req->verts[i * stride + 0] = gx; req->verts[i * stride + 1] = gy; req->verts[i * stride + 2] = gz;
+
+                if (gx < req->min.x) req->min.x = gx;
+                if (gy < req->min.y) req->min.y = gy;
+                if (gz < req->min.z) req->min.z = gz;
+                if (gx > req->max.x) req->max.x = gx;
+                if (gy > req->max.y) req->max.y = gy;
+                if (gz > req->max.z) req->max.z = gz;
+
+                double nx_rot = req->transform[0] * n[0] + req->transform[4] * n[1] + req->transform[8] * n[2];
+                double ny_rot = req->transform[1] * n[0] + req->transform[5] * n[1] + req->transform[9] * n[2];
+                double nz_rot = req->transform[2] * n[0] + req->transform[6] * n[1] + req->transform[10] * n[2];
+
+                double enx = req->enuMat[0] * nx_rot + req->enuMat[1] * ny_rot + req->enuMat[2] * nz_rot;
+                double eny = req->enuMat[4] * nx_rot + req->enuMat[5] * ny_rot + req->enuMat[6] * nz_rot;
+                double enz = req->enuMat[8] * nx_rot + req->enuMat[9] * ny_rot + req->enuMat[10] * nz_rot;
+
+                float ngx = (float)enx;
+                float ngy = (float)enz;
+                float ngz = (float)(-eny);
+
+                float ilen = 1.0f / sqrtf(ngx * ngx + ngy * ngy + ngz * ngz + 1e-12f);
+                req->verts[i * stride + 3] = ngx * ilen; req->verts[i * stride + 4] = ngy * ilen; req->verts[i * stride + 5] = ngz * ilen;
+                req->verts[i * stride + 6] = uv[0]; req->verts[i * stride + 7] = uv[1];
+            }
+
+            req->icount = prim->indices ? prim->indices->count : 0;
+            req->indices = (unsigned int*)malloc(req->icount * sizeof(unsigned int));
+            for (size_t i = 0; i < req->icount; ++i) req->indices[i] = (unsigned int)cgltf_accessor_read_index(prim->indices, i);
+
+            cgltf_free(data);
+            req->success = true;
+            req->completed = true;
         }
 
         static bool LoadGLBWithENU(const char* url, MeshPrimitive& out_mesh, Math::DVec3 centerEcef, double* enuMat, const double* transform, Math::Vec3& out_min, Math::Vec3& out_max, LinearArena& arena)

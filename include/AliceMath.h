@@ -123,12 +123,25 @@ namespace Math
         for(int i=0; i<16; ++i) out[i] = res[i];
     }
 
+    inline void mat4_ortho(float* m, float l, float r, float b, float t, float n, float f)
+    {
+        for(int i=0; i<16; ++i) m[i] = 0.0f;
+        m[0] = 2.0f / (r - l);
+        m[5] = 2.0f / (t - b);
+        m[10] = -2.0f / (f - n);
+        m[12] = -(r + l) / (r - l);
+        m[13] = -(t + b) / (t - b);
+        m[14] = -(f + n) / (f - n);
+        m[15] = 1.0f;
+    }
+
     inline void mat4d_transform_point(DVec3& p, const double* m)
     {
-        double x = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];
-        double y = m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13];
-        double z = m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14];
-        double w = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15];
+        double px = p.x, py = p.y, pz = p.z;
+        double x = m[0] * px + m[4] * py + m[8] * pz + m[12];
+        double y = m[1] * px + m[5] * py + m[9] * pz + m[13];
+        double z = m[2] * px + m[6] * py + m[10] * pz + m[14];
+        double w = m[3] * px + m[7] * py + m[11] * pz + m[15];
         p.x = x / w; p.y = y / w; p.z = z / w;
     }
 

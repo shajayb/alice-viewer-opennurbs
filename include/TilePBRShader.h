@@ -80,12 +80,15 @@ void main(){
     // Final color with SSAO multiplication
     vec3 finalColor = (ambient + diffuse + specular) * ao;
 
-    // Atmospheric Fog (Exponential)
+    // Procedural Sky Gradient Fog
     float dist = distance(uEyePos, worldPos);
     float fogDensity = 0.00025;
     float fogFactor = exp(-dist * fogDensity);
     fogFactor = clamp(fogFactor, 0.0, 1.0);
-    finalColor = mix(vec3(0.9), finalColor, fogFactor);
+    vec3 viewDirFog = normalize(worldPos - uEyePos);
+    float h = clamp(viewDirFog.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 fogColor = mix(vec3(0.69, 0.83, 1.0), vec3(0.29, 0.56, 0.88), h);
+    finalColor = mix(fogColor, finalColor, fogFactor);
 
     FragColor = vec4(finalColor, 1.0);
 })";

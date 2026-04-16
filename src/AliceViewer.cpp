@@ -903,7 +903,7 @@ void AliceViewer::run()
                 }
             }
 
-            if (captureFrame >= 360)
+            if (captureFrame >= 450)
             {
                 glfwSetWindowShouldClose(window, true);
             }

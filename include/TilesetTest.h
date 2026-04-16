@@ -26,7 +26,7 @@ namespace Alice
     {
         unsigned int fbo, depthTex;
         unsigned int program;
-        int width = 2048, height = 2048;
+        int width = 4096, height = 4096;
         float lightProj[16], lightView[16], lightSpaceMat[16];
 
         void init()
@@ -373,18 +373,18 @@ namespace Alice
             if (!g_Arena.memory) g_Arena.init(128 * 1024 * 1024);
             else g_Arena.reset();
 
-            // Task 1: Initialize MeshArena (512MB)
-            meshArena.init(512 * 1024 * 1024);
+            // Task 1: Initialize MeshArena (768MB)
+            meshArena.init(768 * 1024 * 1024);
             for(int i=0; i<64; ++i)
             {
                 requestSubBlocks[i] = (uint8_t*)meshArena.allocate(8 * 1024 * 1024);
             }
 
-            nodes.init(g_Arena, 32768);
-            activeNodeIndices.init(g_Arena, 32768);
-            nodeLastFrameActive.init(g_Arena, 32768);
-            pendingIndices.init(g_Arena, 1024);
-            completedRequests.init(g_Arena, 1024);
+            nodes.init(meshArena, 32768);
+            activeNodeIndices.init(meshArena, 32768);
+            nodeLastFrameActive.init(meshArena, 32768);
+            pendingIndices.init(meshArena, 1024);
+            completedRequests.init(meshArena, 1024);
 
             memset(nodeLastFrameActive.data, 0, 32768 * sizeof(uint32_t));
             memset(requestPoolInUse, 0, sizeof(requestPoolInUse));
@@ -425,7 +425,7 @@ namespace Alice
                     size_t lastSlash = baseUrl.find_last_of("/\\");
                     if (lastSlash != std::string::npos) baseUrl = baseUrl.substr(0, lastSlash + 1);
 
-                    rootIdx = TilesetLoader::ParseRecursive(rootJson["root"], nodes, g_Arena, baseUrl);
+                    rootIdx = TilesetLoader::ParseRecursive(rootJson["root"], nodes, meshArena, baseUrl);
                     if (rootIdx != -1)
                     {
                         isGoogle = true;
@@ -444,7 +444,7 @@ namespace Alice
                 printf("[TilesetTest] FALLBACK: Google API 403 or unavailable. Using Mock London BVH.\n");
                 nodes.clear();
                 json mockJson = Alice::Alg::MockLondon::Generate(51.5138, -0.0983);
-                rootIdx = TilesetLoader::ParseRecursive(mockJson["root"], nodes, g_Arena, "./");
+                rootIdx = TilesetLoader::ParseRecursive(mockJson["root"], nodes, meshArena, "./");
                 
                 targetEcef = Math::lla_to_ecef(51.5138 * Math::DEG2RAD, -0.0983 * Math::DEG2RAD, 0.0);
                 Math::denu_matrix(enuMat, 51.5138 * Math::DEG2RAD, -0.0983 * Math::DEG2RAD);
@@ -492,7 +492,7 @@ namespace Alice
                         size_t pos = newBaseUrl.find_last_of('/');
                         if (pos != std::string::npos) newBaseUrl = newBaseUrl.substr(0, pos + 1);
 
-                        int extRoot = TilesetLoader::ParseRecursive(ext["root"], nodes, g_Arena, newBaseUrl, node.worldTransform);
+                        int extRoot = TilesetLoader::ParseRecursive(ext["root"], nodes, meshArena, newBaseUrl, node.worldTransform);
                         node.firstChild = extRoot;
                         node.childCount = 1;
                         node.isLoaded = true;
@@ -679,12 +679,12 @@ namespace Alice
             AliceViewer* av = AliceViewer::instance();
             if(!av) return;
 
+            size_t arenaSnapshot = g_Arena.offset;
+
             // Update Network Stats for Monitor
             g_NetStats.activeRequests = activeRequests;
             g_NetStats.meshMemoryUsed = meshArena.offset;
             g_NetStats.meshMemoryTotal = meshArena.capacity;
-            // Diagnostic API check status could be integrated here if we stored it
-            // For now, assume it's true if we got past init root fetch
             g_NetStats.apiConnected = isGoogle;
 
             updateAsyncLoading();
@@ -703,9 +703,6 @@ namespace Alice
             mEcefToEnu[13] = -(enuMat[4]*targetEcef.x + enuMat[5]*targetEcef.y + enuMat[6]*targetEcef.z);
             mEcefToEnu[14] = -(enuMat[8]*targetEcef.x + enuMat[9]*targetEcef.y + enuMat[10]*targetEcef.z);
 
-            double mEnuToGl[16] = {0};
-            mEnuToGl[0] = 1.0;  mEnuToGl[6] = -1.0; mEnuToGl[9] = 1.0; mEnuToGl[15] = 1.0;
-
             M4 vMat = av->camera.getViewMatrix();
             M4 projM4 = AliceViewer::makeInfiniteReversedZProjRH(av->fov, aspect, 0.1f);
             float fvp[16], planes[6][4];
@@ -714,7 +711,6 @@ namespace Alice
 
             double dvMat[16]; for(int i=0; i<16; ++i) dvMat[i] = (double)vMat.m[i];   
             float pMat[16]; memcpy(pMat, projM4.m, sizeof(pMat));
-            double dpMat[16]; for(int i=0; i<16; ++i) dpMat[i] = (double)pMat[i];     
 
             activeNodeIndices.clear();
             int nodesVisited = 0;
@@ -755,13 +751,9 @@ namespace Alice
                 }
             }
 
-            if (currentFrame % 60 == 0) {
-                printf("[DEBUG] G-Buffer Queue: %d objects\n", ssao.queue.count);
-            }
-
             float fvMat[16]; for(int i=0; i<16; ++i) fvMat[i] = (float)dvMat[i];
             ssao.gBuffer.bind();
-            glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // Alpha = 0 for background identification
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f); 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glEnable(GL_DEPTH_TEST);
             for (int i = 0; i < ssao.queue.count; ++i)
@@ -804,6 +796,7 @@ namespace Alice
             ssao.ssaoFbo.unbind();
 
             // Final Composite
+            glClearColor(0.69f, 0.83f, 1.0f, 1.0f); // Horizon Clear Color
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glUseProgram(tilePBRShader.program);
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, ssao.ssaoFbo.textures[0]);
@@ -825,7 +818,7 @@ namespace Alice
             glUniform2f(tilePBRShader.uRes, (float)w, (float)h);
             ssao.quad.draw();
 
-            if (av->m_headlessCapture && currentFrame == 300)
+            if (av->m_headlessCapture && currentFrame == 400)
             {
                 size_t bufferSize = (size_t)w * h * 3;
                 unsigned char* pixelBuffer = (unsigned char*)g_Arena.allocate(bufferSize);
@@ -833,11 +826,12 @@ namespace Alice
                 {
                     glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, pixelBuffer);
                     stbi_flip_vertically_on_write(true);
-                    stbi_write_png("fb_cathedral.png", w, h, 3, pixelBuffer, w * 3);
-                    stbi_write_png("production_check_v2.png", w, h, 3, pixelBuffer, w * 3);
-                    printf("[HEADLESS] Captures saved to fb_cathedral.png and production_check_v2.png (%dx%d)\n", w, h);
+                    stbi_write_png("production_final.png", w, h, 3, pixelBuffer, w * 3);
+                    printf("[HEADLESS] Final production capture saved to production_final.png (%dx%d)\n", w, h);
                 }
             }
+
+            g_Arena.offset = arenaSnapshot;
         }
 
         ~TilesetTestApp()

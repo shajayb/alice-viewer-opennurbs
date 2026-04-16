@@ -168,10 +168,10 @@ namespace Alice
             std::string headers;
             if (!FetchWithRetry(url, buffer, &status, &body, &headers)) 
             {
-                fprintf(stderr, "[TilesetLoader] ERROR: FetchWithRetry failed for %s\n", url.c_str());
-                fprintf(stderr, "[TilesetLoader] Curl Status: %ld\n", status);
-                if (!headers.empty()) fprintf(stderr, "[TilesetLoader] Response Headers:\n%s\n", headers.c_str());
-                if (!body.empty()) fprintf(stderr, "[TilesetLoader] Response Body: %s\n", body.c_str());
+                printf("[TilesetLoader] ERROR: FetchWithRetry failed for %s\n", url.c_str());
+                printf("[TilesetLoader] Curl Status: %ld\n", status);
+                if (!headers.empty()) printf("[TilesetLoader] Response Headers:\n%s\n", headers.c_str());
+                if (!body.empty()) printf("[TilesetLoader] Response Body: %s\n", body.c_str());
                 return false;
             }
             try
@@ -179,15 +179,15 @@ namespace Alice
                 out_tileset = json::parse(buffer.begin(), buffer.end());
                 if (out_tileset.contains("error"))
                 {
-                    fprintf(stderr, "[TilesetLoader] ERROR: Google API returned error: %s\n", out_tileset["error"].dump().c_str());
-                    if (!headers.empty()) fprintf(stderr, "[TilesetLoader] Debug Headers:\n%s\n", headers.c_str());
+                    printf("[TilesetLoader] ERROR: Google API returned error: %s\n", out_tileset["error"].dump().c_str());
+                    if (!headers.empty()) printf("[TilesetLoader] Debug Headers:\n%s\n", headers.c_str());
                     return false;
                 }
                 return true;
             }
             catch (...)
             {
-                fprintf(stderr, "[TilesetLoader] ERROR: JSON parse failed for %s\n", url.c_str());
+                printf("[TilesetLoader] ERROR: JSON parse failed for %s\n", url.c_str());
                 return false;
             }
         }
@@ -196,7 +196,7 @@ namespace Alice
         {
             if (nodes.count >= nodes.capacity) 
             {
-                fprintf(stderr, "[TilesetLoader] ERROR: Nodes buffer capacity exceeded (%d)\n", (int)nodes.capacity);
+                printf("[TilesetLoader] ERROR: Nodes buffer capacity exceeded (%d)\n", (int)nodes.capacity);
                 return -1;
             }
             int idx = (int)nodes.count++;

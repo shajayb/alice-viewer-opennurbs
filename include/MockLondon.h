@@ -59,7 +59,23 @@ private:
             }
             else
             {
-                child["content"]["uri"] = "mock://building";
+                // Task 1: Landmark Detection (St. Paul's: 51.5138, -0.0983)
+                double targetLat = 51.5138 * Math::DEG2RAD;
+                double targetLon = -0.0983 * Math::DEG2RAD;
+                
+                // Approximate distance in meters
+                double dLat = cLat - targetLat;
+                double dLon = cLon - targetLon;
+                double dist = sqrt(dLat*dLat + (dLon*cos(cLat))*(dLon*cos(cLat))) * 6378137.0;
+
+                if (dist < 200.0)
+                {
+                    child["content"]["uri"] = "mock://cathedral";
+                }
+                else
+                {
+                    child["content"]["uri"] = "mock://building";
+                }
             }
             children.push_back(child);
         }

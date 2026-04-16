@@ -18,6 +18,7 @@
 #include "MockLondon.h"
 #include "TileShader.h"
 #include "TilePBRShader.h"
+#include "stb_image_write.h"
 
 namespace Alice
 {
@@ -185,19 +186,44 @@ namespace Alice
             V3 min = { 1e30f, 1e30f, 1e30f };
             V3 max = { -1e30f, -1e30f, -1e30f };
 
-            int count = 0;
+            int cathedralIdx = -1;
             for (int i = 0; i < (int)activeNodeIndices.count; ++i)
             {
                 int nIdx = activeNodeIndices[i].index;
-                if (nodes[nIdx].isLoaded)
+                if (nodes[nIdx].contentUri && strcmp(nodes[nIdx].contentUri, "mock://cathedral") == 0)
                 {
-                    if (nodes[nIdx].aabbMin.x < min.x) min.x = nodes[nIdx].aabbMin.x;
-                    if (nodes[nIdx].aabbMin.y < min.y) min.y = nodes[nIdx].aabbMin.y;
-                    if (nodes[nIdx].aabbMin.z < min.z) min.z = nodes[nIdx].aabbMin.z;
-                    if (nodes[nIdx].aabbMax.x > max.x) max.x = nodes[nIdx].aabbMax.x;
-                    if (nodes[nIdx].aabbMax.y > max.y) max.y = nodes[nIdx].aabbMax.y;
-                    if (nodes[nIdx].aabbMax.z > max.z) max.z = nodes[nIdx].aabbMax.z;
-                    count++;
+                    cathedralIdx = nIdx;
+                    break;
+                }
+            }
+
+            int count = 0;
+            if (cathedralIdx != -1)
+            {
+                min.x = nodes[cathedralIdx].aabbMin.x;
+                min.y = nodes[cathedralIdx].aabbMin.y;
+                min.z = nodes[cathedralIdx].aabbMin.z;
+                max.x = nodes[cathedralIdx].aabbMax.x;
+                max.y = nodes[cathedralIdx].aabbMax.y;
+                max.z = nodes[cathedralIdx].aabbMax.z;
+                count = 1;
+                printf("[TilesetTest] FitCameraToActiveNodes: Found Cathedral at node %d\n", cathedralIdx);
+            }
+            else
+            {
+                for (int i = 0; i < (int)activeNodeIndices.count; ++i)
+                {
+                    int nIdx = activeNodeIndices[i].index;
+                    if (nodes[nIdx].isLoaded)
+                    {
+                        if (nodes[nIdx].aabbMin.x < min.x) min.x = nodes[nIdx].aabbMin.x;
+                        if (nodes[nIdx].aabbMin.y < min.y) min.y = nodes[nIdx].aabbMin.y;
+                        if (nodes[nIdx].aabbMin.z < min.z) min.z = nodes[nIdx].aabbMin.z;
+                        if (nodes[nIdx].aabbMax.x > max.x) max.x = nodes[nIdx].aabbMax.x;
+                        if (nodes[nIdx].aabbMax.y > max.y) max.y = nodes[nIdx].aabbMax.y;
+                        if (nodes[nIdx].aabbMax.z > max.z) max.z = nodes[nIdx].aabbMax.z;
+                        count++;
+                    }
                 }
             }
 
@@ -207,7 +233,9 @@ namespace Alice
                 av->camera.focusPoint = (min + max) * 0.5f;
                 V3 size = max - min;
                 float maxDim = (std::max)(size.x, (std::max)(size.y, size.z));
-                av->camera.distance = maxDim * 1.5f / tanf(av->fov * 0.5f);
+                av->camera.distance = maxDim * 2.5f / tanf(av->fov * 0.5f);
+                av->camera.pitch = 0.4f;
+                av->camera.yaw = 0.8f;
                 printf("[TilesetTest] FitCameraToActiveNodes: Focus(%.2f, %.2f, %.2f) Distance(%.2f)\n", 
                     av->camera.focusPoint.x, av->camera.focusPoint.y, av->camera.focusPoint.z, av->camera.distance);
             }
@@ -747,6 +775,21 @@ namespace Alice
             glUniform3fv(tilePBRShader.uEyePos, 1, &eyeGl.x);
             glUniform2f(tilePBRShader.uRes, (float)w, (float)h);
             ssao.quad.draw();
+
+            if (av->m_headlessCapture && currentFrame == 250)
+            {
+                size_t bufferSize = (size_t)w * h * 3;
+                unsigned char* pixelBuffer = (unsigned char*)g_Arena.allocate(bufferSize);
+                if (pixelBuffer)
+                {
+                    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, pixelBuffer);
+                    stbi_flip_vertically_on_write(true);
+                    if (stbi_write_png("fb_cathedral.png", w, h, 3, pixelBuffer, w * 3))
+                    {
+                        printf("[HEADLESS] Cathedral Capture saved to fb_cathedral.png (%dx%d)\n", w, h);
+                    }
+                }
+            }
         }
 
         ~TilesetTestApp()

@@ -514,40 +514,113 @@ namespace Alice
             // Task 2: Procedural Mock
             if (strncmp(req->url, "mock://", 7) == 0)
             {
-                // Generate randomized cuboid building
-                req->vcount = 24;
-                req->icount = 36;
-                if (req->vcount > req->maxVCount || req->icount > req->maxICount) { req->success = false; req->completed = true; return; }
-
-                float h = 10.0f + (float)(rand() % 40);
-                float w = 5.0f + (float)(rand() % 15);
-                float d = 5.0f + (float)(rand() % 15);
-                
-                float cubeV[] = {
-                    -0.5f,-0.5f, 1.0f,  0, 0, 1,  0, 0,   0.5f,-0.5f, 1.0f,  0, 0, 1,  1, 0,   0.5f, 0.5f, 1.0f,  0, 0, 1,  1, 1,  -0.5f, 0.5f, 1.0f,  0, 0, 1,  0, 1,
-                    -0.5f,-0.5f, 0.0f,  0, 0,-1,  1, 0,  -0.5f, 0.5f, 0.0f,  0, 0,-1,  1, 1,   0.5f, 0.5f, 0.0f,  0, 0,-1,  0, 1,   0.5f,-0.5f, 0.0f,  0, 0,-1,  0, 0,
-                    -0.5f, 0.5f, 0.0f,  0, 1, 0,  0, 1,  -0.5f, 0.5f, 1.0f,  0, 1, 0,  0, 0,   0.5f, 0.5f, 1.0f,  0, 1, 0,  1, 0,   0.5f, 0.5f, 0.0f,  0, 1, 0,  1, 1,
-                    -0.5f,-0.5f, 0.0f,  0,-1, 0,  0, 0,   0.5f,-0.5f, 0.0f,  0,-1, 0,  1, 0,   0.5f,-0.5f, 1.0f,  0,-1, 0,  1, 1,  -0.5f,-0.5f, 1.0f,  0,-1, 0,  0, 1,
-                     0.5f,-0.5f, 0.0f,  1, 0, 0,  1, 0,   0.5f, 0.5f, 0.0f,  1, 0, 0,  1, 1,   0.5f, 0.5f, 1.0f,  1, 0, 0,  0, 1,   0.5f,-0.5f, 1.0f,  1, 0, 0,  0, 0,
-                    -0.5f,-0.5f, 0.0f, -1, 0, 0,  0, 0,  -0.5f,-0.5f, 1.0f, -1, 0, 0,  1, 0,  -0.5f, 0.5f, 1.0f, -1, 0, 0,  1, 1,  -0.5f, 0.5f, 0.0f, -1, 0, 0,  0, 1
-                };
-                unsigned int cubeI[] = { 0,1,2, 2,3,0, 4,5,6, 6,7,4, 8,9,10, 10,11,8, 12,13,14, 14,15,12, 16,17,18, 18,19,16, 20,21,22, 22,23,20 };
-
-                req->min = { -w*0.5f, -d*0.5f, 0.0f };
-                req->max = { w*0.5f, d*0.5f, h };
-
-                for(int i=0; i<24; ++i)
+                if (strcmp(req->url, "mock://cathedral") == 0)
                 {
-                    req->verts[i*8+0] = cubeV[i*8+0] * w;
-                    req->verts[i*8+1] = cubeV[i*8+2] * h; // Up is Y in GL
-                    req->verts[i*8+2] = -cubeV[i*8+1] * d; // North is -Z
-                    req->verts[i*8+3] = cubeV[i*8+3];
-                    req->verts[i*8+4] = cubeV[i*8+5];
-                    req->verts[i*8+5] = -cubeV[i*8+4];
-                    req->verts[i*8+6] = cubeV[i*8+6];
-                    req->verts[i*8+7] = cubeV[i*8+7];
+                    struct Box { Math::Vec3 center; Math::Vec3 size; };
+                    std::vector<Box> boxes;
+                    boxes.push_back({ {0, 0, 15}, {80, 20, 30} }); // Nave
+                    boxes.push_back({ {0, 0, 15}, {20, 60, 30} }); // Transepts
+                    boxes.push_back({ {0, 0, 32}, {28, 28, 4} });  // Dome Base
+                    boxes.push_back({ {0, 0, 38}, {24, 24, 8} });  // Dome 1
+                    boxes.push_back({ {0, 0, 46}, {18, 18, 8} });  // Dome 2
+                    boxes.push_back({ {0, 0, 52}, {10, 10, 4} });  // Dome 3
+                    boxes.push_back({ {-35, -8, 30}, {10, 10, 60} }); // Tower L
+                    boxes.push_back({ {35, -8, 30}, {10, 10, 60} });  // Tower R
+                    boxes.push_back({ {0, 0, 60}, {2, 2, 20} });   // Spire
+
+                    req->vcount = (int)boxes.size() * 24;
+                    req->icount = (int)boxes.size() * 36;
+                    if (req->vcount > req->maxVCount || req->icount > req->maxICount) { req->success = false; req->completed = true; return; }
+
+                    float cubeV[] = {
+                        -0.5f,-0.5f, 0.5f,  0, 0, 1,  0, 0,   0.5f,-0.5f, 0.5f,  0, 0, 1,  1, 0,   0.5f, 0.5f, 0.5f,  0, 0, 1,  1, 1,  -0.5f, 0.5f, 0.5f,  0, 0, 1,  0, 1,
+                        -0.5f,-0.5f,-0.5f,  0, 0,-1,  1, 0,  -0.5f, 0.5f,-0.5f,  0, 0,-1,  1, 1,   0.5f, 0.5f,-0.5f,  0, 0,-1,  0, 1,   0.5f,-0.5f,-0.5f,  0, 0,-1,  0, 0,
+                        -0.5f, 0.5f,-0.5f,  0, 1, 0,  0, 1,  -0.5f, 0.5f, 0.5f,  0, 1, 0,  0, 0,   0.5f, 0.5f, 0.5f,  0, 1, 0,  1, 0,   0.5f, 0.5f,-0.5f,  0, 1, 0,  1, 1,
+                        -0.5f,-0.5f,-0.5f,  0,-1, 0,  0, 0,   0.5f,-0.5f,-0.5f,  0,-1, 0,  1, 0,   0.5f,-0.5f, 0.5f,  0,-1, 0,  1, 1,  -0.5f,-0.5f, 0.5f,  0,-1, 0,  0, 1,
+                         0.5f,-0.5f,-0.5f,  1, 0, 0,  1, 0,   0.5f, 0.5f,-0.5f,  1, 0, 0,  1, 1,   0.5f, 0.5f, 0.5f,  1, 0, 0,  0, 1,   0.5f,-0.5f, 0.5f,  1, 0, 0,  0, 0,
+                        -0.5f,-0.5f,-0.5f, -1, 0, 0,  0, 0,  -0.5f,-0.5f, 0.5f, -1, 0, 0,  1, 0,  -0.5f, 0.5f, 0.5f, -1, 0, 0,  1, 1,  -0.5f, 0.5f,-0.5f, -1, 0, 0,  0, 1
+                    };
+                    unsigned int cubeI[] = { 0,1,2, 2,3,0, 4,5,6, 6,7,4, 8,9,10, 10,11,8, 12,13,14, 14,15,12, 16,17,18, 18,19,16, 20,21,22, 22,23,20 };
+
+                    req->min = { 1e30f, 1e30f, 1e30f };
+                    req->max = { -1e30f, -1e30f, -1e30f };
+
+                    for (int b = 0; b < (int)boxes.size(); ++b)
+                    {
+                        Box& box = boxes[b];
+                        for (int i = 0; i < 24; ++i)
+                        {
+                            int voff = (b * 24 + i) * 8;
+                            int coff = i * 8;
+                            float px = cubeV[coff + 0] * box.size.x + box.center.x;
+                            float py = cubeV[coff + 1] * box.size.y + box.center.y;
+                            float pz = cubeV[coff + 2] * box.size.z + box.center.z;
+                            
+                            float gx = px;
+                            float gy = pz;
+                            float gz = -py;
+
+                            req->verts[voff + 0] = gx;
+                            req->verts[voff + 1] = gy;
+                            req->verts[voff + 2] = gz;
+
+                            if (gx < req->min.x) req->min.x = gx;
+                            if (gy < req->min.y) req->min.y = gy;
+                            if (gz < req->min.z) req->min.z = gz;
+                            if (gx > req->max.x) req->max.x = gx;
+                            if (gy > req->max.y) req->max.y = gy;
+                            if (gz > req->max.z) req->max.z = gz;
+
+                            float nx = cubeV[coff + 3];
+                            float ny = cubeV[coff + 4];
+                            float nz = cubeV[coff + 5];
+
+                            req->verts[voff + 3] = nx;
+                            req->verts[voff + 4] = nz;
+                            req->verts[voff + 5] = -ny;
+                            req->verts[voff + 6] = cubeV[coff + 6];
+                            req->verts[voff + 7] = cubeV[coff + 7];
+                        }
+                        for (int i = 0; i < 36; ++i) req->indices[b * 36 + i] = cubeI[i] + b * 24;
+                    }
                 }
-                memcpy(req->indices, cubeI, 36 * sizeof(unsigned int));
+                else
+                {
+                    // Generate randomized cuboid building
+                    req->vcount = 24;
+                    req->icount = 36;
+                    if (req->vcount > req->maxVCount || req->icount > req->maxICount) { req->success = false; req->completed = true; return; }
+
+                    float h = 10.0f + (float)(rand() % 40);
+                    float w = 5.0f + (float)(rand() % 15);
+                    float d = 5.0f + (float)(rand() % 15);
+                    
+                    float cubeV[] = {
+                        -0.5f,-0.5f, 1.0f,  0, 0, 1,  0, 0,   0.5f,-0.5f, 1.0f,  0, 0, 1,  1, 0,   0.5f, 0.5f, 1.0f,  0, 0, 1,  1, 1,  -0.5f, 0.5f, 1.0f,  0, 0, 1,  0, 1,
+                        -0.5f,-0.5f, 0.0f,  0, 0,-1,  1, 0,  -0.5f, 0.5f, 0.0f,  0, 0,-1,  1, 1,   0.5f, 0.5f, 0.0f,  0, 0,-1,  0, 1,   0.5f,-0.5f, 0.0f,  0, 0,-1,  0, 0,
+                        -0.5f, 0.5f, 0.0f,  0, 1, 0,  0, 1,  -0.5f, 0.5f, 1.0f,  0, 1, 0,  0, 0,   0.5f, 0.5f, 1.0f,  0, 1, 0,  1, 0,   0.5f, 0.5f, 0.0f,  0, 1, 0,  1, 1,
+                        -0.5f,-0.5f, 0.0f,  0,-1, 0,  0, 0,   0.5f,-0.5f, 0.0f,  0,-1, 0,  1, 0,   0.5f,-0.5f, 1.0f,  0,-1, 0,  1, 1,  -0.5f,-0.5f, 1.0f,  0,-1, 0,  0, 1,
+                         0.5f,-0.5f, 0.0f,  1, 0, 0,  1, 0,   0.5f, 0.5f, 0.0f,  1, 0, 0,  1, 1,   0.5f, 0.5f, 1.0f,  1, 0, 0,  0, 1,   0.5f,-0.5f, 1.0f,  1, 0, 0,  0, 0,
+                        -0.5f,-0.5f, 0.0f, -1, 0, 0,  0, 0,  -0.5f,-0.5f, 1.0f, -1, 0, 0,  1, 0,  -0.5f, 0.5f, 1.0f, -1, 0, 0,  1, 1,  -0.5f, 0.5f, 0.0f, -1, 0, 0,  0, 1
+                    };
+                    unsigned int cubeI[] = { 0,1,2, 2,3,0, 4,5,6, 6,7,4, 8,9,10, 10,11,8, 12,13,14, 14,15,12, 16,17,18, 18,19,16, 20,21,22, 22,23,20 };
+
+                    req->min = { -w*0.5f, -d*0.5f, 0.0f };
+                    req->max = { w*0.5f, d*0.5f, h };
+
+                    for(int i=0; i<24; ++i)
+                    {
+                        req->verts[i*8+0] = cubeV[i*8+0] * w;
+                        req->verts[i*8+1] = cubeV[i*8+2] * h; // Up is Y in GL
+                        req->verts[i*8+2] = -cubeV[i*8+1] * d; // North is -Z
+                        req->verts[i*8+3] = cubeV[i*8+3];
+                        req->verts[i*8+4] = cubeV[i*8+5];
+                        req->verts[i*8+5] = -cubeV[i*8+4];
+                        req->verts[i*8+6] = cubeV[i*8+6];
+                        req->verts[i*8+7] = cubeV[i*8+7];
+                    }
+                    memcpy(req->indices, cubeI, 36 * sizeof(unsigned int));
+                }
 
                 for (int i = 0; i < 4; ++i) req->baseColorFactor[i] = 1.0f;
                 for (int i = 0; i < 3; ++i) req->emissiveFactor[i] = 0.0f;

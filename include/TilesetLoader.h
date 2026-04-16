@@ -4,6 +4,8 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
+#include <thread>
+#include <chrono>
 #include "AliceNetwork.h"
 #include "ApiKeyReader.h"
 #include "AliceMath.h"
@@ -46,6 +48,34 @@ namespace Alice
 
     struct TilesetLoader
     {
+        static bool FetchWithRetry(const std::string& url, std::vector<uint8_t>& buffer, long* outStatus = nullptr, std::string* outBody = nullptr, std::string* outHeaders = nullptr, int maxRetries = 3)
+        {
+            long status = 0;
+            int delayMs = 1000;
+            for (int i = 0; i <= maxRetries; ++i)
+            {
+                buffer.clear();
+                if (Network::Fetch(url.c_str(), buffer, &status, outBody, outHeaders))
+                {
+                    if (outStatus) *outStatus = status;
+                    if (status == 200) return true;
+                    if (status != 403 && status != 503) return false;
+                }
+                else
+                {
+                    if (outStatus) *outStatus = status;
+                }
+
+                if (i < maxRetries)
+                {
+                    printf("[TilesetLoader] Retry %d for %s (Status %ld), waiting %dms\n", i + 1, url.c_str(), status, delayMs);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+                    delayMs *= 2;
+                }
+            }
+            return false;
+        }
+
         static void CalculateAABB(int nodeIdx, Buffer<TileNode>& nodes, Math::DVec3 targetEcef, double* enuMat)
         {
             if (nodeIdx < 0 || nodeIdx >= (int)nodes.count) return;
@@ -136,9 +166,9 @@ namespace Alice
             long status = 0;
             std::string body;
             std::string headers;
-            if (!Network::Fetch(url.c_str(), buffer, &status, &body, &headers)) 
+            if (!FetchWithRetry(url, buffer, &status, &body, &headers)) 
             {
-                fprintf(stderr, "[TilesetLoader] ERROR: Network::Fetch failed for %s\n", url.c_str());
+                fprintf(stderr, "[TilesetLoader] ERROR: FetchWithRetry failed for %s\n", url.c_str());
                 fprintf(stderr, "[TilesetLoader] Curl Status: %ld\n", status);
                 if (!headers.empty()) fprintf(stderr, "[TilesetLoader] Response Headers:\n%s\n", headers.c_str());
                 if (!body.empty()) fprintf(stderr, "[TilesetLoader] Response Body: %s\n", body.c_str());
@@ -630,7 +660,7 @@ namespace Alice
             }
 
             std::vector<uint8_t> buffer;
-            if (!Network::Fetch(req->url, buffer)) { req->success = false; req->completed = true; return; }
+            if (!FetchWithRetry(req->url, buffer)) { req->success = false; req->completed = true; return; }
 
             if (req->isJson)
             {

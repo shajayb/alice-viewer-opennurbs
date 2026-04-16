@@ -81,6 +81,8 @@ static AliceViewer* g_instance = nullptr;
 static M4 g_currentMVP;
 static V3 g_currentVertexColor = { 0.5f, 0.5f, 0.5f };
 
+NetworkStats g_NetStats;
+
 // --- PerfTuner Implementation ---
 void AliceViewer::PerfTuner::tune(float dt, double flushUs)
 {
@@ -791,6 +793,16 @@ void AliceViewer::run()
             ImGui::End();
         }
 
+        {
+            ImGui::Begin("Network Monitor");
+            ImGui::Text("Active Requests: %d", g_NetStats.activeRequests);
+            float usage = g_NetStats.meshMemoryTotal > 0 ? (float)g_NetStats.meshMemoryUsed / g_NetStats.meshMemoryTotal : 0.0f;
+            ImGui::ProgressBar(usage, ImVec2(-1, 0), "Mesh Memory");
+            ImGui::Text("Memory: %llu / %llu MB", (unsigned long long)(g_NetStats.meshMemoryUsed / (1024 * 1024)), (unsigned long long)(g_NetStats.meshMemoryTotal / (1024 * 1024)));
+            ImGui::Text("API Status: %s", g_NetStats.apiConnected ? "CONNECTED" : "OFFLINE/403");
+            ImGui::End();
+        }
+
         update(dt); 
         backGround(backColor.x, backColor.y, backColor.z);
         
@@ -872,8 +884,26 @@ void AliceViewer::run()
                     }
                 }
             }
+            
+            if (captureFrame == 350)
+            {
+                int width, height;
+                glfwGetFramebufferSize(window, &width, &height);
+                size_t bufferSize = (size_t)width * height * 3;
+                unsigned char* pixelBuffer = (unsigned char*)Alice::g_Arena.allocate(bufferSize);
+                if (pixelBuffer)
+                {
+                    glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixelBuffer);
+                    stbi_flip_vertically_on_write(true);
+                    
+                    if (stbi_write_png("production_check.png", width, height, 3, pixelBuffer, width * 3))
+                    {
+                        printf("[HEADLESS] Production check saved to production_check.png (%dx%d)\n", width, height);
+                    }
+                }
+            }
 
-            if (captureFrame >= 320)
+            if (captureFrame >= 360)
             {
                 glfwSetWindowShouldClose(window, true);
             }

@@ -157,6 +157,16 @@ inline V3 crs(V3 a, V3 b)
 
 struct GLFWwindow;
 
+struct NetworkStats
+{
+    int activeRequests = 0;
+    size_t meshMemoryUsed = 0;
+    size_t meshMemoryTotal = 0;
+    bool apiConnected = false;
+};
+
+extern NetworkStats g_NetStats;
+
 class AliceViewer
 {
 public:

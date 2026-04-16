@@ -80,9 +80,11 @@ void main(){
     // Final color with SSAO multiplication
     vec3 finalColor = (ambient + diffuse + specular) * ao;
 
-    // Atmospheric Fog
+    // Atmospheric Fog (Exponential)
     float dist = distance(uEyePos, worldPos);
-    float fogFactor = exp(-dist * 0.0001);
+    float fogDensity = 0.00025;
+    float fogFactor = exp(-dist * fogDensity);
+    fogFactor = clamp(fogFactor, 0.0, 1.0);
     finalColor = mix(vec3(0.9), finalColor, fogFactor);
 
     FragColor = vec4(finalColor, 1.0);

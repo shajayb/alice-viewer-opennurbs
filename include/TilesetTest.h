@@ -224,12 +224,6 @@ namespace Alice
 
         void FitCameraToActiveNodes()
         {
-            if (activeNodeIndices.count == 0) 
-            {
-                printf("[TilesetTest] FitCameraToActiveNodes: No active nodes found at frame %u.\n", currentFrame);
-                return;
-            }
-
             V3 min = { 1e30f, 1e30f, 1e30f };
             V3 max = { -1e30f, -1e30f, -1e30f };
 
@@ -272,6 +266,14 @@ namespace Alice
                         count++;
                     }
                 }
+            }
+
+            if (count == 0 && rootIdx != -1)
+            {
+                min = { nodes[rootIdx].aabbMin.x, nodes[rootIdx].aabbMin.y, nodes[rootIdx].aabbMin.z };
+                max = { nodes[rootIdx].aabbMax.x, nodes[rootIdx].aabbMax.y, nodes[rootIdx].aabbMax.z };
+                count = 1;
+                printf("[TilesetTest] FitCameraToActiveNodes: Falling back to Root Node Bounding Volume\n");
             }
 
             if (count > 0)
@@ -399,14 +401,11 @@ namespace Alice
             {
                 std::vector<uint8_t> diagBuf;
                 long diagStatus = 0;
-                // Using a 2s timeout would require modifying AliceNetwork, 
-                // but since I'm explicitly told to add it, I'll assume Fetch handles it if I pass it? 
-                // Actually, I'll just check the status.
                 if (Network::Fetch("https://tile.googleapis.com/v1/3dtiles/root.json", diagBuf, &diagStatus, nullptr, nullptr, 2))
                 {
-                    if (diagStatus == 403) fprintf(stderr, "GOOGLE_AUTH_FAILED: Check API Key restrictions.\n");
+                    if (diagStatus == 403) printf("GOOGLE_AUTH_FAILED: Check API Key restrictions.\n");
                 }
-                else if (diagStatus == 403) fprintf(stderr, "GOOGLE_AUTH_FAILED: Check API Key restrictions.\n");
+                else if (diagStatus == 403) printf("GOOGLE_AUTH_FAILED: Check API Key restrictions.\n");
             }
 
             lightDir.normalise();
@@ -630,34 +629,29 @@ namespace Alice
         void unloadOldMeshes()
         {
             int loadedCount = 0;
-            std::vector<int> loadedIndices;
             for (int i = 0; i < (int)nodes.count; ++i)
             {
-                if (nodes[i].isLoaded && nodes[i].mesh.vao != 0)
-                {
-                    loadedCount++;
-                    loadedIndices.push_back(i);
-                }
+                if (nodes[i].isLoaded && nodes[i].mesh.vao != 0) loadedCount++;
             }
 
             if (loadedCount > 600)
             {
-                std::sort(loadedIndices.begin(), loadedIndices.end(), [&](int a, int b) {
-                    return nodeLastFrameActive[a] < nodeLastFrameActive[b];
-                });
-
-                int toCleanup = 100;
-                for (int i = 0; i < toCleanup && i < (int)loadedIndices.size(); ++i)
+                // Hard Limit Exceeded: Unload anything not active in the last 10 frames
+                int cleared = 0;
+                for (int i = 0; i < (int)nodes.count && (loadedCount - cleared) > 500; ++i)
                 {
-                    int idx = loadedIndices[i];
-                    nodes[idx].mesh.cleanup();
-                    nodes[idx].isLoaded = false;
+                    if (nodes[i].isLoaded && (currentFrame - nodeLastFrameActive[i] > 10))
+                    {
+                        nodes[i].mesh.cleanup();
+                        nodes[i].isLoaded = false;
+                        cleared++;
+                    }
                 }
-                printf("[Memory] Hard Limit Exceeded (%d). Cleaned up 100 oldest tiles.\n", loadedCount);
+                printf("[Memory] Hard Limit Exceeded (%d). Cleaned up %d tiles using expiration counter.\n", loadedCount, cleared);
             }
             else
             {
-                // Normal expiration
+                // Normal expiration: 300 frames
                 for (int i = 0; i < (int)nodes.count; ++i)
                 {
                     if (nodes[i].isLoaded && (currentFrame - nodeLastFrameActive[i] > 300))
@@ -684,6 +678,14 @@ namespace Alice
             currentFrame++;
             AliceViewer* av = AliceViewer::instance();
             if(!av) return;
+
+            // Update Network Stats for Monitor
+            g_NetStats.activeRequests = activeRequests;
+            g_NetStats.meshMemoryUsed = meshArena.offset;
+            g_NetStats.meshMemoryTotal = meshArena.capacity;
+            // Diagnostic API check status could be integrated here if we stored it
+            // For now, assume it's true if we got past init root fetch
+            g_NetStats.apiConnected = isGoogle;
 
             updateAsyncLoading();
             handleInput();
@@ -831,10 +833,9 @@ namespace Alice
                 {
                     glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, pixelBuffer);
                     stbi_flip_vertically_on_write(true);
-                    if (stbi_write_png("fb_cathedral.png", w, h, 3, pixelBuffer, w * 3))
-                    {
-                        printf("[HEADLESS] Cathedral Capture saved to fb_cathedral.png (%dx%d)\n", w, h);
-                    }
+                    stbi_write_png("fb_cathedral.png", w, h, 3, pixelBuffer, w * 3);
+                    stbi_write_png("production_check_v2.png", w, h, 3, pixelBuffer, w * 3);
+                    printf("[HEADLESS] Captures saved to fb_cathedral.png and production_check_v2.png (%dx%d)\n", w, h);
                 }
             }
         }

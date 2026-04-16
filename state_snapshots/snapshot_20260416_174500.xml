@@ -1,0 +1,21 @@
+<snapshot>
+  <timestamp>20260416_174500</timestamp>
+  <active_constraints>
+    C++17, Ninja/LLVM, PowerShell, Synchronous Loading (first 300 frames).
+  </active_constraints>
+  <key_knowledge>
+    - Cesium Ion OSM Buildings (96188) verified.
+    - RTC (Relative to Center) tiles correctly handled via emergency offset.
+    - Memory crash fixed (meshArena size vs request pool).
+    - Libcurl global init added.
+    - Visual capture confirmed: production_cesium.png (101KB).
+  </key_knowledge>
+  <artifact_trail>
+    - include/TilesetTest.h: London-centric camera and sync loading.
+    - include/TilesetLoader.h: RTC fix and coordinate debugging.
+    - production_cesium.png: Successful render.
+  </artifact_trail>
+  <task_state>
+    Step 2-5: Cesium Ion Pivot and Visual Verification COMPLETE.
+  </task_state>
+</snapshot>

@@ -1,17 +1,15 @@
 [GOAL]
-Implement a C++ graphics application that authenticates with the Google Maps Platform, fetches, and renders Google Earth 3D Tiles for the city of London (specifically centering the camera on St. Paul's Cathedral).
+Pivot the existing 3D Tiles graphics application to authenticate with Cesium ion and stream the "Cesium OSM Buildings" dataset (Asset ID: 96188). Leverage the existing BVH traversal and ECEF-to-ENU coordinate math. **CRITICALLY: Do NOT use any fallback mock geometry, and you MUST fix the silent HTTP fetch failures resulting in a blank grey screen.**
 
 [PLAN]
-1. Security & Scaffolding: Configure `.gitignore` to protect credentials. Implement a secure runtime utility to parse `API_KEYS.txt` and extract the Google 3D Tiles API Key. (COMPLETED)
-2. Network Integration: Integrate a minimal HTTP client to request the root tileset JSON from the Google 3D Tiles API. (COMPLETED)
-3. Tile Parsing & glTF Decoding: Decode the spatial payload (extracting vertex, index, and normal data) and implement ECEF-to-ENU transforms to prevent floating-point jitter. (COMPLETED)
-4. Hierarchical Traversal (BVH): Implement a memory-efficient tree structure to parse the `tileset.json` Bounding Volume Hierarchy. Evaluate geometric error/distance to selectively fetch high-resolution children tiles specifically intersecting London.
-5. Render Pipeline Integration & Camera Framing: Render the traversed leaf nodes into the OpenGL pipeline. Compute the bounding extents of the St. Paul's Cathedral tiles, explicitly set the camera target to frame it, and output the final `framebuffer.png` for visual verification.
-
+1. Network Resiliency: Cesium ion assets frequently use HTTP 302 redirects to Amazon S3 buckets. You MUST update `AliceNetwork.h` to instruct `libcurl` to follow redirects (`CURLOPT_FOLLOWLOCATION, 1L`). If you do not do this, `libcurl` will download a tiny HTML redirect page instead of a binary `.b3dm` mesh, causing `cgltf` to silently fail.
+2. Synchronous Debugging: The asynchronous `std::thread` loading logic is swallowing crashes and creating 0-byte console logs. Temporarily remove background threading. Perform the tile fetching and parsing synchronously on the main thread for the first 10 frames, flushing `stdout` aggressively, so we can isolate the parsing bug.
+3. Payload Inspection: When a payload is fetched in `ProcessAsyncLoad`, print the `status code`, the `buffer size`, and the ASCII representation of the first 4 bytes of the buffer to the console. We must verify if we are receiving "b3dm", "glTF", or a JSON/HTML error page.
+4. Rendering Verification: Force the camera to frame the AABB of the *very first* successfully parsed mesh, ignoring all other tile logic. Capture `production_cesium.png`.
 
 [BOOTSTRAP]
-Step 1: (COMPLETED) Refactor `TilesetLoader.h` to define a `TileNode` structure capable of representing the Bounding Volume Hierarchy (BVH). It must store the tile's bounding volume (sphere/box), geometric error, transform, and content URI. Ensure these nodes are stored in a cache-friendly way (e.g., flat array/arena) to obey Data-Oriented Design rules.
-Step 2: (COMPLETED) Implement a traversal function that evaluates a tile's bounding volume against a target coordinate. Convert the LLA coordinates of St. Paul's Cathedral (Lat: 51.5138, Lon: -0.0983) to ECEF, and write logic to recursively parse and fetch `children` tiles that contain or are closest to this target.
-Step 3: (COMPLETED) Update the fetch logic to handle external tilesets. If a child tile's URI points to another `.json` file instead of a `.glb`, the loader must fetch and seamlessly graft that external tileset into the current BVH tree.
-Step 4: Update `TilesetTest.h` to initiate this targeted traversal, accumulating all resolved `.glb` meshes into an array of `MeshPrimitive`s.
-Step 5: Set the camera `focusPoint` to the ENU center of the St. Paul's tile cluster, loop through the active meshes in the `draw()` call, and capture `framebuffer.png`.
+Step 1: In `AliceNetwork.h`, add `curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);` to the `Fetch` method. This is mandatory for Cesium ion.
+Step 2: In `TilesetLoader.h`, modify `ProcessAsyncLoad`. Immediately after `FetchWithRetry` returns, add: `printf("[ASYNC] Fetched URL. Size: %zu, First 4 bytes: %c%c%c%c\n", buffer.size(), buffer[0], buffer[1], buffer[2], buffer[3]); fflush(stdout);`
+Step 3: In `TilesetLoader.h` `ProcessAsyncLoad`, ensure the `.b3dm` stripping logic ONLY executes if the first 4 bytes actually equal "b3dm". If they equal "glTF", pass the raw buffer to `cgltf_parse`. If it fails, print `"[ASYNC] cgltf_parse failed."` and flush stdout.
+Step 4: In `TilesetTest.h`, temporarily comment out the `std::thread` instantiation in `init()`. Instead, directly call `workerFunc()` synchronously once per frame inside `draw()` for the first 50 frames to ensure all logs and crashes are piped directly to the main terminal.
+Step 5: In `TilesetTest.h`, update `FitCameraToActiveNodes` (or `update`) to print the calculated `focusPoint` to the console. Capture `production_cesium.png` at frame 150.

@@ -655,6 +655,7 @@ int AliceViewer::init(int argc, char** argv)
     glfwSetMouseButtonCallback(window, mouse_cb);
     glfwSetCursorPosCallback(window, cursor_cb); 
     glfwSetScrollCallback(window, scroll_cb);
+    if (fov == 0.0f) fov = 0.785f; 
     camera.focusPoint = { 0, 0, 0 }; 
     camera.distance = 25.0f; 
     camera.yaw = 0.8f; 
@@ -885,7 +886,7 @@ void AliceViewer::run()
                 }
             }
             
-            if (captureFrame == 350)
+            if (captureFrame == 600)
             {
                 int width, height;
                 glfwGetFramebufferSize(window, &width, &height);
@@ -896,14 +897,14 @@ void AliceViewer::run()
                     glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixelBuffer);
                     stbi_flip_vertically_on_write(true);
                     
-                    if (stbi_write_png("production_check.png", width, height, 3, pixelBuffer, width * 3))
+                    if (stbi_write_png("framebuffer.png", width, height, 3, pixelBuffer, width * 3))
                     {
-                        printf("[HEADLESS] Production check saved to production_check.png (%dx%d)\n", width, height);
+                        printf("[HEADLESS] Frame 600 capture saved to framebuffer.png (%dx%d)\n", width, height);
                     }
                 }
             }
 
-            if (captureFrame >= 450)
+            if (captureFrame >= 601)
             {
                 glfwSetWindowShouldClose(window, true);
             }

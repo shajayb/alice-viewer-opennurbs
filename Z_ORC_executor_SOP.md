@@ -75,7 +75,7 @@ You are operating within a dual-target architecture (Primary: Ubuntu DevContaine
 5. **Logic Implementation**: Write inline logic or `.cpp` implementations directly into the `src/` directory.
 6. **Unit Test Generation**: Append MVC callbacks wrapped in `#ifdef <CLASSNAME>_RUN_TEST` inside your generated header. You MUST strictly adhere to the 'Unit Test Visibility & Interaction Mandate' to guarantee on-screen pixels and camera orbit capability before handoff.
 7. **Local Self-Healing Loop**: Execute local build directly from the root using the cached LLVM/Ninja environment (configuring and building in `./build/`); fix errors; repeat until 0 errors.
-8. **Headless Framebuffer Capture (CRITICAL):** Upon successful compilation with 0 errors, you MUST execute the compiled binary to render the geometry and dump the visual output. Save this render as `framebuffer.png` (or multiple appropriately named PNGs) in the repository root. Ensure the CAMERA FRAMING MANDATE was explicitly followed so the object is perfectly centered and zoomed to fit. 
+8. **Headless Framebuffer Capture (CRITICAL):** Upon successful compilation with 0 errors, you MUST execute the compiled binary to render the geometry and dump the visual output. Save this render as `framebuffer.png` (or multiple appropriately named PNGs) in the repository root. Ensure the CAMERA FRAMING AND FRUSTUM VERIFICATION MANDATE was explicitly followed. 
    - **PRESERVE EXECUTABLE:** Do NOT clean, wipe, or modify the build directory at the end of this step. 
 
 **Phase 2: CI/CD & Optimization (GATED - DO NOT EXECUTE BY DEFAULT)**
@@ -90,7 +90,7 @@ If explicitly authorized, you may proceed to:
 
 **Phase 3: Final Handoff & Termination (CRITICAL)**
 12. **Report Generation:** Upon completing your authorized tasks, you MUST write the final status report to `executor_report.json` based on the strict schema below. You must list `framebuffer.png` in the `files_modified` array.
-13. **Signal Orchestrator:** You MUST execute one final shell command to signal the orchestrator to take over: `New-Item -ItemType File -Name "handoff.trigger"`
+13. **Signal Orchestrator:** You MUST execute one final shell command to signal the orchestrator to take over: `New-Item -ItemType File -Name "handoff.trigger"` (or use your internal file writer if the shell blocks it).
 14. **Terminate REPL:** ALL execution of the SOP MUST ALWAYS end with you explicitly terminating the REPL or interactive mode by emitting the appropriate exit command. Do not execute anything else after creating the trigger and exiting.
 
 # Performance & Coding Mandates
@@ -106,10 +106,15 @@ If explicitly authorized, you may proceed to:
 1. **Interaction**: Orbit (`ALT+LMB`), Pan (`MMB`), Zoom (`ALT+RMB`). Respect `ImGui::GetIO().WantCaptureMouse`.
 2. **Aesthetics**: Background `0.9`. Geometry in Deep Charcoal (`#2D2D2D`).
 3. **OpenGL**: Version 400. Use `GL_RGBA16F` for G-Buffers.
-4. **CAMERA FRAMING MANDATE**: When writing test code, you MUST explicitly compute the bounding box, bounding sphere, or extents of your generated/loaded geometry. During the `init()` phase, you MUST explicitly set the camera's Eye and Target to frame this geometry perfectly. Never assume the default camera position will capture the object for the headless framebuffer.
+
+# CAMERA FRAMING AND FRUSTUM VERIFICATION MANDATE (THE BLANK SCREEN TRAP)
+You are susceptible to the "Blank Screen Trap," where you successfully compile the code and generate a `.png`, but the image is entirely grey/black because the geometry is off-screen, culled, or infinitely small. 
+1. **Explicit AABB Calculation:** Before setting the camera, you MUST explicitly compute the bounding box (AABB) or bounding sphere of your generated/loaded geometry.
+2. **Zoom To Fit:** During the `init()` or `update()` phase, you MUST explicitly set the camera's `focusPoint` to the center of the AABB and set the `distance` (zoom) mathematically so the entire AABB perfectly fills the frustum. Never assume default parameters (e.g., `dist = 100`) will work.
+3. **Frustum Logging:** Before saving `framebuffer.png`, you MUST print to the console the active camera coordinates, the bounding box of the geometry being rendered, and the number of active vertices/indices that actually passed frustum culling. If your active vertex count is 0, DO NOT claim success.
 
 # Execution Reporting (STRICT SCHEMA)
-During execution, you MUST explicitly write out critical operational milestones (e.g., successful network fetch, array bounds) to `stdout` so the Orchestrator can capture them. 
+During execution, you MUST explicitly write out critical operational milestones (e.g., successful network fetch, array bounds, active frustum vertex counts) to `stdout` so the Orchestrator can capture them. 
 
 You MUST save a transcript of your critical console logs, build outputs, and thought processes to a file named `executor_console.log` in the repository root.
 
@@ -134,7 +139,6 @@ The C++ Orchestrator relies on this exact schema to close the loop. You must for
 }
 
 #Schema Rules:
-
 -agent_status: Must be "AWAITING_REVIEW" or "FATAL_ERROR".
 -build_status: Must be "SUCCESS" or "FAILED".
 -highest_phase_completed: Integer 1, 2, or 3.

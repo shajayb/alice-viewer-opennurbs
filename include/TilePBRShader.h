@@ -83,7 +83,7 @@ void main(){
     // Procedural Sky Gradient Fog
     float dist = distance(uEyePos, worldPos);
     float fogDensity = 0.00025;
-    float fogFactor = exp(-dist * fogDensity);
+    float fogFactor = 1.0; // exp(-dist * fogDensity);
     fogFactor = clamp(fogFactor, 0.0, 1.0);
     vec3 viewDirFog = normalize(worldPos - uEyePos);
     float h = clamp(viewDirFog.y * 0.5 + 0.5, 0.0, 1.0);

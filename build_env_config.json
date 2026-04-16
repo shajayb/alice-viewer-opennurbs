@@ -1,7 +1,7 @@
 {
-  "CMAKE_PATH": "C:/Program Files/CMake/bin/cmake.exe",
-  "NINJA_PATH": "C:/Users/shajay.b.ZAHA-HADID/AppData/Local/Microsoft/WinGet/Packages/Ninja-build.Ninja_Microsoft.Winget.Source_8wekyb3d8bbwe/ninja.exe",
-  "CLANG_CL_PATH": "C:/Program Files/LLVM/bin/clang-cl.exe",
-  "LLD_LINK_PATH": "C:/Program Files/LLVM/bin/lld-link.exe",
-  "VCPKG_TOOLCHAIN": "../vcpkg/scripts/buildsystems/vcpkg.cmake"
+  "CMAKE_C_COMPILER": "C:/Program Files/LLVM/bin/clang-cl.exe",
+  "CMAKE_CXX_COMPILER": "C:/Program Files/LLVM/bin/clang-cl.exe",
+  "CMAKE_LINKER": "C:/Program Files/LLVM/bin/lld-link.exe",
+  "CMAKE_TOOLCHAIN_FILE": "../vcpkg/scripts/buildsystems/vcpkg.cmake",
+  "NINJA_PATH": "C:/Users/shajay.b.ZAHA-HADID/AppData/Local/Microsoft/WinGet/Packages/Ninja-build.Ninja_Microsoft.Winget.Source_8wekyb3d8bbwe/ninja.exe"
 }

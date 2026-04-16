@@ -1,91 +1,27 @@
 #ifndef ALICE_NETWORK_H
 #define ALICE_NETWORK_H
-
 #include <curl/curl.h>
 #include <vector>
 #include <string>
 #include <cstdio>
 #include <cstring>
-
-namespace Alice
-{
-    struct Network
-    {
-        static size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp)
-        {
-            size_t realsize = size * nmemb;
-            std::vector<uint8_t>* mem = (std::vector<uint8_t>*)userp;
-            size_t oldsize = mem->size();
-            mem->resize(oldsize + realsize);
-            memcpy(mem->data() + oldsize, contents, realsize);
-            return realsize;
+namespace Alice {
+struct Network {
+    static size_t wc(void* p, size_t s, size_t n, void* u) { size_t r=s*n; auto* m=(std::vector<uint8_t>*)u; size_t o=m->size(); m->resize(o+r); memcpy(m->data()+o,p,r); return r; }
+    static bool Fetch(const char* u, std::vector<uint8_t>& b, long* sc=0, std::string* bd=0, std::string* h=0, long to=10, const char* bt=0) {
+        std::string s(u); if(s.find("http")!=0) { FILE* f=fopen(u,"rb"); if(!f)return 0; fseek(f,0,2); size_t sz=ftell(f); fseek(f,0,0); b.resize(sz); fread(b.data(),1,sz,f); fclose(f); return 1; }
+        CURL* c=curl_easy_init(); if(!c)return 0; curl_easy_setopt(c,CURLOPT_URL,u); curl_easy_setopt(c,CURLOPT_WRITEFUNCTION,wc); curl_easy_setopt(c,CURLOPT_WRITEDATA,&b);
+        curl_easy_setopt(c,CURLOPT_TIMEOUT,to); curl_easy_setopt(c,CURLOPT_SSL_VERIFYPEER,0L); curl_easy_setopt(c,CURLOPT_USERAGENT,"Alice/1.0"); curl_easy_setopt(c,CURLOPT_ACCEPT_ENCODING,"");
+        curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+        struct curl_slist* headers = NULL;
+        if(bt) { 
+            char auth[2048]; snprintf(auth, 2048, "Authorization: Bearer %s", bt); 
+            headers = curl_slist_append(headers, auth); 
+            curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers); 
         }
-
-        static size_t header_callback(void* contents, size_t size, size_t nmemb, void* userp)
-        {
-            size_t realsize = size * nmemb;
-            std::string* headers = (std::string*)userp;
-            headers->append((char*)contents, realsize);
-            return realsize;
-        }
-
-        static bool Fetch(const char* url, std::vector<uint8_t>& buffer, long* out_status_code = nullptr, std::string* out_body = nullptr, std::string* out_headers = nullptr, long timeout_seconds = 0)
-        {
-            std::string sUrl = url;
-            if (sUrl.find("http://") == 0 || sUrl.find("https://") == 0)
-            {
-                CURL* curl = curl_easy_init();
-                if (!curl) return false;
-
-                curl_easy_setopt(curl, CURLOPT_URL, url);
-                curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-                curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&buffer);
-                
-                if (out_headers)
-                {
-                    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_callback);
-                    curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)out_headers);
-                }
-
-                if (timeout_seconds > 0)
-                {
-                    curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_seconds);
-                }
-
-                curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-                curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-                curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-                curl_easy_setopt(curl, CURLOPT_USERAGENT, "AliceViewer/1.0");
-
-                CURLcode res = curl_easy_perform(curl);
-                
-                if (out_status_code)
-                {
-                    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, out_status_code);
-                }
-                
-                if (out_body && !buffer.empty())
-                {
-                    *out_body = std::string((char*)buffer.data(), buffer.size());
-                }
-
-                curl_easy_cleanup(curl);
-                return (res == CURLE_OK);
-            }
-            else
-            {
-                FILE* f = fopen(url, "rb");
-                if (!f) return false;
-                fseek(f, 0, SEEK_END);
-                size_t size = ftell(f);
-                fseek(f, 0, SEEK_SET);
-                buffer.resize(size);
-                fread(buffer.data(), 1, size, f);
-                fclose(f);
-                return true;
-            }
-        }
-    };
+        CURLcode r=curl_easy_perform(c); if(sc)curl_easy_getinfo(c,CURLINFO_RESPONSE_CODE,sc); if(r!=CURLE_OK)printf("[NET] FAIL: %s (%s)\n",u,curl_easy_strerror(r)); fflush(stdout);
+        if(headers) curl_slist_free_all(headers); curl_easy_cleanup(c); return r==CURLE_OK;
+    }
+};
 }
-
-#endif // ALICE_NETWORK_H
+#endif

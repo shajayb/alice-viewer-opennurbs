@@ -1,8 +1,10 @@
 #include "AliceViewer.h"
 #include <cstdio>
+#include <curl/curl.h>
 
 int main(int argc, char** argv)
 {
+    curl_global_init(CURL_GLOBAL_ALL);
     AliceViewer av;
     if (av.init(argc, argv) == 0)
     {

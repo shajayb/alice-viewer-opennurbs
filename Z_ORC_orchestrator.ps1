@@ -16,6 +16,18 @@ param (
 
 $ExecutorMode = $Mode
 
+# ====================================================================
+# GLOBAL TELEMETRY INITIALIZATION
+# ====================================================================
+$WallClock = [System.Diagnostics.Stopwatch]::StartNew()
+$Telemetry = @{
+    ExecutorTimeSec = 0
+    ArchitectTimeSec = 0
+    ExecutorTokens = 0
+    ArchitectTokens = 0
+    LoopsCompleted = 0
+}
+
 Write-Host "=======================================================" -ForegroundColor Cyan
 Write-Host "INITIALIZING ORCHESTRATOR IN [$ExecutorMode] MODE" -ForegroundColor Cyan
 if ($StartStep -gt 1) { Write-Host "FAST-FORWARDING TO STEP: $StartStep" -ForegroundColor Yellow }
@@ -25,7 +37,7 @@ $GoalFile = "Z_ORC_high_level_prompt.txt"
 $ArchitectSystemFile = "Z_ORC_architect_sop.md"
 $ExecutorSystemFile = "Z_ORC_executor_SOP.md"
 
-# 1. Validate File Dependencies
+# 1. Validate File Dependencies & Security
 $MissingFiles = @()
 if (-Not (Test-Path $GoalFile)) { $MissingFiles += $GoalFile }
 if (-Not (Test-Path $ArchitectSystemFile)) { $MissingFiles += $ArchitectSystemFile }
@@ -37,7 +49,20 @@ if ($MissingFiles.Count -gt 0) {
     exit
 }
 
-# CRITICAL: Create a UTF-8 encoding object that explicitly disables the BOM to prevent JSON Parse errors
+# CRITICAL SECURITY: Ensure API_KEYS.TXT is gitignored
+$GitignorePath = ".gitignore"
+if (-Not (Test-Path $GitignorePath)) {
+    Set-Content -Path $GitignorePath -Value "API_KEYS.TXT`n" -Encoding UTF8
+    Write-Host "[SECURITY] Created .gitignore and secured API_KEYS.TXT" -ForegroundColor Green
+} else {
+    $GitignoreContent = Get-Content $GitignorePath -Raw
+    if ($GitignoreContent -notmatch "(?m)^API_KEYS\.TXT$") {
+        Add-Content -Path $GitignorePath -Value "`nAPI_KEYS.TXT" -Encoding UTF8
+        Write-Host "[SECURITY] Added API_KEYS.TXT to existing .gitignore" -ForegroundColor Green
+    }
+}
+
+# CRITICAL: Create a UTF-8 encoding object that explicitly disables the BOM
 $Utf8NoBomEncoding = New-Object System.Text.UTF8Encoding $False
 
 # ====================================================================
@@ -59,9 +84,9 @@ function Initialize-SecureEnvironment {
                 $KeyFound = $true
             }
         }
-        if ($KeyFound) { Write-Host " -> Secure API Keys provisioned to ephemeral Process memory." -ForegroundColor Green }
+        if ($KeyFound) { Write-Host "[SECURITY] API Keys provisioned to ephemeral Process memory." -ForegroundColor Green }
     } else {
-        Write-Warning " -> API_KEYS.TXT not found. Secure environment provisioning bypassed."
+        Write-Warning "[SECURITY] API_KEYS.TXT not found. Environment provisioning bypassed."
     }
 }
 Initialize-SecureEnvironment
@@ -69,7 +94,7 @@ Initialize-SecureEnvironment
 # ====================================================================
 # CONTEXT CACHING & STATeless SESSION MANAGEMENT
 # ====================================================================
-Write-Host "Initializing Hierarchical Context and Settings Configuration..." -ForegroundColor Cyan
+Write-Host "[ORCHESTRATOR] Initializing Hierarchical Context..." -ForegroundColor Cyan
 
 $ContextFilePath = Join-Path (Get-Location) "GEMINI.md"
 $ArchitectSOP = Get-Content $ArchitectSystemFile -Raw
@@ -85,7 +110,7 @@ $ArchitectSOP
 $ExecutorSOP
 "@
 [System.IO.File]::WriteAllText($ContextFilePath, $ContextContent, $Utf8NoBomEncoding)
-Write-Host " -> Deployed static context to GEMINI.md (Implicit Caching Enabled)." -ForegroundColor Green
+Write-Host "[ORCHESTRATOR] Deployed static context to GEMINI.md (Implicit Caching Enabled)." -ForegroundColor Green
 
 $SettingsPath = Join-Path $env:USERPROFILE ".gemini\settings.json"
 $SettingsObject = if (Test-Path $SettingsPath) {
@@ -108,7 +133,7 @@ $JsonString = $SettingsObject | ConvertTo-Json -Depth 10
 [System.IO.File]::WriteAllText($SettingsPath, $JsonString, $Utf8NoBomEncoding)
 
 function Clear-GeminiSessions {
-    Write-Host " -> Purging Gemini session cache to enforce statelessness..." -ForegroundColor DarkGray
+    Write-Host "[ORCHESTRATOR] Purging session cache to enforce statelessness..." -ForegroundColor DarkGray
     $PathsToNuke = @(
         "$env:USERPROFILE\.gemini\sessions",
         "$env:USERPROFILE\.gemini\tmp"
@@ -117,9 +142,8 @@ function Clear-GeminiSessions {
         if (Test-Path $p) { Remove-Item -Path "$p\*" -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
-# ====================================================================
 
-Write-Host "Parsing Master Blueprint..." -ForegroundColor Cyan
+Write-Host "[ORCHESTRATOR] Parsing Master Blueprint..." -ForegroundColor Cyan
 $RawPrompt = Get-Content $GoalFile -Raw
 
 $GoalMatch      = [regex]::Match($RawPrompt, '(?is)\[GOAL\](.*?)(?=\[PLAN\]|\[BOOTSTRAP\]|$)')
@@ -131,7 +155,7 @@ $MasterPlan       = $PlanMatch.Groups[1].Value.Trim()
 $CurrentDirective = $BootstrapMatch.Groups[1].Value.Trim()
 
 if ($StartStep -gt 1) {
-    Write-Host "Slicing BOOTSTRAP to start at Step $StartStep..." -ForegroundColor Yellow
+    Write-Host "[ORCHESTRATOR] Slicing BOOTSTRAP to start at Step $StartStep..." -ForegroundColor Yellow
     $StepRegex = '(?is)(Step\s+' + $StartStep + ':.*)'
     $StepMatch = [regex]::Match($CurrentDirective, $StepRegex)
     if ($StepMatch.Success) {
@@ -141,7 +165,7 @@ if ($StartStep -gt 1) {
     }
 }
 
-Write-Host "LONG TERM GOAL: $LongTermGoal" -ForegroundColor Green
+Write-Host "`nLONG TERM GOAL: $LongTermGoal" -ForegroundColor Green
 Write-Host "=== BOOTSTRAP PROMPT GENERATED ===" -ForegroundColor Magenta
 Write-Host $CurrentDirective
 Write-Host "==================================`n"
@@ -155,7 +179,9 @@ $MaxRetries = 15
 # 3. Execution Loop
 while ($true)
 {
-    Write-Host "======================================================="
+    $Telemetry.LoopsCompleted++
+    Write-Host "`n======================================================="
+    Write-Host "[ORCHESTRATOR] Loop $($Telemetry.LoopsCompleted) Initiated." -ForegroundColor Cyan
     Write-Host "[EXECUTOR] Preparing Directive..." -ForegroundColor DarkGray
     
     $RawExecutorPrompt = "--- YOUR CURRENT DIRECTIVE ---`n$CurrentDirective"
@@ -188,11 +214,14 @@ while ($true)
     $TempExecutorFile = "temp_executor_prompt.txt"
     [System.IO.File]::WriteAllText($TempExecutorFile, $CleanExecutorPrompt, $Utf8NoBomEncoding)
 
+    $ExecTimer = [System.Diagnostics.Stopwatch]::StartNew()
     if ($ExecutorMode -eq "REPL") {
         gemini.cmd --approval-mode=yolo "$CleanExecutorPrompt"
     } else {
         cmd.exe /c "gemini.cmd --approval-mode=yolo < `"$TempExecutorFile`""
     }
+    $ExecTimer.Stop()
+    $Telemetry.ExecutorTimeSec += $ExecTimer.Elapsed.TotalSeconds
     
     Stop-Job $WatcherJob | Out-Null
     Remove-Job $WatcherJob | Out-Null
@@ -230,7 +259,7 @@ while ($true)
         $ReportObj = $ReportContext | ConvertFrom-Json
         if ($null -ne $ReportObj.files_modified) {
             foreach ($file in $ReportObj.files_modified) {
-                if ($file -match '\.(h|cpp)$' -and (Test-Path $file)) {
+                if ($file -match '\.(h|cpp|txt|cmake)$' -and (Test-Path $file)) {
                     $SourceCodeContext += "=== FILE: $file ===`n"
                     $SourceCodeContext += Get-Content $file -Raw
                     $SourceCodeContext += "`n`n"
@@ -238,23 +267,28 @@ while ($true)
             }
         }
     } catch {
-        Write-Warning "Failed to parse files_modified from executor_report.json."
+        Write-Warning "[ORCHESTRATOR] Failed to parse files_modified from executor_report.json."
     }
 
     if ([string]::IsNullOrWhiteSpace($SourceCodeContext)) {
-        $SourceCodeContext = "No .h or .cpp files were reported as modified or could not be found."
+        $SourceCodeContext = "No code files were reported as modified or could not be found."
     }
 
-    # Injecting the runtime log safely
     $ConsoleLogContext = "No console log found."
+    $LogLengthForTelemetry = 0
     if (Test-Path "executor_console.log") {
         $RawLog = Get-Content "executor_console.log" -Raw
+        $LogLengthForTelemetry = $RawLog.Length
         if ($RawLog.Length -gt 5000) {
             $ConsoleLogContext = "... [TRUNCATED] ...`n" + $RawLog.Substring($RawLog.Length - 5000)
         } else {
             $ConsoleLogContext = $RawLog
         }
     }
+
+    # Estimate Executor Tokens (Prompt Length + Raw Log Output Output)
+    $ExecTokenEstimate = [math]::Round(($CleanExecutorPrompt.Length + $LogLengthForTelemetry) / 4)
+    $Telemetry.ExecutorTokens += $ExecTokenEstimate
 
     # Verify Visual Attachment
     $ImageSize = 0
@@ -302,18 +336,21 @@ $SourceCodeContext
     $LenLog = $ConsoleLogContext.Length
     $LenCode = $SourceCodeContext.Length
     $LenTotal = $LenReport + $LenLog + $LenCode + $ContextContent.Length + $CurrentDirective.Length + $MasterPlan.Length
+    $ArchTokenEstimate = [math]::Round($LenTotal / 4)
 
     Write-Host "`n=======================================================" -ForegroundColor Magenta
-    Write-Host "[TELEMETRY] ARCHITECT PAYLOAD METRICS" -ForegroundColor Magenta
-    Write-Host "  -> Base Context (SOPs):  $($ContextContent.Length) chars" -ForegroundColor DarkGray
-    Write-Host "  -> Executor Report:      $LenReport chars" -ForegroundColor DarkGray
-    Write-Host "  -> Console Log:          $LenLog chars" -ForegroundColor DarkGray
-    Write-Host "  -> Extracted C++ Code:   $LenCode chars" -ForegroundColor DarkGray
-    if ($ImageSize -gt 0) {
-        Write-Host "  -> Visual Attachment:    framebuffer.png ($([math]::Round($ImageSize / 1024, 2)) KB)" -ForegroundColor DarkGray
-    }
+    Write-Host "[TELEMETRY] SESSION METRICS & PAYLOAD" -ForegroundColor Magenta
+    Write-Host "  -> System Wall Clock:    $([math]::Round($WallClock.Elapsed.TotalMinutes, 2)) min" -ForegroundColor DarkGray
+    Write-Host "  -> Executor Active Time: $([math]::Round($Telemetry.ExecutorTimeSec / 60, 2)) min" -ForegroundColor DarkGray
+    Write-Host "  -> Architect Active Time:$([math]::Round($Telemetry.ArchitectTimeSec / 60, 2)) min" -ForegroundColor DarkGray
     Write-Host "  ---------------------------------------------------" -ForegroundColor Magenta
-    Write-Host "  TOTAL TEXT PAYLOAD SIZE: ~$LenTotal chars (Approx $([math]::Round($LenTotal / 4)) tokens)" -ForegroundColor Magenta
+    Write-Host "  -> Cumulative Executor Tokens: ~$($Telemetry.ExecutorTokens)" -ForegroundColor DarkGray
+    Write-Host "  -> Cumulative Architect Tokens: ~$($Telemetry.ArchitectTokens)" -ForegroundColor DarkGray
+    Write-Host "  ---------------------------------------------------" -ForegroundColor Magenta
+    Write-Host "  -> Current Architect Prompt Size: ~$LenTotal chars (~$ArchTokenEstimate tokens)" -ForegroundColor DarkGray
+    if ($ImageSize -gt 0) {
+        Write-Host "  -> Visual Attachment: framebuffer.png ($([math]::Round($ImageSize / 1024, 2)) KB)" -ForegroundColor DarkGray
+    }
     Write-Host "=======================================================" -ForegroundColor Magenta
     # ====================================================================
 
@@ -329,18 +366,15 @@ $SourceCodeContext
     # ====================================================================
     $Attempt = 0
     $ArchitectSuccess = $false
-    
-    # Declare the raw response string OUTSIDE the loop so it can be parsed later
     $ArchitectResponseRaw = ""
 
+    $ArchTimer = [System.Diagnostics.Stopwatch]::StartNew()
+    
     while (-not $ArchitectSuccess -and $Attempt -lt $MaxRetries) {
         $Attempt++
-        Write-Host "Awaiting Architect evaluation (Attempt $Attempt/$MaxRetries)..." -ForegroundColor Cyan
+        Write-Host "[ARCHITECT] Awaiting evaluation (Attempt $Attempt/$MaxRetries)..." -ForegroundColor Cyan
         
-        # CRITICAL FIX: Reset the string inside the loop so 429 stack traces don't poison subsequent successful JSON parses
         $ArchitectResponseRaw = ""
-        
-        # Inject the $ImageArg dynamically so the vision model can analyze the image
         $Pipeline = cmd.exe /c "gemini.cmd --approval-mode=yolo$ImageArg < `"$TempArchitectFile`" 2>&1"
         
         $Pipeline | ForEach-Object {
@@ -353,21 +387,32 @@ $SourceCodeContext
             
             if ($ArchitectResponseRaw -match "No capacity available" -or $ArchitectResponseRaw -match "MODEL_CAPACITY_EXHAUSTED") {
                 $BaseDelay = [math]::Min(300, (30 * $Attempt)) 
-                Write-Host "`n[!] Google Servers at Maximum Capacity. Initiating deep sleep..." -ForegroundColor Red
+                Write-Host "`n[ARCHITECT] Google Servers at Maximum Capacity." -ForegroundColor Red
             } else {
                 $ExponentialMultiplier = [math]::Pow(2, $Attempt - 1)
                 $BaseDelay = [math]::Min(60, (5 * $ExponentialMultiplier))
             }
 
             $JitterFactor = (Get-Random -Minimum 80 -Maximum 120) / 100.0
-            $FinalDelay = [math]::Round($BaseDelay * $JitterFactor, 2)
+            $FinalDelay = [math]::Round($BaseDelay * $JitterFactor)
             
-            Write-Host "[!] API Rejected Request. Sleeping for $FinalDelay seconds to allow servers to recover..." -ForegroundColor DarkYellow
-            Start-Sleep -Seconds $FinalDelay
+            Write-Host "[ORCHESTRATOR] API Rejected Request. Initiating recovery sleep..." -ForegroundColor DarkYellow
+            for ($i = $FinalDelay; $i -gt 0; $i--) {
+                Write-Progress -Activity "[ARCHITECT] Waiting for API Capacity..." -Status "$i seconds remaining" -PercentComplete (($FinalDelay - $i) / $FinalDelay * 100)
+                Start-Sleep -Seconds 1
+            }
+            Write-Progress -Activity "[ARCHITECT] Waiting for API Capacity..." -Completed
+            
         } else {
             $ArchitectSuccess = $true
         }
     }
+    
+    $ArchTimer.Stop()
+    $Telemetry.ArchitectTimeSec += $ArchTimer.Elapsed.TotalSeconds
+
+    # Tally Architect Tokens (Input + Output Estimate)
+    $Telemetry.ArchitectTokens += $ArchTokenEstimate + [math]::Round($ArchitectResponseRaw.Length / 4)
     # ====================================================================
     
     if (Test-Path $TempArchitectFile) { Remove-Item $TempArchitectFile -Force }
@@ -378,7 +423,7 @@ $SourceCodeContext
     }
 
     if ($ArchitectResponseRaw -match "Error executing tool") {
-        Write-Host "`n[!] Architect encountered a tool error. Forcing REWORK loop." -ForegroundColor Yellow
+        Write-Host "`n[ARCHITECT] Tool error encountered. Forcing REWORK loop." -ForegroundColor Yellow
         $Decision = [PSCustomObject]@{
             action = "REWORK"
             assessment = [PSCustomObject]@{ critique = "A tool error disrupted the Architect's evaluation." }
@@ -403,27 +448,27 @@ $SourceCodeContext
         }
     }
 
-    Write-Host "Architect Critique: $($Decision.assessment.critique)" -ForegroundColor Gray
+    Write-Host "`n[ARCHITECT CRITIQUE] $($Decision.assessment.critique)" -ForegroundColor Gray
 
     # 6. State Routing & Anti-Loop Circuit Breaker
     if ($Decision.action -eq "HALT") {
-        Write-Host "`n[HALT TRIGGERED] Architect determined criteria met. Shutting down gracefully." -ForegroundColor Green
+        Write-Host "`n[ORCHESTRATOR] HALT TRIGGERED. Goal Achieved. Shutting down gracefully." -ForegroundColor Green
         git commit -m "Goal Achieved: $LongTermGoal" | Out-Null
         break
     } elseif ($Decision.action -eq "REWORK") {
         $ConsecutiveReworks++
-        Write-Host "`n[REWORK] Architect rejected the execution. (Strike $ConsecutiveReworks/3) Generating fix directive." -ForegroundColor Red
+        Write-Host "`n[ORCHESTRATOR] REWORK REQUIRED (Strike $ConsecutiveReworks/3). Generating fix directive." -ForegroundColor Red
         
         $CurrentDirective = "FIX PREVIOUS MISTAKES: $($Decision.next_directive)"
         
         if ($ConsecutiveReworks -ge 3) {
-            Write-Host "[!] CIRCUIT BREAKER TRIPPED: Injecting radical rethink prompt." -ForegroundColor DarkRed
+            Write-Host "[ORCHESTRATOR] CIRCUIT BREAKER TRIPPED: Injecting radical rethink prompt." -ForegroundColor DarkRed
             $CurrentDirective += "`n`n[SYSTEM OVERRIDE]: You have failed this step $ConsecutiveReworks times. You are stuck in a logic loop. Completely rethink your approach, discard previous assumptions, and use a drastically simpler method to achieve the goal."
         }
         git reset HEAD . | Out-Null
     } elseif ($Decision.action -eq "PROCEED") {
         $ConsecutiveReworks = 0 
-        Write-Host "`n[PROCEED] Architect approved. Advancing state." -ForegroundColor Green
+        Write-Host "`n[ORCHESTRATOR] PROCEED APPROVED. Advancing state." -ForegroundColor Green
         $CurrentDirective = $Decision.next_directive
         git commit -m "Autocommit: Approved Step" | Out-Null
     }

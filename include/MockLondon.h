@@ -68,7 +68,7 @@ private:
                 double dLon = cLon - targetLon;
                 double dist = sqrt(dLat*dLat + (dLon*cos(cLat))*(dLon*cos(cLat))) * 6378137.0;
 
-                if (dist < 200.0)
+                if (dist < 100.0)
                 {
                     child["content"]["uri"] = "mock://cathedral";
                 }

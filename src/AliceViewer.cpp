@@ -870,11 +870,12 @@ void AliceViewer::run()
                     {
                         camera.yaw += 120.0f * (3.14159f / 180.0f);
                     }
-                    else if (captureFrame > 300)
-                    {
-                        glfwSetWindowShouldClose(window, true);
-                    }
                 }
+            }
+
+            if (captureFrame >= 320)
+            {
+                glfwSetWindowShouldClose(window, true);
             }
         }
 

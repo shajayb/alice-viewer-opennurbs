@@ -58,6 +58,17 @@ namespace Alice
         {
             if (activeIndices.count == 0) return;
 
+            int cathedralIdx = -1;
+            for (int i = 0; i < (int)activeIndices.count; ++i)
+            {
+                int nIdx = activeIndices[i].index;
+                if (nodes[nIdx].contentUri && strcmp(nodes[nIdx].contentUri, "mock://cathedral") == 0)
+                {
+                    cathedralIdx = nIdx;
+                    break;
+                }
+            }
+
             V3 f = lightDir;
             V3 worldUp = (fabsf(f.z) > 0.9f) ? V3(1,0,0) : V3(0,0,1);
             V3 s = crs(worldUp, f);
@@ -65,16 +76,25 @@ namespace Alice
             V3 u = crs(f, s);
 
             V3 focus = {0,0,0};
-            float totalWeight = 0;
-            for(int i=0; i<(int)activeIndices.count; ++i)
+            if (cathedralIdx != -1)
             {
-                int nIdx = activeIndices[i].index;
-                focus.x += (float)nodes[nIdx].sphereCenter.x;
-                focus.y += (float)nodes[nIdx].sphereCenter.y;
-                focus.z += (float)nodes[nIdx].sphereCenter.z;
-                totalWeight += 1.0f;
+                focus.x = (nodes[cathedralIdx].aabbMin.x + nodes[cathedralIdx].aabbMax.x) * 0.5f;
+                focus.y = (nodes[cathedralIdx].aabbMin.y + nodes[cathedralIdx].aabbMax.y) * 0.5f;
+                focus.z = (nodes[cathedralIdx].aabbMin.z + nodes[cathedralIdx].aabbMax.z) * 0.5f;
             }
-            focus.x /= totalWeight; focus.y /= totalWeight; focus.z /= totalWeight;
+            else
+            {
+                float totalWeight = 0;
+                for(int i=0; i<(int)activeIndices.count; ++i)
+                {
+                    int nIdx = activeIndices[i].index;
+                    focus.x += (float)nodes[nIdx].sphereCenter.x;
+                    focus.y += (float)nodes[nIdx].sphereCenter.y;
+                    focus.z += (float)nodes[nIdx].sphereCenter.z;
+                    totalWeight += 1.0f;
+                }
+                focus.x /= totalWeight; focus.y /= totalWeight; focus.z /= totalWeight;
+            }
 
             V3 eye = focus - f * 2000.0f;
             
@@ -88,19 +108,46 @@ namespace Alice
             lightView[15] = 1.0f;
 
             float minX = 1e30f, maxX = -1e30f, minY = 1e30f, maxY = -1e30f, minZ = 1e30f, maxZ = -1e30f;
-            for(int i=0; i<(int)activeIndices.count; ++i)
+            
+            if (cathedralIdx != -1)
             {
-                int nIdx = activeIndices[i].index;
-                V3 c = { (float)nodes[nIdx].sphereCenter.x, (float)nodes[nIdx].sphereCenter.y, (float)nodes[nIdx].sphereCenter.z };
-                float r = (float)nodes[nIdx].sphereRadius;
+                Math::Vec3 boxMin = nodes[cathedralIdx].aabbMin;
+                Math::Vec3 boxMax = nodes[cathedralIdx].aabbMax;
+                V3 corners[8] = {
+                    {boxMin.x, boxMin.y, boxMin.z}, {boxMax.x, boxMin.y, boxMin.z},
+                    {boxMin.x, boxMax.y, boxMin.z}, {boxMax.x, boxMax.y, boxMin.z},
+                    {boxMin.x, boxMin.y, boxMax.z}, {boxMax.x, boxMin.y, boxMax.z},
+                    {boxMin.x, boxMax.y, boxMax.z}, {boxMax.x, boxMax.y, boxMax.z}
+                };
+                for(int i=0; i<8; ++i)
+                {
+                    float cx = lightView[0]*corners[i].x + lightView[4]*corners[i].y + lightView[8]*corners[i].z + lightView[12];
+                    float cy = lightView[1]*corners[i].x + lightView[5]*corners[i].y + lightView[9]*corners[i].z + lightView[13];
+                    float cz = lightView[2]*corners[i].x + lightView[6]*corners[i].y + lightView[10]*corners[i].z + lightView[14];
+                    if(cx < minX) minX = cx; if(cx > maxX) maxX = cx;
+                    if(cy < minY) minY = cy; if(cy > maxY) maxY = cy;
+                    if(cz < minZ) minZ = cz; if(cz > maxZ) maxZ = cz;
+                }
+                float dx = maxX - minX; float dy = maxY - minY;
+                minX -= dx * 0.05f; maxX += dx * 0.05f;
+                minY -= dy * 0.05f; maxY += dy * 0.05f;
+            }
+            else
+            {
+                for(int i=0; i<(int)activeIndices.count; ++i)
+                {
+                    int nIdx = activeIndices[i].index;
+                    V3 c = { (float)nodes[nIdx].sphereCenter.x, (float)nodes[nIdx].sphereCenter.y, (float)nodes[nIdx].sphereCenter.z };
+                    float r = (float)nodes[nIdx].sphereRadius;
 
-                float cx = lightView[0]*c.x + lightView[4]*c.y + lightView[8]*c.z + lightView[12];
-                float cy = lightView[1]*c.x + lightView[5]*c.y + lightView[9]*c.z + lightView[13];
-                float cz = lightView[2]*c.x + lightView[6]*c.y + lightView[10]*c.z + lightView[14];
+                    float cx = lightView[0]*c.x + lightView[4]*c.y + lightView[8]*c.z + lightView[12];
+                    float cy = lightView[1]*c.x + lightView[5]*c.y + lightView[9]*c.z + lightView[13];
+                    float cz = lightView[2]*c.x + lightView[6]*c.y + lightView[10]*c.z + lightView[14];
 
-                if(cx - r < minX) minX = cx - r; if(cx + r > maxX) maxX = cx + r;
-                if(cy - r < minY) minY = cy - r; if(cy + r > maxY) maxY = cy + r;
-                if(cz - r < minZ) minZ = cz - r; if(cz + r > maxZ) maxZ = cz + r;
+                    if(cx - r < minX) minX = cx - r; if(cx + r > maxX) maxX = cx + r;
+                    if(cy - r < minY) minY = cy - r; if(cy + r > maxY) maxY = cy + r;
+                    if(cz - r < minZ) minZ = cz - r; if(cz + r > maxZ) maxZ = cz + r;
+                }
             }
 
             Math::mat4_ortho(lightProj, minX, maxX, minY, maxY, -maxZ, -minZ);
@@ -776,7 +823,7 @@ namespace Alice
             glUniform2f(tilePBRShader.uRes, (float)w, (float)h);
             ssao.quad.draw();
 
-            if (av->m_headlessCapture && currentFrame == 250)
+            if (av->m_headlessCapture && currentFrame == 300)
             {
                 size_t bufferSize = (size_t)w * h * 3;
                 unsigned char* pixelBuffer = (unsigned char*)g_Arena.allocate(bufferSize);

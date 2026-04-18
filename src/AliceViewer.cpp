@@ -765,7 +765,7 @@ int AliceViewer::init(int argc, char** argv)
 void AliceViewer::run()
 {
     float lastTime = (float)glfwGetTime();
-    while (!glfwWindowShouldClose(window))
+    while (window && !glfwWindowShouldClose(window))
     {
 #ifdef ALICE_TEST_MODE
         static int agentFrameCount = 0;
@@ -950,11 +950,12 @@ void AliceViewer::run()
             {
                 printf("[HEADLESS] Capture sequence complete. Waiting for IO threads...\n");
                 std::this_thread::sleep_for(std::chrono::seconds(2));
-                glfwSetWindowShouldClose(window, true);
+                if (window) glfwSetWindowShouldClose(window, true);
+                else break;
             }
         }
 
-        glfwSwapBuffers(window);
+        if (window) glfwSwapBuffers(window);
     }
 }
 

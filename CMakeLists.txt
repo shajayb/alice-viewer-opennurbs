@@ -30,6 +30,8 @@ if(MSVC)
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 endif()
 
+find_package(OpenGL REQUIRED)
+
 # AliceViewer
 add_executable(AliceViewer
     src/AliceViewer.cpp
@@ -44,7 +46,7 @@ target_link_libraries(AliceViewer
     opennurbs::opennurbs
     CURL::libcurl
     nlohmann_json::nlohmann_json
-    opengl32
+    ${OPENGL_LIBRARIES}
 )
 if(MSVC)
     set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "/FORCE:MULTIPLE")

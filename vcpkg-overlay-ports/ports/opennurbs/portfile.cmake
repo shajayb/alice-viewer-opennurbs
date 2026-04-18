@@ -10,23 +10,10 @@ vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"
     OPTIONS
         -DOPENNURBS_BUILD_EXAMPLES=OFF
+        -DOPENNURBS_ZLIB_EXTERNAL=ON
 )
 
 vcpkg_cmake_install()
-
-# Rename zlib to avoid conflict with standard zlib port
-if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/zlib.lib")
-    file(RENAME "${CURRENT_PACKAGES_DIR}/lib/zlib.lib" "${CURRENT_PACKAGES_DIR}/lib/opennurbs_zlib.lib")
-endif()
-if(EXISTS "${CURRENT_PACKAGES_DIR}/debug/lib/zlib.lib")
-    file(RENAME "${CURRENT_PACKAGES_DIR}/debug/lib/zlib.lib" "${CURRENT_PACKAGES_DIR}/debug/lib/opennurbs_zlib.lib")
-endif()
-if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/libzlib.a")
-    file(RENAME "${CURRENT_PACKAGES_DIR}/lib/libzlib.a" "${CURRENT_PACKAGES_DIR}/lib/libopennurbs_zlib.a")
-endif()
-if(EXISTS "${CURRENT_PACKAGES_DIR}/debug/lib/libzlib.a")
-    file(RENAME "${CURRENT_PACKAGES_DIR}/debug/lib/libzlib.a" "${CURRENT_PACKAGES_DIR}/debug/lib/libopennurbs_zlib.a")
-endif()
 
 # Ensure all headers are installed to include/ root, preserving structure
 file(COPY "${SOURCE_PATH}/" DESTINATION "${CURRENT_PACKAGES_DIR}/include" FILES_MATCHING PATTERN "*.h")
@@ -46,18 +33,6 @@ else()
 endif()
 
 set(MAIN_LIB "${LIB_PREFIX}opennurbsStatic${LIB_EXT}")
-set(ZLIB_NAME "${LIB_PREFIX}opennurbs_zlib${LIB_EXT}")
-
-# Check for alternative names if defaults don't exist
-if(NOT EXISTS "${CURRENT_PACKAGES_DIR}/lib/${ZLIB_NAME}")
-    if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/${LIB_PREFIX}zlib${LIB_EXT}")
-        set(ZLIB_NAME "${LIB_PREFIX}zlib${LIB_EXT}")
-    elseif(EXISTS "${CURRENT_PACKAGES_DIR}/lib/${LIB_PREFIX}opennurbs_public_zlib${LIB_EXT}")
-        set(ZLIB_NAME "${LIB_PREFIX}opennurbs_public_zlib${LIB_EXT}")
-    elseif(EXISTS "${CURRENT_PACKAGES_DIR}/lib/${LIB_PREFIX}z${LIB_EXT}")
-        set(ZLIB_NAME "${LIB_PREFIX}z${LIB_EXT}")
-    endif()
-endif()
 
 if(NOT EXISTS "${CURRENT_PACKAGES_DIR}/lib/${MAIN_LIB}")
     if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/${LIB_PREFIX}OpenNURBS${LIB_EXT}")
@@ -66,6 +41,7 @@ if(NOT EXISTS "${CURRENT_PACKAGES_DIR}/lib/${MAIN_LIB}")
 endif()
 
 set(CONFIG_CONTENT "
+find_package(ZLIB REQUIRED)
 add_library(opennurbs::opennurbs STATIC IMPORTED)
 set_target_properties(opennurbs::opennurbs PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES \"\${CMAKE_CURRENT_LIST_DIR}/../../include\"
@@ -73,11 +49,12 @@ set_target_properties(opennurbs::opennurbs PROPERTIES
 ")
 
 if(WIN32)
-    string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"shlwapi.lib;\${CMAKE_CURRENT_LIST_DIR}/../../lib/${ZLIB_NAME}\"\n")
+    string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"shlwapi.lib;ZLIB::ZLIB\"\n")
 else()
     # Use grouping for static libraries on Linux to resolve circular dependencies
-    string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"uuid;pthread;dl;-Wl,--start-group;\${CMAKE_CURRENT_LIST_DIR}/../../lib/${MAIN_LIB};\${CMAKE_CURRENT_LIST_DIR}/../../lib/${ZLIB_NAME};-Wl,--end-group\"\n")
+    string(APPEND CONFIG_CONTENT "    INTERFACE_LINK_LIBRARIES \"uuid;pthread;dl;ZLIB::ZLIB\"\n")
 endif()
+
 
 string(APPEND CONFIG_CONTENT ")\n")
 
@@ -86,9 +63,9 @@ string(APPEND CONFIG_CONTENT "    set_target_properties(opennurbs::opennurbs PRO
 string(APPEND CONFIG_CONTENT "        IMPORTED_LOCATION_DEBUG \"\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${MAIN_LIB}\"\n")
 
 if(WIN32)
-    string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"shlwapi.lib;\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${ZLIB_NAME}\"\n")
+    string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"shlwapi.lib;ZLIB::ZLIB\"\n")
 else()
-    string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"uuid;pthread;dl;-Wl,--start-group;\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${MAIN_LIB};\${CMAKE_CURRENT_LIST_DIR}/../../debug/lib/${ZLIB_NAME};-Wl,--end-group\"\n")
+    string(APPEND CONFIG_CONTENT "        INTERFACE_LINK_LIBRARIES_DEBUG \"uuid;pthread;dl;ZLIB::ZLIB\"\n")
 endif()
 
 string(APPEND CONFIG_CONTENT "    )\n")

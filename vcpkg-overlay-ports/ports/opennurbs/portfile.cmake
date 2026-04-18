@@ -15,6 +15,11 @@ vcpkg_cmake_configure(
 
 vcpkg_cmake_install()
 
+# Remove conflicting zlib files
+file(REMOVE "${CURRENT_PACKAGES_DIR}/lib/zlib.lib" "${CURRENT_PACKAGES_DIR}/lib/libzlib.a" "${CURRENT_PACKAGES_DIR}/lib/libz.a")
+file(REMOVE "${CURRENT_PACKAGES_DIR}/debug/lib/zlib.lib" "${CURRENT_PACKAGES_DIR}/debug/lib/libzlib.a" "${CURRENT_PACKAGES_DIR}/debug/lib/libz.a")
+file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/include/zlib")
+
 # Ensure all headers are installed to include/ root, preserving structure
 file(COPY "${SOURCE_PATH}/" DESTINATION "${CURRENT_PACKAGES_DIR}/include" FILES_MATCHING PATTERN "*.h")
 

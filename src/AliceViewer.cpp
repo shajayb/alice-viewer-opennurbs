@@ -741,6 +741,13 @@ void AliceViewer::run()
     float lastTime = (float)glfwGetTime();
     while (!glfwWindowShouldClose(window))
     {
+#ifdef ALICE_TEST_MODE
+        static int agentFrameCount = 0;
+        if (agentFrameCount++ > 5) {
+            printf("AGENT_WATCHDOG: 5 frames rendered. Terminating safely.\n");
+            exit(0);
+        }
+#endif
         glfwPollEvents();
         float now = (float)glfwGetTime(), dt = now - lastTime; 
         lastTime = now;

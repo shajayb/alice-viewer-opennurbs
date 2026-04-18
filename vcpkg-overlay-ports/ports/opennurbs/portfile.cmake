@@ -51,6 +51,7 @@ add_library(opennurbs::opennurbs STATIC IMPORTED)
 set_target_properties(opennurbs::opennurbs PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES \"\${CMAKE_CURRENT_LIST_DIR}/../../include\"
     IMPORTED_LOCATION \"\${CMAKE_CURRENT_LIST_DIR}/../../lib/${MAIN_LIB}\"
+    INTERFACE_COMPILE_DEFINITIONS \"z_deflate=deflate;z_inflate=inflate;z_deflateEnd=deflateEnd;z_inflateEnd=inflateEnd;z_deflateInit_=deflateInit_;z_inflateInit_=inflateInit_;z_crc32=crc32;z_adler32=adler32;z_inflateReset=inflateReset\"
 ")
 
 if(WIN32)

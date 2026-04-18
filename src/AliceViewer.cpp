@@ -663,12 +663,15 @@ int AliceViewer::init(int argc, char** argv)
 
     IMGUI_CHECKVERSION(); 
     ImGui::CreateContext();
-    ImGui_ImplGlfw_InitForOpenGL(window, false);
-    ImGui_ImplOpenGL3_Init("#version 430 core");
-    glfwSetKeyCallback(window, key_cb); 
-    glfwSetMouseButtonCallback(window, mouse_cb);
-    glfwSetCursorPosCallback(window, cursor_cb); 
-    glfwSetScrollCallback(window, scroll_cb);
+    if (window)
+    {
+        ImGui_ImplGlfw_InitForOpenGL(window, false);
+        ImGui_ImplOpenGL3_Init("#version 430 core");
+        glfwSetKeyCallback(window, key_cb); 
+        glfwSetMouseButtonCallback(window, mouse_cb);
+        glfwSetCursorPosCallback(window, cursor_cb); 
+        glfwSetScrollCallback(window, scroll_cb);
+    }
     if (fov == 0.0f) fov = 0.785f; 
     camera.focusPoint = { 0, 0, 0 }; 
     camera.distance = 25.0f; 
@@ -957,9 +960,12 @@ void AliceViewer::run()
 
 void AliceViewer::cleanup() 
 { 
-    ImGui_ImplOpenGL3_Shutdown(); 
-    ImGui_ImplGlfw_Shutdown(); 
-    ImGui::DestroyContext(); 
+    if (window)
+    {
+        ImGui_ImplOpenGL3_Shutdown(); 
+        ImGui_ImplGlfw_Shutdown(); 
+        ImGui::DestroyContext(); 
+    }
     glfwTerminate(); 
 }
 

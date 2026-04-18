@@ -28,7 +28,6 @@ if(MSVC)
         add_definitions(-DNDEBUG)
     endif()
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
-add_definitions(-Dz_deflate=deflate -Dz_inflate=inflate -Dz_deflateEnd=deflateEnd -Dz_inflateEnd=inflateEnd -Dz_deflateInit_=deflateInit_ -Dz_inflateInit_=inflateInit_ -Dz_crc32=crc32 -Dz_adler32=adler32 -Dz_inflateReset=inflateReset)
 endif()
 
 find_package(OpenGL REQUIRED)
@@ -49,10 +48,27 @@ target_link_libraries(AliceViewer
     nlohmann_json::nlohmann_json
     ${OPENGL_LIBRARIES}
 )
+
+# Structural Hardening: OpenNURBS Integration
+target_compile_definitions(AliceViewer PRIVATE
+    z_deflate=deflate
+    z_inflate=inflate
+    z_deflateEnd=deflateEnd
+    z_inflateEnd=inflateEnd
+    z_deflateInit_=deflateInit_
+    z_inflateInit_=inflateInit_
+    z_crc32=crc32
+    z_adler32=adler32
+    z_inflateReset=inflateReset
+)
+
 if(MSVC)
-    set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "/FORCE:MULTIPLE /alternatename:z_deflate=deflate /alternatename:z_inflate=inflate /alternatename:z_deflateEnd=deflateEnd /alternatename:z_inflateEnd=inflateEnd /alternatename:z_deflateInit_=deflateInit_ /alternatename:z_inflateInit_=inflateInit_ /alternatename:z_crc32=crc32 /alternatename:z_adler32=adler32 /alternatename:z_inflateReset=inflateReset")
+    target_link_libraries(AliceViewer PRIVATE shlwapi.lib uuid.lib Rpcrt4.lib)
+    set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "/FORCE:MULTIPLE")
 else()
-    set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "-Wl,--allow-multiple-definition -Wl,--defsym,z_deflate=deflate -Wl,--defsym,z_inflate=inflate -Wl,--defsym,z_deflateEnd=deflateEnd -Wl,--defsym,z_inflateEnd=inflateEnd -Wl,--defsym,z_deflateInit_=deflateInit_ -Wl,--defsym,z_inflateInit_=inflateInit_ -Wl,--defsym,z_crc32=crc32 -Wl,--defsym,z_adler32=adler32 -Wl,--defsym,z_inflateReset=inflateReset")
+    # On Linux, wrap opennurbs and zlib in linker groups to resolve circular dependencies
+    target_link_libraries(AliceViewer PRIVATE -Wl,--start-group opennurbs z -Wl,--end-group)
+    set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "-Wl,--allow-multiple-definition")
 endif()
 
 # AliceOrchestrator

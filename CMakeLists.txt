@@ -10,6 +10,7 @@ find_package(glfw3 CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(opennurbs CONFIG REQUIRED)
+find_package(ZLIB REQUIRED)
 find_package(CURL REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
@@ -64,11 +65,11 @@ target_compile_definitions(AliceViewer PRIVATE
 
 if(MSVC)
     target_link_libraries(AliceViewer PRIVATE shlwapi.lib uuid.lib Rpcrt4.lib)
-    set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "/FORCE:MULTIPLE")
+    set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "/FORCE:MULTIPLE /alternatename:z_deflate=deflate /alternatename:z_inflate=inflate /alternatename:z_deflateEnd=deflateEnd /alternatename:z_inflateEnd=inflateEnd /alternatename:z_deflateInit_=deflateInit_ /alternatename:z_inflateInit_=inflateInit_ /alternatename:z_crc32=crc32 /alternatename:z_adler32=adler32 /alternatename:z_inflateReset=inflateReset")
 else()
     # On Linux, wrap opennurbs and zlib in linker groups to resolve circular dependencies
-    target_link_libraries(AliceViewer PRIVATE -Wl,--start-group opennurbs z -Wl,--end-group)
-    set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "-Wl,--allow-multiple-definition")
+    target_link_libraries(AliceViewer PRIVATE -Wl,--start-group opennurbs::opennurbs ZLIB::ZLIB -Wl,--end-group)
+    set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "-Wl,--allow-multiple-definition -Wl,--defsym,z_deflate=deflate -Wl,--defsym,z_inflate=inflate -Wl,--defsym,z_deflateEnd=deflateEnd -Wl,--defsym,z_inflateEnd=inflateEnd -Wl,--defsym,z_deflateInit_=deflateInit_ -Wl,--defsym,z_inflateInit_=inflateInit_ -Wl,--defsym,z_crc32=crc32 -Wl,--defsym,z_adler32=adler32 -Wl,--defsym,z_inflateReset=inflateReset")
 endif()
 
 # AliceOrchestrator

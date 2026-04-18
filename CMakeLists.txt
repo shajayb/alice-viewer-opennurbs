@@ -15,6 +15,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 
 # Include directories
 include_directories(include)
+include_directories("docs/code snippets")
 
 # Force Dynamic Runtime flags for x64-windows
 if(MSVC)
@@ -50,19 +51,19 @@ if(MSVC)
 endif()
 
 # AliceOrchestrator
-add_executable(AliceOrchestrator
-    src/AliceOrchestrator.cpp
-)
-target_link_libraries(AliceOrchestrator
-    PRIVATE
-    CURL::libcurl
-    nlohmann_json::nlohmann_json
-)
+# add_executable(AliceOrchestrator
+#     src/AliceOrchestrator.cpp
+# )
+# target_link_libraries(AliceOrchestrator
+#     PRIVATE
+#     CURL::libcurl
+#     nlohmann_json::nlohmann_json
+# )
 
 # APITest
-add_executable(APITest src/APITest.cpp)
-target_link_libraries(APITest PRIVATE CURL::libcurl nlohmann_json::nlohmann_json)
+# add_executable(APITest src/APITest.cpp)
+# target_link_libraries(APITest PRIVATE CURL::libcurl nlohmann_json::nlohmann_json)
 
 # TilesetMicroTest
-add_executable(TilesetMicroTest src/TilesetMicroTest.cpp)
-target_link_libraries(TilesetMicroTest PRIVATE opennurbs::opennurbs CURL::libcurl nlohmann_json::nlohmann_json)
+# add_executable(TilesetMicroTest src/TilesetMicroTest.cpp)
+# target_link_libraries(TilesetMicroTest PRIVATE opennurbs::opennurbs CURL::libcurl nlohmann_json::nlohmann_json)

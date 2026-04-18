@@ -11,6 +11,12 @@ vcpkg_cmake_configure(
     OPTIONS
         -DOPENNURBS_BUILD_EXAMPLES=OFF
         -DOPENNURBS_ZLIB_EXTERNAL=ON
+    OPTIONS_RELEASE
+        "-DCMAKE_CXX_FLAGS=${VCPKG_COMBINED_CXX_FLAGS} -Dz_deflate=deflate -Dz_inflate=inflate -Dz_deflateEnd=deflateEnd -Dz_inflateEnd=inflateEnd -Dz_deflateInit_=deflateInit_ -Dz_inflateInit_=inflateInit_ -Dz_crc32=crc32 -Dz_adler32=adler32 -Dz_inflateReset=inflateReset"
+        "-DCMAKE_C_FLAGS=${VCPKG_COMBINED_C_FLAGS} -Dz_deflate=deflate -Dz_inflate=inflate -Dz_deflateEnd=deflateEnd -Dz_inflateEnd=inflateEnd -Dz_deflateInit_=deflateInit_ -Dz_inflateInit_=inflateInit_ -Dz_crc32=crc32 -Dz_adler32=adler32 -Dz_inflateReset=inflateReset"
+    OPTIONS_DEBUG
+        "-DCMAKE_CXX_FLAGS=${VCPKG_COMBINED_CXX_FLAGS} -Dz_deflate=deflate -Dz_inflate=inflate -Dz_deflateEnd=deflateEnd -Dz_inflateEnd=inflateEnd -Dz_deflateInit_=deflateInit_ -Dz_inflateInit_=inflateInit_ -Dz_crc32=crc32 -Dz_adler32=adler32 -Dz_inflateReset=inflateReset"
+        "-DCMAKE_C_FLAGS=${VCPKG_COMBINED_C_FLAGS} -Dz_deflate=deflate -Dz_inflate=inflate -Dz_deflateEnd=deflateEnd -Dz_inflateEnd=inflateEnd -Dz_deflateInit_=deflateInit_ -Dz_inflateInit_=inflateInit_ -Dz_crc32=crc32 -Dz_adler32=adler32 -Dz_inflateReset=inflateReset"
 )
 
 vcpkg_cmake_install()

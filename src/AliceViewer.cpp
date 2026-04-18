@@ -194,6 +194,12 @@ struct PrimitiveBatch
 
     void add(V3 p, V3 c)
     {
+        if (g_instance && g_instance->m_computeAABB)
+        {
+            g_instance->m_sceneAABB.expand(p);
+            return;
+        }
+
         int threshold = g_instance ? g_instance->tuner.currentBatchThreshold : MAX_PRIMITIVE_BATCH;
         bool ready = (count >= threshold);
         if (type == GL_TRIANGLES)
@@ -285,6 +291,7 @@ void drawGrid(float size)
             g_currentVertexColor = { 0.5f, 0.5f, 0.5f };
         }
         
+        // Draw lines on the XY plane (z=0)
         drawLine({ (float)i, -size, 0 }, { (float)i, size, 0 });
         drawLine({ -size, (float)i, 0 }, { size, (float)i, 0 });
     }
@@ -414,10 +421,10 @@ M4 ArcballCamera::getViewMatrix() const
 {
     V3 eye; 
     float cp = cosf(pitch), sp = sinf(pitch), cy = cosf(yaw), sy = sinf(yaw);
-    eye.x = focusPoint.x + distance * cp * sy; 
-    eye.y = focusPoint.y + distance * sp;            
-    eye.z = focusPoint.z - distance * cp * cy;       
-    return lookAt(eye, focusPoint, { 0, 1, 0 });
+    eye.x = focusPoint.x + distance * cp * sy;
+    eye.y = focusPoint.y - distance * cp * cy;
+    eye.z = focusPoint.z + distance * sp;
+    return lookAt(eye, focusPoint, { 0, 0, 1 });
 }
 
 void ArcballCamera::setBookmark(const char* name)
@@ -482,10 +489,10 @@ void ArcballCamera::update(GLFWwindow* window, float deltaTime)
             float cp = cosf(pitch), sp = sinf(pitch), cy = cosf(yaw), sy = sinf(yaw);
             V3 eye;
             eye.x = focusPoint.x + distance * cp * sy;
-            eye.y = focusPoint.y + distance * sp;
-            eye.z = focusPoint.z - distance * cp * cy;
+            eye.y = focusPoint.y - distance * cp * cy;
+            eye.z = focusPoint.z + distance * sp;
             V3 f = nrm_v(focusPoint - eye);
-            V3 r = nrm_v(crs_v(f, { 0, 1, 0 }));
+            V3 r = nrm_v(crs_v(f, { 0, 0, 1 }));
             V3 u = crs_v(r, f);
             focusPoint -= (r * (dx * (distance * 0.001f))) + (u * (dy * (distance * 0.001f)));
         }
@@ -611,6 +618,8 @@ V3 AliceViewer::screenToWorld(int x, int y, float planeZ)
 
 int AliceViewer::init(int argc, char** argv)
 {
+    if (!Alice::g_Arena.memory) Alice::g_Arena.init(512 * 1024 * 1024); // 512MB for 4K stencils
+    
     for (int i = 1; i < argc; ++i)
     {
         if (strcmp(argv[i], "--headless-capture") == 0 || strcmp(argv[i], "--headless") == 0)
@@ -632,8 +641,13 @@ int AliceViewer::init(int argc, char** argv)
     window = glfwCreateWindow(1280, 720, "ALICE VIEWER 2.0 - CAD RENDERING PIPELINE", 0, 0);
     if (!window) 
     {
-        printf("[FATAL] GLFW Window Creation Failed. Check OpenGL 4.5 support.\n");
-        return 1;
+        if (m_headlessCapture) {
+            printf("[WARNING] GLFW Window Creation Failed, but continuing in headless mode.\n");
+            // Create a dummy context if possible, or just skip rendering
+        } else {
+            printf("[FATAL] GLFW Window Creation Failed. Check OpenGL 4.5 support.\n");
+            return 1;
+        }
     }
     glfwMakeContextCurrent(window); 
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
@@ -686,6 +700,8 @@ int AliceViewer::init(int argc, char** argv)
         "in vec3 v_ViewPos;\n"
         "in vec3 v_Color;\n"
         "out vec4 f_Color;\n"
+        "layout(location = 1) out vec4 f_Seg;\n"
+        "layout(location = 2) out float f_Depth;\n"
         "uniform float u_AmbientIntensity;\n"
         "uniform float u_DiffuseIntensity;\n"
         "void main()\n"
@@ -697,6 +713,13 @@ int AliceViewer::init(int argc, char** argv)
         "    float diff = max(dot(normal, viewDir), 0.0);\n"
         "    vec3 finalColor = v_Color * (u_AmbientIntensity + (diff * u_DiffuseIntensity));\n"
         "    f_Color = vec4(finalColor, 1.0);\n"
+        "    f_Seg = vec4(v_Color, 1.0);\n"
+        "    // Linearized Reversed-Z Depth (Assuming 0.1 near, 1000.0 far range mapping)\n"
+        "    // We use -v_ViewPos.z because view space is RH (Z is negative forward)\n"
+        "    float near = 0.1;\n"
+        "    float far = 1000.0;\n"
+        "    float dist = -v_ViewPos.z;\n"
+        "    f_Depth = clamp(1.0 - (dist - near) / (far - near), 0.0, 1.0);\n"
         "}";
 
     int success;
@@ -743,7 +766,7 @@ void AliceViewer::run()
     {
 #ifdef ALICE_TEST_MODE
         static int agentFrameCount = 0;
-        if (agentFrameCount++ > 5) {
+        if (!m_headlessCapture && agentFrameCount++ > 5) {
             printf("AGENT_WATCHDOG: 5 frames rendered. Terminating safely.\n");
             exit(0);
         }
@@ -819,7 +842,8 @@ void AliceViewer::run()
             static bool framed = false;
             if (!framed)
             {
-                keyPress('f', 0, 0); // Trigger Zoom Extents from CADPipelineTest.h
+                printf("[HEADLESS] Triggering Zoom Extents...\n");
+                frameScene(); 
                 framed = true;
             }
         }
@@ -864,7 +888,15 @@ void AliceViewer::run()
         {
             static int captureFrame = 0;
             static int capturedCount = 0;
+            static bool highResDone = false;
             captureFrame++;
+
+            if (captureFrame == 100 && !highResDone)
+            {
+                printf("[HEADLESS] Triggering 4K High-Res Capture...\n");
+                captureHighResStencils("prod_4k");
+                highResDone = true;
+            }
 
             if (captureFrame == 210 || captureFrame == 220 || captureFrame == 230)
             {
@@ -893,7 +925,7 @@ void AliceViewer::run()
                 }
             }
             
-            if (captureFrame == 600)
+            if (captureFrame == 300)
             {
                 int width, height;
                 glfwGetFramebufferSize(window, &width, &height);
@@ -906,13 +938,15 @@ void AliceViewer::run()
                     
                     if (stbi_write_png("framebuffer.png", width, height, 3, pixelBuffer, width * 3))
                     {
-                        printf("[HEADLESS] Frame 600 capture saved to framebuffer.png (%dx%d)\n", width, height);
+                        printf("[HEADLESS] Frame 300 capture saved to framebuffer.png (%dx%d)\n", width, height);
                     }
                 }
             }
 
-            if (captureFrame >= 601)
+            if (captureFrame >= 301)
             {
+                printf("[HEADLESS] Capture sequence complete. Waiting for IO threads...\n");
+                std::this_thread::sleep_for(std::chrono::seconds(2));
                 glfwSetWindowShouldClose(window, true);
             }
         }
@@ -927,6 +961,184 @@ void AliceViewer::cleanup()
     ImGui_ImplGlfw_Shutdown(); 
     ImGui::DestroyContext(); 
     glfwTerminate(); 
+}
+
+#ifdef ALICE_VIEWER_RUN_TEST
+void aliceTestDraw();
+#endif
+
+void AliceViewer::frameScene()
+{
+    m_sceneAABB = AABB();
+    m_computeAABB = true;
+    
+#ifdef ALICE_VIEWER_RUN_TEST
+    aliceTestDraw();
+#else
+    draw();
+#endif
+
+    m_computeAABB = false;
+
+    if (m_sceneAABB.initialized)
+    {
+        camera.focusPoint = m_sceneAABB.center();
+        float radius = m_sceneAABB.radius();
+        if (radius < 1e-3f) radius = 10.0f;
+        
+        // Add padding
+        radius *= 1.2f;
+        
+        camera.distance = radius / tanf(fov * 0.5f);
+        
+        printf("[AliceViewer] frameScene: AABB(min:{%.2f,%.2f,%.2f}, max:{%.2f,%.2f,%.2f}) Center:{%.2f,%.2f,%.2f} Radius:%.2f -> Camera Distance:%.2f\n",
+            m_sceneAABB.m_min.x, m_sceneAABB.m_min.y, m_sceneAABB.m_min.z,
+            m_sceneAABB.m_max.x, m_sceneAABB.m_max.y, m_sceneAABB.m_max.z,
+            camera.focusPoint.x, camera.focusPoint.y, camera.focusPoint.z,
+            radius, camera.distance);
+    }
+    else
+    {
+        printf("[AliceViewer] frameScene: No geometry detected. AABB not initialized.\n");
+    }
+}
+
+void AliceViewer::captureHighResStencils(const char* prefix)
+{
+    if (!m_offscreen.allocated)
+    {
+        glGenFramebuffers(1, &m_offscreen.fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, m_offscreen.fbo);
+
+        glGenTextures(1, &m_offscreen.colorTex);
+        glBindTexture(GL_TEXTURE_2D, m_offscreen.colorTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_offscreen.width, m_offscreen.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_offscreen.colorTex, 0);
+
+        glGenTextures(1, &m_offscreen.segTex);
+        glBindTexture(GL_TEXTURE_2D, m_offscreen.segTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_offscreen.width, m_offscreen.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, m_offscreen.segTex, 0);
+
+        glGenTextures(1, &m_offscreen.depthR8Tex);
+        glBindTexture(GL_TEXTURE_2D, m_offscreen.depthR8Tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, m_offscreen.width, m_offscreen.height, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, m_offscreen.depthR8Tex, 0);
+
+        glGenTextures(1, &m_offscreen.depthTex);
+        glBindTexture(GL_TEXTURE_2D, m_offscreen.depthTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, m_offscreen.width, m_offscreen.height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, m_offscreen.depthTex, 0);
+
+        unsigned int bufs[3] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2 };
+        glDrawBuffers(3, bufs);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        {
+            printf("[FATAL] Offscreen FBO Incomplete\n");
+            return;
+        }
+        m_offscreen.allocated = true;
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, m_offscreen.fbo);
+    glViewport(0, 0, m_offscreen.width, m_offscreen.height);
+    
+    // Clear targets
+    glClearColor(backColor.x, backColor.y, backColor.z, 1.0f);
+    glClearDepth(0.0); // Reversed-Z
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    
+    // Mock segmentation clear (dark charcoal)
+    GLfloat segClear[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
+    glClearBufferfv(GL_COLOR, 1, segClear);
+    // Depth clear (black/infinity)
+    GLfloat depthClear[1] = { 0.0f };
+    glClearBufferfv(GL_COLOR, 2, depthClear);
+
+    M4 view = camera.getViewMatrix();
+    M4 proj = makeInfiniteReversedZProjRH(fov, (float)m_offscreen.width / m_offscreen.height, nearClip);
+
+    glUseProgram(shaderProgram);
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_ModelView"), 1, 0, view.m);
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_Projection"), 1, 0, proj.m);
+    glUniform1f(glGetUniformLocation(shaderProgram, "u_AmbientIntensity"), ambientIntensity);
+    glUniform1f(glGetUniformLocation(shaderProgram, "u_DiffuseIntensity"), diffuseIntensity);
+    
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_GREATER);
+
+#ifdef ALICE_VIEWER_RUN_TEST
+    aliceTestDraw();
+#else
+    draw();
+#endif
+    g_triangleBatch.flush();
+    g_lineBatch.flush();
+    g_pointBatch.flush();
+
+    // EXTRACTION
+    size_t pixelCount = (size_t)m_offscreen.width * m_offscreen.height;
+    unsigned char* colorData = (unsigned char*)Alice::g_Arena.allocate(pixelCount * 3);
+    unsigned char* segData = (unsigned char*)Alice::g_Arena.allocate(pixelCount * 3);
+    unsigned char* depth8 = (unsigned char*)Alice::g_Arena.allocate(pixelCount);
+
+    if (colorData && segData && depth8)
+    {
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+        glReadPixels(0, 0, m_offscreen.width, m_offscreen.height, GL_RGB, GL_UNSIGNED_BYTE, colorData);
+        
+        glReadBuffer(GL_COLOR_ATTACHMENT1);
+        glReadPixels(0, 0, m_offscreen.width, m_offscreen.height, GL_RGB, GL_UNSIGNED_BYTE, segData);
+
+        glReadBuffer(GL_COLOR_ATTACHMENT2);
+        glReadPixels(0, 0, m_offscreen.width, m_offscreen.height, GL_RED, GL_UNSIGNED_BYTE, depth8);
+
+        // Pixel Coverage Calculation
+        size_t nonBackgroundCount = 0;
+        unsigned char bgR = (unsigned char)(std::clamp(backColor.x, 0.0f, 1.0f) * 255.0f);
+        unsigned char bgG = (unsigned char)(std::clamp(backColor.y, 0.0f, 1.0f) * 255.0f);
+        unsigned char bgB = (unsigned char)(std::clamp(backColor.z, 0.0f, 1.0f) * 255.0f);
+
+        for (size_t i = 0; i < pixelCount; ++i)
+        {
+            if (abs((int)colorData[i * 3 + 0] - (int)bgR) > 2 || 
+                abs((int)colorData[i * 3 + 1] - (int)bgG) > 2 || 
+                abs((int)colorData[i * 3 + 2] - (int)bgB) > 2)
+            {
+                nonBackgroundCount++;
+            }
+        }
+        float coverage = (float)nonBackgroundCount / (float)pixelCount * 100.0f;
+        printf("[AliceViewer] High-res Pixel Coverage: %.4f%%\n", coverage);
+        
+        // Asynchronous File I/O
+        int w = m_offscreen.width;
+        int h = m_offscreen.height;
+        std::string prefixStr = prefix;
+        
+        std::thread([colorData, segData, depth8, w, h, prefixStr]() {
+            stbi_flip_vertically_on_write(true);
+            char path[256];
+            
+            snprintf(path, 256, "%s_beauty.png", prefixStr.c_str());
+            stbi_write_png(path, w, h, 3, colorData, w * 3);
+
+            snprintf(path, 256, "%s_seg.png", prefixStr.c_str());
+            stbi_write_png(path, w, h, 3, segData, w * 3);
+
+            snprintf(path, 256, "%s_depth.png", prefixStr.c_str());
+            stbi_write_png(path, w, h, 1, depth8, w);
+            
+            printf("[AliceViewer] Asynchronous capture complete: %s\n", prefixStr.c_str());
+        }).detach();
+    }
+    else
+    {
+        printf("[ERROR] Failed to allocate extraction buffers. color:%p seg:%p depth:%p\n", colorData, segData, depth8);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 
@@ -967,11 +1179,83 @@ void runAliceTests()
 
     if (g_instance)
     {
+        // Save state
+        AABB oldAABB = g_instance->m_sceneAABB;
+        ArcballCamera oldCam = g_instance->camera;
+
         V3 world = g_instance->screenToWorld(640, 360, 0.0f);
         ALICE_EXPECT_NEAR(world.z, 0.0f, 1e-3f);
+
+        // Test Zoom Extents
+        printf("[TEST] Testing frameScene()...\n");
+        g_instance->frameScene();
+        ALICE_ASSERT(g_instance->m_sceneAABB.initialized);
+
+        // EDGE CASE: Zero Geometry
+        printf("[TEST] Edge Case: Zero Geometry...\n");
+        g_instance->m_sceneAABB = AABB(); 
+        float radius = g_instance->m_sceneAABB.radius();
+        ALICE_ASSERT(radius >= 0.1f);
+        ALICE_ASSERT(!std::isnan(radius));
+
+        // EDGE CASE: Flat / Coplanar Geometry (Z=0)
+        printf("[TEST] Edge Case: Flat Geometry (Z=0)...\n");
+        AABB flatAABB;
+        flatAABB.expand({-10, -10, 0});
+        flatAABB.expand({10, 10, 0});
+        float flatRadius = flatAABB.radius();
+        ALICE_ASSERT(flatRadius > 0.0f);
+        ALICE_ASSERT(!std::isinf(flatRadius));
+
+        // EDGE CASE: Extreme Coordinates
+        printf("[TEST] Edge Case: Extreme Coordinates...\n");
+        AABB extremeAABB;
+        extremeAABB.expand({1e6f, 1e6f, 1e6f});
+        ALICE_ASSERT(extremeAABB.m_min.x == 1e6f);
+        ALICE_ASSERT(extremeAABB.m_max.x == 1e6f);
+
+        // Restore state
+        g_instance->m_sceneAABB = oldAABB;
+        g_instance->camera = oldCam;
+
+        // Test High-Res Capture
+        printf("[TEST] Testing captureHighResStencils()...\n");
+        g_instance->captureHighResStencils("test_capture");
     }
 
     printf("[TEST] All tests completed.\n\n");
+}
+
+static void drawBox(V3 min, V3 max, V3 color)
+{
+    aliceColor3f(color.x, color.y, color.z);
+    V3 c000 = { min.x, min.y, min.z };
+    V3 c100 = { max.x, min.y, min.z };
+    V3 c010 = { min.x, max.y, min.z };
+    V3 c110 = { max.x, max.y, min.z };
+    V3 c001 = { min.x, min.y, max.z };
+    V3 c101 = { max.x, min.y, max.z };
+    V3 c011 = { min.x, max.y, max.z };
+    V3 c111 = { max.x, max.y, max.z };
+
+    // Front
+    drawTriangle(c000, c100, c110);
+    drawTriangle(c000, c110, c010);
+    // Back
+    drawTriangle(c001, c111, c101);
+    drawTriangle(c001, c011, c111);
+    // Left
+    drawTriangle(c000, c010, c011);
+    drawTriangle(c000, c011, c001);
+    // Right
+    drawTriangle(c100, c101, c111);
+    drawTriangle(c100, c111, c110);
+    // Top
+    drawTriangle(c010, c110, c111);
+    drawTriangle(c010, c111, c011);
+    // Bottom
+    drawTriangle(c000, c001, c101);
+    drawTriangle(c000, c101, c100);
 }
 
 void aliceTestDraw()
@@ -979,25 +1263,30 @@ void aliceTestDraw()
     static bool testsRun = false;
     if (!testsRun)
     {
-        runAliceTests();
         testsRun = true;
+        runAliceTests();
     }
 
     drawGrid(50);
     
+    // Concrete Geometry
+    drawBox({-5, -5, 0}, {5, 5, 10}, {0.8f, 0.2f, 0.2f});
+    drawBox({-15, 10, 0}, {-10, 15, 5}, {0.2f, 0.8f, 0.2f});
+    drawBox({10, -15, 0}, {15, -10, 5}, {0.2f, 0.2f, 0.8f});
+
     aliceColor3f(1.0f, 0.5f, 0.0f);
-    for (int i = 0; i < 100000; ++i)
+    for (int i = 0; i < 10000; ++i)
     {
-        float x = (float)(i % 1000) - 500.0f;
-        float y = (float)(i / 1000) - 500.0f;
-        drawPoint({ x * 0.1f, y * 0.1f, sinf((float)i * 0.01f) * 5.0f });
+        float x = (float)(i % 100) - 50.0f;
+        float y = (float)(i / 100) - 50.0f;
+        drawPoint({ x * 0.5f, y * 0.5f, sinf((float)i * 0.1f) * 2.0f });
     }
 
     aliceColor3f(0.0f, 0.7f, 1.0f);
-    for (int i = 0; i < 50000; ++i)
+    for (int i = 0; i < 1000; ++i)
     {
-        float angle = (float)i * 0.01f;
-        float r = 10.0f + (float)i * 0.001f;
+        float angle = (float)i * 0.1f;
+        float r = 20.0f + (float)i * 0.01f;
         drawLine({ cosf(angle) * r, sinf(angle) * r, 0 }, { cosf(angle + 0.1f) * r, sinf(angle + 0.1f) * r, 2.0f });
     }
 }

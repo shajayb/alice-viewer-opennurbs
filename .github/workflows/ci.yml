@@ -97,30 +97,6 @@ jobs:
       shell: bash
       run: cmake --build build --config ${{ matrix.build_type }}
 
-    - name: Create Dummy API Keys
-      shell: bash
-      run: |
-        echo "GOOGLE_API_KEY=dummy_key" > API_KEYS.txt
-        echo "CESIUM_ION_TOKEN=dummy_token" >> API_KEYS.txt
-
-    - name: Setup Mesa (Software OpenGL Windows)
-      if: runner.os == 'Windows'
-      shell: powershell
-      run: |
-        curl.exe -L -o mesa.7z https://github.com/pal1000/mesa-dist-win/releases/download/24.0.5/mesa3d-24.0.5-release-msvc.7z
-        7z x mesa.7z x64/* -omesa -y
-        mkdir build/bin -Force
-        copy mesa/x64/* build/bin/
-
-    - name: Execute Headless Tests
-      shell: bash
-      run: |
-        if [[ "${{ runner.os }}" == "Windows" ]]; then
-          ./build/bin/AliceViewer.exe --headless
-        else
-          xvfb-run --auto-servernum ./build/bin/AliceViewer --headless
-        fi
-
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:

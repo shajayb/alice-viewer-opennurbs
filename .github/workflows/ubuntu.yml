@@ -1,0 +1,76 @@
+name: Ubuntu CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      VCPKG_INSTALLATION_ROOT: /usr/local/share/vcpkg
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Release]
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: false
+
+    - name: Install Linux Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xvfb libglfw3-dev libgl1-mesa-dev libxinerama-dev libxcursor-dev xorg-dev pkg-config ninja-build clang lld uuid-dev
+        # Fix vcpkg git issue if present
+        if [ -d "$VCPKG_INSTALLATION_ROOT/.git" ]; then
+          cd "$VCPKG_INSTALLATION_ROOT"
+          git config core.worktree "$VCPKG_INSTALLATION_ROOT"
+          git fetch --unshallow || true
+          git fetch origin master
+        fi
+
+    - name: Restore vcpkg Cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+          ${{ env.VCPKG_INSTALLATION_ROOT }}/packages
+          ${{ env.VCPKG_INSTALLATION_ROOT }}/buildtrees
+          ${{ env.VCPKG_INSTALLATION_ROOT }}/downloads
+        key: vcpkg-ubuntu-${{ hashFiles('vcpkg.json') }}-${{ hashFiles('vcpkg-overlay-ports/**') }}
+        restore-keys: |
+          vcpkg-ubuntu-
+
+    - name: Configure CMake
+      shell: bash
+      run: |
+        cmake -B build -S . -G Ninja \
+        -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++ \
+        -DCMAKE_C_FLAGS="-fsanitize=address" \
+        -DCMAKE_CXX_FLAGS="-fsanitize=address" \
+        -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" \
+        -DCMAKE_MAKE_PROGRAM=$(which ninja) \
+        -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+        -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
+        -DVCPKG_OVERLAY_PORTS="${GITHUB_WORKSPACE}/vcpkg-overlay-ports/ports"
+
+    - name: Build
+      shell: bash
+      run: cmake --build build --config ${{ matrix.build_type }}
+
+    - name: Execute Headless Tests
+      shell: bash
+      run: xvfb-run --auto-servernum ./build/bin/AliceViewer --headless
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AliceViewer-Ubuntu
+        path: build/bin/AliceViewer
+        if-no-files-found: error

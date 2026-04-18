@@ -7,8 +7,8 @@
 namespace Alice { LinearArena g_Arena; }
 
 // Active Test
-#define TILESET_TEST_RUN_TEST
-#include "TilesetTest.h"
+//#define TILESET_TEST_RUN_TEST
+//#include "TilesetTest.h"
 
 //#define API_KEY_READER_TEST_RUN_TEST
 //#include "ApiKeyReaderTest.h"

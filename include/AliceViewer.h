@@ -1,6 +1,13 @@
 #pragma once
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <cstddef>
+#include <thread>
+#include <vector>
+#include <algorithm>
 
 #pragma pack(push, 1)
 
@@ -167,6 +174,45 @@ struct NetworkStats
 
 extern NetworkStats g_NetStats;
 
+struct AABB
+{
+    V3 m_min;
+    V3 m_max;
+    bool initialized;
+
+    AABB() : m_min(1e30f, 1e30f, 1e30f), m_max(-1e30f, -1e30f, -1e30f), initialized(false) {}
+
+    void expand(V3 p)
+    {
+        if (p.x < m_min.x) m_min.x = p.x;
+        if (p.y < m_min.y) m_min.y = p.y;
+        if (p.z < m_min.z) m_min.z = p.z;
+        if (p.x > m_max.x) m_max.x = p.x;
+        if (p.y > m_max.y) m_max.y = p.y;
+        if (p.z > m_max.z) m_max.z = p.z;
+        initialized = true;
+    }
+
+    V3 center() const { return (m_min + m_max) * 0.5f; }
+    float radius() const 
+    { 
+        float r = (m_max - m_min).length() * 0.5f; 
+        return std::max(r, 0.1f); // Fallback thickness
+    }
+};
+
+struct OffscreenCaptureState
+{
+    unsigned int fbo = 0;
+    unsigned int colorTex = 0;
+    unsigned int depthTex = 0;
+    unsigned int segTex = 0;
+    unsigned int depthR8Tex = 0;
+    int width = 3840;
+    int height = 2160;
+    bool allocated = false;
+};
+
 class AliceViewer
 {
 public:
@@ -194,9 +240,16 @@ public:
     unsigned int resolveTimerQuery;
     bool m_headlessCapture = false;
 
+    bool m_computeAABB = false;
+    AABB m_sceneAABB;
+    OffscreenCaptureState m_offscreen;
+
     int init(int argc, char** argv);
     void run();
     void cleanup();
+
+    void frameScene();
+    void captureHighResStencils(const char* prefix);
 
     V3 screenToWorld(int screenX, int screenY, float planeZ = 0.0f);
 
@@ -206,6 +259,7 @@ public:
 };
 
 #ifdef ALICE_VIEWER_RUN_TEST
+#include <GLFW/glfw3.h>
 #include <cstdio>
 #include <cmath>
 

@@ -6,6 +6,26 @@ vcpkg_from_github(
     HEAD_REF 8.x
 )
 
+# Patch opennurbs to use standard zlib symbols when external zlib is used
+set(ZLIB_PATCH "
+#define z_deflate deflate
+#define z_inflate inflate
+#define z_deflateEnd deflateEnd
+#define z_inflateEnd inflateEnd
+#define z_deflateInit_ deflateInit_
+#define z_inflateInit_ inflateInit_
+#define z_deflateInit2_ deflateInit2_
+#define z_inflateInit2_ inflateInit2_
+#define z_crc32 crc32
+#define z_adler32 adler32
+#define z_inflateReset inflateReset
+")
+
+if(EXISTS "${SOURCE_PATH}/opennurbs_zlib.h")
+    file(READ "${SOURCE_PATH}/opennurbs_zlib.h" _contents)
+    file(WRITE "${SOURCE_PATH}/opennurbs_zlib.h" "${ZLIB_PATCH}\n${_contents}")
+endif()
+
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"
     OPTIONS

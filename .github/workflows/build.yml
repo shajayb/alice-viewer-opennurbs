@@ -91,6 +91,12 @@ jobs:
       shell: bash
       run: cmake --build build --config ${{ matrix.build_type }}
 
+    - name: Create Dummy API Keys
+      shell: bash
+      run: |
+        echo "GOOGLE_API_KEY=dummy_key" > API_KEYS.txt
+        echo "CESIUM_ION_TOKEN=dummy_token" >> API_KEYS.txt
+
     - name: Execute Headless Tests
       shell: bash
       run: |

@@ -17,14 +17,14 @@ find_package(nlohmann_json CONFIG REQUIRED)
 include_directories(include)
 include_directories("docs/code snippets")
 
-# Force Dynamic Runtime flags for x64-windows
+# Force Static Runtime flags for x64-windows-static
 if(MSVC)
     add_compile_options(/EHsc) # Enable exceptions
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        add_compile_options(/MDd /Zi /Ob0 /Od /RTC1)
+        add_compile_options(/MTd /Zi /Ob0 /Od /RTC1)
         add_definitions(-D_DEBUG -D_ITERATOR_DEBUG_LEVEL=2)
     else()
-        add_compile_options(/MD /O2 /Ob2)
+        add_compile_options(/MT /O2 /Ob2)
         add_definitions(-DNDEBUG)
     endif()
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)

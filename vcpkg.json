@@ -1,7 +1,7 @@
 {
   "name": "alice-viewer-opennurbs",
   "version": "0.1.0",
-  "builtin-baseline": "67f167b2f7c170f83688919c90edcd896239330e",
+  "builtin-baseline": "256acc64012b23a13041d8705805e1f23b43a024",
   "dependencies": [
     "glfw3",
     "glad",

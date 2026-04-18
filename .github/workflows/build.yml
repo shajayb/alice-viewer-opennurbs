@@ -25,7 +25,7 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libxinerama-dev libxcursor-dev xorg-dev libgl1-mesa-dev pkg-config ninja-build clang lld uuid-dev
+        sudo apt-get install -y xvfb libxinerama-dev libxcursor-dev xorg-dev libgl1-mesa-dev pkg-config ninja-build clang lld uuid-dev
         # Fix vcpkg git issue if present
         if [ -d "$VCPKG_INSTALLATION_ROOT/.git" ]; then
           cd "$VCPKG_INSTALLATION_ROOT"
@@ -39,9 +39,9 @@ jobs:
       run: |
         choco install ninja llvm
         # Add LLVM to path for clang-cl
-        echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
+        echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
         # Ensure Ninja is in path
-        echo "C:\ProgramData\chocolatey\bin" >> $GITHUB_PATH
+        echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
         # Fix vcpkg git issue
         if (Test-Path "$env:VCPKG_INSTALLATION_ROOT\.git") {
             cd "$env:VCPKG_INSTALLATION_ROOT"
@@ -49,6 +49,18 @@ jobs:
             git fetch --unshallow || true
             git fetch origin master
         }
+
+    - name: Restore vcpkg Cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ runner.os == 'Linux' && '/usr/local/share/vcpkg' || 'C:\vcpkg' }}/installed
+          ${{ runner.os == 'Linux' && '/usr/local/share/vcpkg' || 'C:\vcpkg' }}/packages
+          ${{ runner.os == 'Linux' && '/usr/local/share/vcpkg' || 'C:\vcpkg' }}/buildtrees
+          ${{ runner.os == 'Linux' && '/usr/local/share/vcpkg' || 'C:\vcpkg' }}/downloads
+        key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}-${{ hashFiles('vcpkg-overlay-ports/**') }}
+        restore-keys: |
+          vcpkg-${{ runner.os }}-
 
     - name: Configure CMake
       shell: bash
@@ -66,6 +78,9 @@ jobs:
           cmake -B build -S . -G Ninja \
           -DCMAKE_C_COMPILER=clang \
           -DCMAKE_CXX_COMPILER=clang++ \
+          -DCMAKE_C_FLAGS="-fsanitize=address" \
+          -DCMAKE_CXX_FLAGS="-fsanitize=address" \
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" \
           -DCMAKE_MAKE_PROGRAM=$(which ninja) \
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
           -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
@@ -76,14 +91,19 @@ jobs:
       shell: bash
       run: cmake --build build --config ${{ matrix.build_type }}
 
-    - name: Post-Build (Linux Strip)
-      if: runner.os == 'Linux'
-      run: strip build/bin/AliceViewer
+    - name: Execute Headless Tests
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          ./build/bin/AliceViewer.exe --headless
+        else
+          xvfb-run --auto-servernum ./build/bin/AliceViewer --headless
+        fi
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: AliceViewer-${{ matrix.os }}
+        name: AliceViewer-${{ runner.os }}
         path: |
           build/bin/AliceViewer
           build/bin/AliceViewer.exe

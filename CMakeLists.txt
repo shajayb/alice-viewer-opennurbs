@@ -50,6 +50,8 @@ target_link_libraries(AliceViewer
 )
 if(MSVC)
     set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "/FORCE:MULTIPLE")
+else()
+    set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "-Wl,--allow-multiple-definition")
 endif()
 
 # AliceOrchestrator

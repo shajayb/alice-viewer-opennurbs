@@ -20,11 +20,21 @@
 #include "AliceViewer.h"
 #include "AliceMath.h"
 #include "AliceNetwork.h"
+#include "AliceKeys.h"
 #include "NormalShader.h"
 
 #include "stb_image_write.h"
 
 namespace Alice {
+
+// Legacy single-file Cesium tile harness. The active implementation is
+// CesiumMinimalTest.h; this file is preserved for diffing and benchmarking
+// against the cleaner nlohmann/glm-based pipeline.
+//
+// Same St Paul's spec: 250m radius around 51.5138N / -0.0984E.
+constexpr double ST_PAULS_LAT_DEG  = 51.5138;
+constexpr double ST_PAULS_LON_DEG  = -0.0984;
+constexpr double ST_PAULS_LOAD_RADIUS_M = 250.0;
 
 struct Mesh {
     GLuint vao = 0, vbo = 0, ebo = 0;
@@ -169,7 +179,10 @@ static void parseNodeFlat(const char* startJSON, const char* endJSON, int rIdx, 
                         }
                     }
                     double cd = sqrt(pow(cc[0]-g_TgtEcef.x,2)+pow(cc[1]-g_TgtEcef.y,2)+pow(cc[2]-g_TgtEcef.z,2));
-                    if(cd < cr + 50000.0 || cr > 1000000.0) {
+                    // Only queue children whose bounding sphere overlaps our 250m
+                    // sphere of interest, or very coarse proxies (>1000km) we
+                    // must walk into to refine. Keeps the working set tight.
+                    if(cd < cr + ST_PAULS_LOAD_RADIUS_M || cr > 1000000.0) {
                         int cIdx = (int)g_Count++;
                         Work childWork; childWork.start = cs; childWork.end = ce; childWork.selfIdx = cIdx;
                         memcpy(childWork.pTransform, g_NodeTransforms[sIdx], 16*sizeof(double)); stack.push_back(childWork);
@@ -328,10 +341,13 @@ static void update() {
         double d = sqrt(pow(wc.x - g_TgtEcef.x, 2) + pow(wc.y - g_TgtEcef.y, 2) + pow(wc.z - g_TgtEcef.z, 2));
         if(d < minD) minD = d;
         if(g_NodeLoaded[i] || g_NodeLoading[i]) continue;
-        if(i > 0 && g_NodeRadii[i] > 0 && d > g_NodeRadii[i] + 5000.0) { g_NodeLoaded[i] = true; continue; }
+        if(i > 0 && g_NodeRadii[i] > 0 && d > g_NodeRadii[i] + ST_PAULS_LOAD_RADIUS_M) { g_NodeLoaded[i] = true; continue; }
         if(g_NodeHasContent[i]) {
             bool isExt = strstr(g_NodeUris[i], ".json") != nullptr;
-            if(d < 5000.0 || isExt || (i == 0)) loadTile((int)i, d);
+            // Fetch if we're within the 250m anchor sphere, or if this is a
+            // .json index (cheap) that we must walk into to find real tiles,
+            // or if this is the root.
+            if(d < ST_PAULS_LOAD_RADIUS_M || isExt || (i == 0)) loadTile((int)i, d);
             else { g_NodeLoaded[i] = true; }
         }
     }
@@ -340,11 +356,20 @@ static void update() {
 }
 
 static void performStart() {
-    printf("[Audit] performStart Entry\n"); fflush(stdout);
-    double lat = 51.5138 * Math::DEG2RAD, lon = -0.0984 * Math::DEG2RAD;
+    printf("[Audit] performStart Entry (radius %.0fm around St Paul's)\n", ST_PAULS_LOAD_RADIUS_M); fflush(stdout);
+    double lat = ST_PAULS_LAT_DEG * Math::DEG2RAD, lon = ST_PAULS_LON_DEG * Math::DEG2RAD;
     g_TgtEcef = Math::lla_to_ecef(lat, lon, 10.0);
-    const char* ionToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIyZmI0ZWVlYi02Y2FjLTRkYjYtYmIyMy1mMGNmODliZGEwNTEiLCJpZCI6NDE5MDUyLCJpYXQiOjE3NzYzMzQ0MTN9.NuD0nngJ4DbKFrQsjId4Nea_0wQ-LH0mfOIZqDh7aj0";
-    char endpointUrl[1024]; snprintf(endpointUrl, 1024, "https://api.cesium.com/v1/assets/96188/endpoint?access_token=%s", ionToken);
+
+    char ionToken[2048];
+    if (!Alice::Keys::GetCesiumToken(ionToken, sizeof(ionToken)) || ionToken[0] == '\0') {
+        fprintf(stderr,
+            "[CesiumStPauls] ERROR: CESIUM_ION_TOKEN is missing from API_KEYS.txt.\n"
+            "[CesiumStPauls]        Copy API_KEYS.txt.example, paste your token, and retry.\n");
+        fflush(stderr);
+        g_Started = true;
+        return;
+    }
+    char endpointUrl[4096]; snprintf(endpointUrl, sizeof(endpointUrl), "https://api.cesium.com/v1/assets/96188/endpoint?access_token=%s", ionToken);
     std::vector<uint8_t> response;
     if(Network::Fetch(endpointUrl, response)) {
         const char* js = (const char*)response.data(); const char* je = js + response.size();
@@ -368,7 +393,7 @@ static void draw() {
     if(!g_Started) performStart();
     update();
     AliceViewer* av = AliceViewer::instance();
-    if(!g_ResInited) { g_NormalShader.init(); av->camera.focusPoint = {0,0,0}; av->camera.distance = 500.0f; g_ResInited = true; }
+    if(!g_ResInited) { g_NormalShader.init(); av->camera.focusPoint = {0,0,0}; av->camera.distance = (float)(ST_PAULS_LOAD_RADIUS_M * 2.8); g_ResInited = true; }
     
     if(g_CurrentMinD < 1000.0 && !g_Framed && av->m_sceneAABB.initialized) { 
         printf("[Audit] AABB: %.1f,%.1f,%.1f to %.1f,%.1f,%.1f\n", av->m_sceneAABB.m_min.x, av->m_sceneAABB.m_min.y, av->m_sceneAABB.m_min.z, av->m_sceneAABB.m_max.x, av->m_sceneAABB.m_max.y, av->m_sceneAABB.m_max.z);

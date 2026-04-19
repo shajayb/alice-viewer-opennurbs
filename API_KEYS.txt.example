@@ -1,0 +1,15 @@
+# -----------------------------------------------------------------------------
+# API_KEYS.txt.example
+# -----------------------------------------------------------------------------
+# Copy this file to `API_KEYS.txt` and fill in real tokens. The real file is
+# .gitignored and must never be committed.
+#
+# Format: one KEY=VALUE per line. Lines starting with `#` are comments.
+# Whitespace after `=` and trailing CR/LF is stripped automatically.
+# -----------------------------------------------------------------------------
+
+# Cesium Ion access token (https://ion.cesium.com/tokens)
+CESIUM_ION_TOKEN=
+
+# Google Map Tiles API key (optional; not required for Cesium Ion tiles)
+GOOGLE_MAP_TILES_API_KEY=

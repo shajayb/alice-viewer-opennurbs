@@ -22,8 +22,20 @@
 #include "AliceViewer.h"
 #include "AliceMath.h"
 #include "AliceNetwork.h"
+#include "AliceKeys.h"
 #include "NormalShader.h"
 #include "stb_image_write.h"
+
+// -----------------------------------------------------------------------------
+// St Paul's Cathedral viewing anchor (file-scope so both CesiumMinimal and
+// Alice namespaces below can see the same constants).
+// User spec (Step 1): receive, load, and visualise Cesium Ion tiles centred on
+// St Paul's, London, covering 250m in every direction from the centre.
+// -----------------------------------------------------------------------------
+constexpr double ST_PAULS_LAT_DEG  = 51.5138;
+constexpr double ST_PAULS_LON_DEG  = -0.0984;
+constexpr double ST_PAULS_ALT_M    = 0.0;
+constexpr double ST_PAULS_LOAD_RADIUS_M = 250.0;  // 250m radius of interest.
 
 namespace CesiumMinimal {
 
@@ -114,6 +126,13 @@ public:
     IHttpClient* client;
     std::vector<Tile*> renderList;
 
+    // Fixed anchor (in ECEF) that defines the centre of the 250m area of
+    // interest. Culling is performed relative to this anchor, *not* the
+    // camera, so a user orbiting the cathedral still streams only the
+    // relevant tiles.
+    Math::DVec3 anchorEcef { 0.0, 0.0, 0.0 };
+    double anchorRadiusM = ST_PAULS_LOAD_RADIUS_M;
+
     void updateView(const ViewState& view) {
         renderList.clear();
         bool fetchedThisFrame = false;
@@ -123,12 +142,13 @@ public:
 private:
 void traverseAndLoad(Tile* node, const ViewState& view, bool& fetchedThisFrame) {
         if (node->bounds.valid) {
-            double dx = node->bounds.centerECEF.x - view.positionECEF.x;
-            double dy = node->bounds.centerECEF.y - view.positionECEF.y;
-            double dz = node->bounds.centerECEF.z - view.positionECEF.z;
+            // Cull vs. the fixed St Paul's anchor: load a tile only if its
+            // bounding sphere intersects the 250m sphere of interest.
+            double dx = node->bounds.centerECEF.x - anchorEcef.x;
+            double dy = node->bounds.centerECEF.y - anchorEcef.y;
+            double dz = node->bounds.centerECEF.z - anchorEcef.z;
             double dist = sqrt(dx*dx + dy*dy + dz*dz);
-            // LOD Enhancement: Reduce the radius multiplier/offset to force deeper traversal
-            if (dist > node->bounds.radius + 5000.0) return; 
+            if (dist > node->bounds.radius + anchorRadiusM) return;
         }
         if (!node->contentUri.empty() && !node->isLoaded && !node->isLoading && !fetchedThisFrame) {
             node->isLoading = true;
@@ -237,8 +257,13 @@ static bool g_Started = false;
 static bool g_Inited = false;
 static bool g_Framed = false;
 static int g_TotalUploadedMeshes = 0;
-static std::string g_IonToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIyZmI0ZWVlYi02Y2FjLTRkYjYtYmIyMy1mMGNmODliZGEwNTEiLCJpZCI6NDE5MDUyLCJpYXQiOjE3NzYzMzQ0MTN9.NuD0nngJ4DbKFrQsjId4Nea_0wQ-LH0mfOIZqDh7aj0";
-static int64_t g_AssetId = 96188; // St Paul's Cathedral
+// The Cesium Ion token is loaded at runtime from API_KEYS.txt
+// (see include/AliceKeys.h). We never commit the actual token.
+static std::string g_IonToken;
+// Cesium Ion asset 96188 = Cesium OSM Buildings (global OSM buildings dataset).
+// Combined with the St Paul's viewing anchor it gives us the cathedral +
+// surrounding City of London blocks within our 250m radius of interest.
+static int64_t g_AssetId = 96188;
 
 class DebugShader {
 public:
@@ -290,14 +315,34 @@ static Math::DVec3 g_OriginEcef;
 static double g_EnuMatrix[16];
 
 static void performStart() {
-    printf("[CesiumMinimal] Starting Test for Asset %lld\n", g_AssetId);
-    
-    // Set up London local tangent plane (ENU)
-    double lat = 51.5138 * Math::DEG2RAD;
-    double lon = -0.0984 * Math::DEG2RAD;
-    g_OriginEcef = Math::lla_to_ecef(lat, lon, 0.0);
+    printf("[CesiumMinimal] Starting St Paul's tile load (asset %lld, radius %.0fm)\n",
+        (long long)g_AssetId, ST_PAULS_LOAD_RADIUS_M);
+
+    // Load the Cesium Ion token from API_KEYS.txt. Without it we cannot
+    // talk to the Cesium Ion endpoint at all, so bail loudly.
+    char tokenBuf[2048];
+    if (!Alice::Keys::GetCesiumToken(tokenBuf, sizeof(tokenBuf)) || tokenBuf[0] == '\0') {
+        fprintf(stderr,
+            "[CesiumMinimal] ERROR: CESIUM_ION_TOKEN is missing from API_KEYS.txt.\n"
+            "[CesiumMinimal]        Copy API_KEYS.txt.example, paste your token, and retry.\n");
+        fflush(stderr);
+        g_Started = true;  // avoid re-entering on every frame
+        return;
+    }
+    g_IonToken = tokenBuf;
+
+    // Set up the St Paul's local tangent plane (ENU) — the viewing and culling
+    // origin for the entire session.
+    double lat = ST_PAULS_LAT_DEG * Math::DEG2RAD;
+    double lon = ST_PAULS_LON_DEG * Math::DEG2RAD;
+    g_OriginEcef = Math::lla_to_ecef(lat, lon, ST_PAULS_ALT_M);
     Math::denu_matrix(g_EnuMatrix, lat, lon); // Row-major
-    
+
+    // Wire the anchor into the tileset so traversal culls against the
+    // 250m sphere around the cathedral.
+    g_Tileset.anchorEcef   = g_OriginEcef;
+    g_Tileset.anchorRadiusM = ST_PAULS_LOAD_RADIUS_M;
+
     AliceViewer* av = AliceViewer::instance();
     av->m_sceneAABB.initialized = false;
     g_Framed = false;
@@ -315,11 +360,17 @@ static void performStart() {
                 g_Tileset.client = &g_Client;
                 g_Tileset.root = std::make_unique<CesiumMinimal::Tile>();
                 g_Tileset.parseNode(g_Tileset.root.get(), j["root"], g_Tileset.baseUrl, glm::dmat4(1.0));
-                printf("[CesiumMinimal] Tileset JSON Parsed.\n");
+                printf("[CesiumMinimal] Tileset JSON parsed. Anchor=(%.1f, %.1f, %.1f) ECEF.\n",
+                    g_OriginEcef.x, g_OriginEcef.y, g_OriginEcef.z);
             } catch (...) {
                 printf("[CesiumMinimal] JSON Error\n");
             }
+        } else {
+            fprintf(stderr, "[CesiumMinimal] Tileset root fetch failed: HTTP %d\n", res.statusCode);
         }
+    } else {
+        fprintf(stderr, "[CesiumMinimal] Ion discovery failed for asset %lld. Check token.\n",
+            (long long)g_AssetId);
     }
     g_Started = true;
 }
@@ -604,15 +655,18 @@ static void draw() {
         }
     }
     
-    // FIX: Lock Camera to city-scale distance to force SSE refinement
+    // Frame the camera around the 250m sphere of interest centred on St Paul's.
+    // With fov~0.8 rad (tan ~0.42), a 250m radius needs ~600m of pull-back to
+    // fully fit vertically; we pick a slightly larger distance for headroom.
     if (!g_Framed || g_FrameCount == 10) {
         av->camera.focusPoint = V3(0.0f, 0.0f, 0.0f);
-        av->camera.distance = 400.0f; // Drop from 800m to 400m
-        av->camera.pitch = 0.3f;      // Lower the pitch for a skyline view
+        av->camera.distance = (float)(ST_PAULS_LOAD_RADIUS_M * 2.8);  // ~700m
+        av->camera.pitch = 0.3f;   // slight skyline pitch
         av->camera.yaw = 0.5f;
-        
+
         if (!g_Framed) {
-            printf("[CesiumMinimal] LOCKED Camera to Focus (0,0,0) Dist: %f\n", av->camera.distance);
+            printf("[CesiumMinimal] Camera locked on St Paul's. Focus=(0,0,0) Dist=%.1fm (radius=%.0fm)\n",
+                av->camera.distance, ST_PAULS_LOAD_RADIUS_M);
             fflush(stdout);
             g_Framed = true;
         }

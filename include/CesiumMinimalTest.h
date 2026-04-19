@@ -655,18 +655,23 @@ static void draw() {
         }
     }
     
-    // Frame the camera around the 250m sphere of interest centred on St Paul's.
-    // With fov~0.8 rad (tan ~0.42), a 250m radius needs ~600m of pull-back to
-    // fully fit vertically; we pick a slightly larger distance for headroom.
+    // Frame the camera tightly on St Paul's dome. The dome peaks at ~111m,
+    // the podium sits at ~10m. Aim the focus point at the dome centre (~55m
+    // above ground in the local ENU frame) and pull back only ~350m so the
+    // cathedral dominates the frame rather than drowning in the skyline.
+    // Elevated pitch (~0.55 rad ≈ 31°) looks up-and-over the podium onto the
+    // dome; yaw is tuned to put the west facade slightly to the right so
+    // the dome silhouette reads against the sky rather than the City towers.
     if (!g_Framed || g_FrameCount == 10) {
-        av->camera.focusPoint = V3(0.0f, 0.0f, 0.0f);
-        av->camera.distance = (float)(ST_PAULS_LOAD_RADIUS_M * 2.8);  // ~700m
-        av->camera.pitch = 0.3f;   // slight skyline pitch
-        av->camera.yaw = 0.5f;
+        av->camera.focusPoint = V3(0.0f, 0.0f, 55.0f);
+        av->camera.distance   = 350.0f;   // was 700m — tightened to dome scale
+        av->camera.pitch      = 0.55f;    // was 0.3f — look up at the dome
+        av->camera.yaw        = 0.9f;
 
         if (!g_Framed) {
-            printf("[CesiumMinimal] Camera locked on St Paul's. Focus=(0,0,0) Dist=%.1fm (radius=%.0fm)\n",
-                av->camera.distance, ST_PAULS_LOAD_RADIUS_M);
+            printf("[CesiumMinimal] Camera tightened on St Paul's dome. "
+                   "Focus=(0,0,55) Dist=%.1fm Pitch=%.2f Yaw=%.2f\n",
+                av->camera.distance, av->camera.pitch, av->camera.yaw);
             fflush(stdout);
             g_Framed = true;
         }

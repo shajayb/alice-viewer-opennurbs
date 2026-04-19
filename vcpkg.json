@@ -29,6 +29,10 @@
     {
       "name": "opennurbs",
       "version": "8.24.25281.15003"
+    },
+    {
+      "name": "imgui",
+      "version": "1.92.6"
     }
   ]
 }

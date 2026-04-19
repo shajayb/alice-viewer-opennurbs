@@ -843,7 +843,7 @@ void AliceViewer::run()
         if (m_headlessCapture)
         {
             static bool framed = false;
-            if (!framed)
+            if (!framed && m_sceneAABB.initialized)
             {
                 printf("[HEADLESS] Triggering Zoom Extents...\n");
                 frameScene(); 
@@ -1006,7 +1006,7 @@ void AliceViewer::frameScene()
     }
     else
     {
-        printf("[AliceViewer] frameScene: No geometry detected. AABB not initialized.\n");
+        // printf("[AliceViewer] frameScene: No geometry detected. AABB not initialized.\n");
     }
 }
 

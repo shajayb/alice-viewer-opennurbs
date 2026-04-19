@@ -197,7 +197,7 @@ struct AABB
     float radius() const 
     { 
         float r = (m_max - m_min).length() * 0.5f; 
-        return std::max(r, 0.1f); // Fallback thickness
+        return (std::max)(r, 0.1f); // Fallback thickness
     }
 };
 

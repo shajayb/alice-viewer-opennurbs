@@ -23,7 +23,8 @@
       "platform": "!windows"
     },
     "stb",
-    "nlohmann-json"
+    "nlohmann-json",
+    "glm"
   ],
   "overrides": [
     {

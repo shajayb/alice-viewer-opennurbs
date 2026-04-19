@@ -13,6 +13,7 @@ find_package(opennurbs CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(CURL REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(glm CONFIG REQUIRED)
 
 # Include directories
 include_directories(include)
@@ -47,6 +48,7 @@ target_link_libraries(AliceViewer
     opennurbs::opennurbs
     CURL::libcurl
     nlohmann_json::nlohmann_json
+    glm::glm
     ${OPENGL_LIBRARIES}
 )
 
@@ -71,21 +73,3 @@ else()
     target_link_libraries(AliceViewer PRIVATE -Wl,--start-group opennurbs::opennurbs ZLIB::ZLIB -Wl,--end-group)
     set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "-Wl,--allow-multiple-definition -Wl,--defsym,z_deflate=deflate -Wl,--defsym,z_inflate=inflate -Wl,--defsym,z_deflateEnd=deflateEnd -Wl,--defsym,z_inflateEnd=inflateEnd -Wl,--defsym,z_deflateInit_=deflateInit_ -Wl,--defsym,z_inflateInit_=inflateInit_ -Wl,--defsym,z_crc32=crc32 -Wl,--defsym,z_adler32=adler32 -Wl,--defsym,z_inflateReset=inflateReset")
 endif()
-
-# AliceOrchestrator
-# add_executable(AliceOrchestrator
-#     src/AliceOrchestrator.cpp
-# )
-# target_link_libraries(AliceOrchestrator
-#     PRIVATE
-#     CURL::libcurl
-#     nlohmann_json::nlohmann_json
-# )
-
-# APITest
-# add_executable(APITest src/APITest.cpp)
-# target_link_libraries(APITest PRIVATE CURL::libcurl nlohmann_json::nlohmann_json)
-
-# TilesetMicroTest
-# add_executable(TilesetMicroTest src/TilesetMicroTest.cpp)
-# target_link_libraries(TilesetMicroTest PRIVATE opennurbs::opennurbs CURL::libcurl nlohmann_json::nlohmann_json)

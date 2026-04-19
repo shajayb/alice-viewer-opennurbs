@@ -7,8 +7,11 @@
 namespace Alice { LinearArena g_Arena; }
 
 // Active Test
-#define CESIUM_ST_PAULS_TEST_RUN_TEST
-#include "CesiumStPaulsTest.h"
+#define CESIUM_MINIMAL_TEST_RUN_TEST
+#include "CesiumMinimalTest.h"
+
+//#define CESIUM_ST_PAULS_TEST_RUN_TEST
+//#include "CesiumStPaulsTest.h"
 
 //#define TILESET_TEST_RUN_TEST
 

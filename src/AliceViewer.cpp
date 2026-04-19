@@ -890,45 +890,9 @@ void AliceViewer::run()
         if (m_headlessCapture)
         {
             static int captureFrame = 0;
-            static int capturedCount = 0;
-            static bool highResDone = false;
             captureFrame++;
 
-            if (captureFrame == 100 && !highResDone)
-            {
-                printf("[HEADLESS] Triggering 4K High-Res Capture...\n");
-                captureHighResStencils("prod_4k");
-                highResDone = true;
-            }
-
-            if (captureFrame == 210 || captureFrame == 220 || captureFrame == 230)
-            {
-                int width, height;
-                glfwGetFramebufferSize(window, &width, &height);
-                size_t bufferSize = (size_t)width * height * 3;
-                unsigned char* pixelBuffer = (unsigned char*)Alice::g_Arena.allocate(bufferSize);
-                if (pixelBuffer)
-                {
-                    glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixelBuffer);
-                    stbi_flip_vertically_on_write(true);
-                    
-                    char filename[64];
-                    snprintf(filename, 64, "fb_%d.png", capturedCount * 120);
-                    
-                    if (stbi_write_png(filename, width, height, 3, pixelBuffer, width * 3))
-                    {
-                        printf("[HEADLESS] Capture saved to %s (%dx%d)\n", filename, width, height);
-                    }
-                    
-                    capturedCount++;
-                    if (capturedCount < 3)
-                    {
-                        camera.yaw += 120.0f * (3.14159f / 180.0f);
-                    }
-                }
-            }
-            
-            if (captureFrame == 300)
+            if (captureFrame == 100)
             {
                 int width, height;
                 glfwGetFramebufferSize(window, &width, &height);
@@ -941,15 +905,16 @@ void AliceViewer::run()
                     
                     if (stbi_write_png("framebuffer.png", width, height, 3, pixelBuffer, width * 3))
                     {
-                        printf("[HEADLESS] Frame 300 capture saved to framebuffer.png (%dx%d)\n", width, height);
+                        printf("SUCCESS: Frame 100 captured\n");
                     }
                 }
+                
+                captureHighResStencils("prod_4k");
             }
 
-            if (captureFrame >= 301)
+            if (captureFrame >= 105)
             {
-                printf("[HEADLESS] Capture sequence complete. Waiting for IO threads...\n");
-                std::this_thread::sleep_for(std::chrono::seconds(2));
+                printf("[HEADLESS] Capture sequence complete. Terminating.\n");
                 if (window) glfwSetWindowShouldClose(window, true);
                 else break;
             }

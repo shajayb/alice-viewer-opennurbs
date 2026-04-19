@@ -2,9 +2,10 @@ name: Cross-Platform Build
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "feature/**" ]
   pull_request:
     branches: [ "main", "master" ]
+  workflow_dispatch: {}
 
 jobs:
   build:
@@ -105,3 +106,65 @@ jobs:
           build/bin/AliceViewer
           build/bin/AliceViewer.exe
         if-no-files-found: error
+
+    # ---------------------------------------------------------------------
+    # Headless framebuffer capture (Linux only)
+    #
+    # Runs the just-built AliceViewer under xvfb-run with Mesa's llvmpipe
+    # software GL driver, so the headless capture path in AliceViewer.cpp
+    # (frames 100/210/220/230/300 -> fb_*.png + framebuffer.png) fires on
+    # CI. Every step is allowed to fail individually so we always upload
+    # whatever PNGs + logs were produced, even if the binary crashes.
+    # ---------------------------------------------------------------------
+    - name: Write Cesium Ion token (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        CESIUM_ION_TOKEN: ${{ secrets.CESIUM_ION_TOKEN }}
+      run: |
+        if [[ -z "${CESIUM_ION_TOKEN}" ]]; then
+          echo "::warning::CESIUM_ION_TOKEN secret is not set on this repo. Capture step will run but tilesets will not load."
+        fi
+        mkdir -p build/bin
+        {
+          echo "# Written by CI from the CESIUM_ION_TOKEN repository secret."
+          echo "CESIUM_ION_TOKEN=${CESIUM_ION_TOKEN}"
+        } > build/bin/API_KEYS.txt
+        # Sanity: prove the file exists and has the expected key name, but
+        # never echo the actual value to logs.
+        grep -c '^CESIUM_ION_TOKEN=' build/bin/API_KEYS.txt || true
+
+    - name: Headless capture (Linux)
+      if: runner.os == 'Linux'
+      continue-on-error: true
+      shell: bash
+      env:
+        LIBGL_ALWAYS_SOFTWARE: "1"
+        GALLIUM_DRIVER: "llvmpipe"
+        MESA_GL_VERSION_OVERRIDE: "4.5"
+        MESA_GLSL_VERSION_OVERRIDE: "450"
+        # Tolerate opennurbs/curl leaks during the run; sanitizer-built
+        # binaries abort otherwise and we never get a framebuffer.
+        ASAN_OPTIONS: "halt_on_error=0:detect_leaks=0:abort_on_error=0:exitcode=0"
+        LSAN_OPTIONS: "detect_leaks=0"
+      run: |
+        cd build/bin
+        ls -la AliceViewer
+        # 5-minute hard cap so a stuck tile fetch or GL hang doesn't wedge the job.
+        timeout --preserve-status --kill-after=30s 300s \
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+          ./AliceViewer --headless 2>&1 | tee headless_run.log || true
+        echo "--- PNGs produced ---"
+        ls -la *.png || true
+
+    - name: Upload framebuffer artifact (Linux)
+      if: runner.os == 'Linux'
+      uses: actions/upload-artifact@v4
+      with:
+        name: AliceViewer-framebuffer-${{ runner.os }}
+        path: |
+          build/bin/framebuffer.png
+          build/bin/fb_*.png
+          build/bin/prod_4k_*.png
+          build/bin/headless_run.log
+        if-no-files-found: warn

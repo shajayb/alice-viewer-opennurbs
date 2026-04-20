@@ -1,5 +1,6 @@
 #define NOMINMAX
 #define ALICE_FRAMEWORK
+#define ALICE_VIEWER_RUN_TEST
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <vector>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
@@ -1233,33 +1235,52 @@ static void drawBox(V3 min, V3 max, V3 color)
 void aliceTestDraw()
 {
     static bool testsRun = false;
+    static std::vector<float> vbo;
+    static std::vector<uint32_t> ebo;
+    static bool loaded = false;
+
     if (!testsRun)
     {
         testsRun = true;
         runAliceTests();
     }
 
-    drawGrid(50);
-    
-    // Concrete Geometry
-    drawBox({-5, -5, 0}, {5, 5, 10}, {0.8f, 0.2f, 0.2f});
-    drawBox({-15, 10, 0}, {-10, 15, 5}, {0.2f, 0.8f, 0.2f});
-    drawBox({10, -15, 0}, {15, -10, 5}, {0.2f, 0.2f, 0.8f});
-
-    aliceColor3f(1.0f, 0.5f, 0.0f);
-    for (int i = 0; i < 10000; ++i)
-    {
-        float x = (float)(i % 100) - 50.0f;
-        float y = (float)(i / 100) - 50.0f;
-        drawPoint({ x * 0.5f, y * 0.5f, sinf((float)i * 0.1f) * 2.0f });
+    if (!loaded) {
+        const char* cachePath = "./build/bin/cesium_mesh_cache.bin";
+        FILE* f = fopen(cachePath, "rb");
+        if (!f) {
+            cachePath = "./cesium_mesh_cache.bin";
+            f = fopen(cachePath, "rb");
+        }
+        if (f) {
+            uint32_t vCount, iCount;
+            if (fread(&vCount, sizeof(uint32_t), 1, f) == 1 &&
+                fread(&iCount, sizeof(uint32_t), 1, f) == 1) {
+                vbo.resize(vCount);
+                ebo.resize(iCount);
+                fread(vbo.data(), sizeof(float), vCount, f);
+                fread(ebo.data(), sizeof(uint32_t), iCount, f);
+                loaded = true;
+                printf("[Alice] Loaded cached mesh from %s: %u indices\n", cachePath, iCount);
+            }
+            fclose(f);
+        } else {
+            printf("[Alice] [ERROR] Could not find cesium_mesh_cache.bin\n");
+        }
     }
 
-    aliceColor3f(0.0f, 0.7f, 1.0f);
-    for (int i = 0; i < 1000; ++i)
-    {
-        float angle = (float)i * 0.1f;
-        float r = 20.0f + (float)i * 0.01f;
-        drawLine({ cosf(angle) * r, sinf(angle) * r, 0 }, { cosf(angle + 0.1f) * r, sinf(angle + 0.1f) * r, 2.0f });
+    if (loaded) {
+        aliceColor3f(0.8f, 0.8f, 0.8f);
+        for (size_t i = 0; i < ebo.size(); i += 3) {
+            uint32_t i0 = ebo[i];
+            uint32_t i1 = ebo[i+1];
+            uint32_t i2 = ebo[i+2];
+            // vbo has 6 floats per vertex: pos(3), normal(3)
+            V3 v0(vbo[i0*6], vbo[i0*6+1], vbo[i0*6+2]);
+            V3 v1(vbo[i1*6], vbo[i1*6+1], vbo[i1*6+2]);
+            V3 v2(vbo[i2*6], vbo[i2*6+1], vbo[i2*6+2]);
+            drawTriangle(v0, v1, v2);
+        }
     }
 }
 #endif

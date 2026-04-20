@@ -1,0 +1,8 @@
+TASK to be orchestrated, IN SELF HEALING,  AUTONOMOUS LOOP, between Executor and Architect :
+
+
+
+- Git Hard reset local to remote commit called : API Prototype functional. then take the CesiumsMInimalTest.h with its working networking code, shading etc
+
+
+

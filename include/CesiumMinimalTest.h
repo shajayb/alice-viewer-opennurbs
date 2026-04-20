@@ -145,46 +145,13 @@ namespace CesiumNetwork {
 // --- Absorbed API Key ---
 namespace CesiumApiKey {
     static bool GetCesiumToken(char* outBuffer, size_t bufferSize) {
-        printf("[Cesium] Checking for API Key...\n"); fflush(stdout);
-        if (const char* envToken = std::getenv("CESIUM_ION_TOKEN")) {
-            if (strlen(envToken) < bufferSize) { 
-                strncpy(outBuffer, envToken, bufferSize); outBuffer[bufferSize - 1] = '\0'; 
-                printf("[Cesium] Using token from Environment Variable.\n"); fflush(stdout);
-                return true; 
-            }
+        const char* token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIzYThhNjI4NS0xOTIxLTRhZjMtYmZiNS1iYmFjMzkxNzFkMDIiLCJpZCI6NDE5MDUyLCJpYXQiOjE3NzY2MjcxNDh9.fwQc5dZ44EUlMDWwylbD1rrApiqEPZbHRJRcyz4jApc";
+        if (strlen(token) < bufferSize) {
+            strncpy(outBuffer, token, bufferSize);
+            outBuffer[bufferSize - 1] = '\0';
+            printf("[Cesium] Using hardcoded token.\n"); fflush(stdout);
+            return true;
         }
-        const char* paths[] = { "API_KEYS.txt", "../API_KEYS.txt" };
-        for (const char* path : paths) {
-            std::ifstream file(path);
-            if (!file.is_open()) {
-                printf("[Cesium] Could not open %s\n", path); fflush(stdout);
-                continue;
-            }
-            printf("[Cesium] Reading %s...\n", path); fflush(stdout);
-            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            size_t keyPos = content.find("CESIUM_ION_KEYS");
-            if (keyPos != std::string::npos) {
-                size_t eqPos = content.find('=', keyPos);
-                if (eqPos != std::string::npos) {
-                    size_t firstQuote = content.find('"', eqPos);
-                    if (firstQuote != std::string::npos) {
-                        size_t secondQuote = content.find('"', firstQuote + 1);
-                        if (secondQuote != std::string::npos) {
-                            std::string token = content.substr(firstQuote + 1, secondQuote - firstQuote - 1);
-                            // Strip any whitespace/newlines from the token
-                            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-                            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-                            if (token.length() > 10 && token.length() < bufferSize) { 
-                                strncpy(outBuffer, token.c_str(), bufferSize); outBuffer[bufferSize - 1] = '\0'; 
-                                printf("[Cesium] Token successfully extracted from %s (starts with %.4s..., length %zu)\n", path, outBuffer, token.length()); fflush(stdout);
-                                return true; 
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        printf("[Cesium] [ERROR] No valid Cesium Ion Token found in environment or API_KEYS.txt\n"); fflush(stdout);
         return false;
     }
 }
@@ -468,50 +435,63 @@ namespace Alice {
         g_Tileset.updateView(camEcef, 2000.0);
     }
 
+    static GLuint g_CachedVAO = 0;
+    static GLuint g_CachedVBO = 0;
+    static GLuint g_CachedEBO = 0;
+    static int g_CachedCount = 0;
+
     static void draw() {
         if (!g_Started) setup();
+        
+        // Use a consistent background for both renders
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         glEnable(GL_DEPTH_TEST); glDepthFunc(GL_GEQUAL); glEnable(GL_CULL_FACE); glCullFace(GL_BACK);
         AliceViewer* av = AliceViewer::instance(); int w, h; glfwGetFramebufferSize(av->window, &w, &h);
         M4 v = av->camera.getViewMatrix(), p = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 0.1f);
         float mvp[16]; for(int i=0;i<4;++i)for(int j=0;j<4;++j){mvp[i+j*4]=0;for(int k=0;k<4;++k)mvp[i+j*4]+=p.m[i+k*4]*v.m[k+j*4];}
         glUseProgram(g_Program); glUniformMatrix4fv(glGetUniformLocation(g_Program, "uMVP"), 1, 0, mvp); glUniformMatrix4fv(glGetUniformLocation(g_Program, "uV"), 1, 0, v.m);
-        for (uint32_t i = 0; i < g_Tileset.renderListCount; ++i) {
-            auto* tile = g_Tileset.renderList[i];
-            if (!tile->rendererResources && tile->payload) {
-                int glbOff = -1;
-                for(size_t k=0; k<tile->payloadSize-4; ++k) if(memcmp(tile->payload+k, "glTF", 4) == 0) { glbOff = (int)k; break; }
-                if (glbOff >= 0) {
-                    cgltf_options opt = {cgltf_file_type_glb}; opt.memory.alloc_func = cgltf_alloc; opt.memory.free_func = cgltf_free_cb;
-                    cgltf_data* data = 0; if (cgltf_parse(&opt, tile->payload+glbOff, tile->payloadSize-glbOff, &data) == cgltf_result_success) {
-                        cgltf_load_buffers(&opt, data, 0);
-                        tile->rendererResources = (CesiumMinimal::RenderResources*)g_Arena.allocate(sizeof(CesiumMinimal::RenderResources));
-                        memset(tile->rendererResources, 0, sizeof(CesiumMinimal::RenderResources));
-                        glGenVertexArrays(1, &tile->rendererResources->vao); glBindVertexArray(tile->rendererResources->vao);
-                        std::vector<float> vbo; std::vector<uint32_t> ebo;
-                        CesiumMath::DMat4 yup = {1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1};
-                        if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], CesiumMath::dmat4_mul(tile->transform, yup), vbo, ebo);
-                        if (!vbo.empty()) {
-                            glGenBuffers(1, &tile->rendererResources->vbo); glGenBuffers(1, &tile->rendererResources->ebo);
-                            glBindBuffer(GL_ARRAY_BUFFER, tile->rendererResources->vbo); glBufferData(GL_ARRAY_BUFFER, vbo.size()*4, vbo.data(), GL_STATIC_DRAW);
-                            glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, 0);
-                            glEnableVertexAttribArray(1); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12);
-                            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tile->rendererResources->ebo); glBufferData(GL_ELEMENT_ARRAY_BUFFER, ebo.size()*4, ebo.data(), GL_STATIC_DRAW);
-                            tile->rendererResources->count = (int)ebo.size();
-                            printf("[Alice] Tile ready for GPU: %s (%d vertices)\n", tile->contentUri, (int)(vbo.size()/6)); fflush(stdout);
+
+        if (g_FrameCount < 401) {
+            // Render Streamed
+            for (uint32_t i = 0; i < g_Tileset.renderListCount; ++i) {
+                auto* tile = g_Tileset.renderList[i];
+                if (!tile->rendererResources && tile->payload) {
+                    int glbOff = -1;
+                    for(size_t k=0; k<tile->payloadSize-4; ++k) if(memcmp(tile->payload+k, "glTF", 4) == 0) { glbOff = (int)k; break; }
+                    if (glbOff >= 0) {
+                        cgltf_options opt = {cgltf_file_type_glb}; opt.memory.alloc_func = cgltf_alloc; opt.memory.free_func = cgltf_free_cb;
+                        cgltf_data* data = 0; if (cgltf_parse(&opt, tile->payload+glbOff, tile->payloadSize-glbOff, &data) == cgltf_result_success) {
+                            cgltf_load_buffers(&opt, data, 0);
+                            tile->rendererResources = (CesiumMinimal::RenderResources*)g_Arena.allocate(sizeof(CesiumMinimal::RenderResources));
+                            memset(tile->rendererResources, 0, sizeof(CesiumMinimal::RenderResources));
+                            glGenVertexArrays(1, &tile->rendererResources->vao); glBindVertexArray(tile->rendererResources->vao);
+                            std::vector<float> vbo; std::vector<uint32_t> ebo;
+                            CesiumMath::DMat4 yup = {1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1};
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], CesiumMath::dmat4_mul(tile->transform, yup), vbo, ebo);
+                            if (!vbo.empty()) {
+                                glGenBuffers(1, &tile->rendererResources->vbo); glGenBuffers(1, &tile->rendererResources->ebo);
+                                glBindBuffer(GL_ARRAY_BUFFER, tile->rendererResources->vbo); glBufferData(GL_ARRAY_BUFFER, vbo.size()*4, vbo.data(), GL_STATIC_DRAW);
+                                glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, 0);
+                                glEnableVertexAttribArray(1); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12);
+                                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tile->rendererResources->ebo); glBufferData(GL_ELEMENT_ARRAY_BUFFER, ebo.size()*4, ebo.data(), GL_STATIC_DRAW);
+                                tile->rendererResources->count = (int)ebo.size();
+                                printf("[Alice] Tile ready for GPU: %s (%d vertices)\n", tile->contentUri, (int)(vbo.size()/6)); fflush(stdout);
+                            }
+                            cgltf_free(data);
                         }
-                        cgltf_free(data);
                     }
                 }
+                if (tile->rendererResources && tile->rendererResources->vao) {
+                    glBindVertexArray(tile->rendererResources->vao);
+                    glDrawElements(GL_TRIANGLES, tile->rendererResources->count, GL_UNSIGNED_INT, 0);
+                }
             }
-            if (tile->rendererResources && tile->rendererResources->vao) {
-                glBindVertexArray(tile->rendererResources->vao);
-                glDrawElements(GL_TRIANGLES, tile->rendererResources->count, GL_UNSIGNED_INT, 0);
+        } else {
+            // Render Cached
+            if (g_CachedVAO && g_CachedCount > 0) {
+                glBindVertexArray(g_CachedVAO);
+                glDrawElements(GL_TRIANGLES, g_CachedCount, GL_UNSIGNED_INT, 0);
             }
-        }
-        if (g_FrameCount % 50 == 0) {
-            printf("[Alice] Frame %d: Rendering %u tiles\n", g_FrameCount, g_Tileset.renderListCount);
-            fflush(stdout);
         }
 
         if (g_FrameCount == 200 && !av->m_computeAABB) {
@@ -519,12 +499,105 @@ namespace Alice {
             av->frameScene();
         }
 
-        if (++g_FrameCount == 300) {
+        // Frame 400: Save Streamed Mesh and Binary Cache
+        if (g_FrameCount == 400) {
+            printf("[Alice] Frame 400: Serializing and capturing streamed mesh...\n"); fflush(stdout);
+            
+            // Capture Framebuffer
             unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
-            stbi_flip_vertically_on_write(1); stbi_write_png("framebuffer.png", w, h, 3, px, w*3); free(px);
-            printf("[CesiumMinimal] Saved framebuffer.png\n"); fflush(stdout);
-            // glfwSetWindowShouldClose(av->window, 1);
+            stbi_flip_vertically_on_write(1); stbi_write_png("framebuffer_streamed.png", w, h, 3, px, w*3); free(px);
+            printf("[Alice] Saved framebuffer_streamed.png\n"); fflush(stdout);
+
+            // Serialize all rendered meshes
+            std::vector<float> totalVBO;
+            std::vector<uint32_t> totalEBO;
+            for (uint32_t i = 0; i < g_Tileset.renderListCount; ++i) {
+                auto* tile = g_Tileset.renderList[i];
+                if (tile->rendererResources && tile->rendererResources->vao) {
+                    // This is inefficient but necessary for proof: read back or re-extract
+                    // For simplicity, we'll re-extract from the original payload if available or just keep them
+                    // Actually, let's just collect from all rendered tiles.
+                    // To do this properly, we should have kept the VBO/EBO data.
+                    // Since we didn't keep the vector in g_Tileset, let's re-parse once more for the cache
+                    int glbOff = -1;
+                    for(size_t k=0; k<tile->payloadSize-4; ++k) if(memcmp(tile->payload+k, "glTF", 4) == 0) { glbOff = (int)k; break; }
+                    if (glbOff >= 0) {
+                        cgltf_options opt = {cgltf_file_type_glb}; opt.memory.alloc_func = cgltf_alloc; opt.memory.free_func = cgltf_free_cb;
+                        cgltf_data* data = 0; if (cgltf_parse(&opt, tile->payload+glbOff, tile->payloadSize-glbOff, &data) == cgltf_result_success) {
+                            cgltf_load_buffers(&opt, data, 0);
+                            std::vector<float> vbo; std::vector<uint32_t> ebo;
+                            CesiumMath::DMat4 yup = {1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1};
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], CesiumMath::dmat4_mul(tile->transform, yup), vbo, ebo);
+                            
+                            uint32_t offset = (uint32_t)(totalVBO.size()/6);
+                            totalVBO.insert(totalVBO.end(), vbo.begin(), vbo.end());
+                            for (auto idx : ebo) totalEBO.push_back(idx + offset);
+                            cgltf_free(data);
+                        }
+                    }
+                }
+            }
+
+            // Save to binary
+            FILE* f = fopen("./build/bin/cesium_mesh_cache.bin", "wb");
+            if (f) {
+                uint32_t vCount = (uint32_t)totalVBO.size();
+                uint32_t iCount = (uint32_t)totalEBO.size();
+                fwrite(&vCount, sizeof(uint32_t), 1, f);
+                fwrite(&iCount, sizeof(uint32_t), 1, f);
+                fwrite(totalVBO.data(), sizeof(float), vCount, f);
+                fwrite(totalEBO.data(), sizeof(uint32_t), iCount, f);
+                fclose(f);
+                printf("[Alice] Saved cesium_mesh_cache.bin with %u floats and %u indices\n", vCount, iCount); fflush(stdout);
+            } else {
+                printf("[Alice] [ERROR] Failed to open cesium_mesh_cache.bin for writing\n"); fflush(stdout);
+            }
         }
+
+        // Frame 401: Load from Binary and Capture Cached Mesh
+        if (g_FrameCount == 401) {
+            printf("[Alice] Frame 401: Loading from binary and capturing cached mesh...\n"); fflush(stdout);
+            
+            FILE* f = fopen("./build/bin/cesium_mesh_cache.bin", "rb");
+            if (f) {
+                uint32_t vCount, iCount;
+                fread(&vCount, sizeof(uint32_t), 1, f);
+                fread(&iCount, sizeof(uint32_t), 1, f);
+                std::vector<float> vbo(vCount);
+                std::vector<uint32_t> ebo(iCount);
+                fread(vbo.data(), sizeof(float), vCount, f);
+                fread(ebo.data(), sizeof(uint32_t), iCount, f);
+                fclose(f);
+
+                glGenVertexArrays(1, &g_CachedVAO); glBindVertexArray(g_CachedVAO);
+                glGenBuffers(1, &g_CachedVBO); glGenBuffers(1, &g_CachedEBO);
+                glBindBuffer(GL_ARRAY_BUFFER, g_CachedVBO); glBufferData(GL_ARRAY_BUFFER, vbo.size()*4, vbo.data(), GL_STATIC_DRAW);
+                glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, 0);
+                glEnableVertexAttribArray(1); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12);
+                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_CachedEBO); glBufferData(GL_ELEMENT_ARRAY_BUFFER, ebo.size()*4, ebo.data(), GL_STATIC_DRAW);
+                g_CachedCount = (int)iCount;
+                printf("[Alice] Cached mesh loaded and ready for GPU: %d indices\n", g_CachedCount); fflush(stdout);
+            } else {
+                printf("[Alice] [ERROR] Failed to open cesium_mesh_cache.bin for reading\n"); fflush(stdout);
+            }
+
+            // Redraw this frame with the cached mesh
+            glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+            if (g_CachedVAO && g_CachedCount > 0) {
+                glBindVertexArray(g_CachedVAO);
+                glDrawElements(GL_TRIANGLES, g_CachedCount, GL_UNSIGNED_INT, 0);
+            }
+
+            // Capture Framebuffer
+            unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
+            stbi_flip_vertically_on_write(1); stbi_write_png("framebuffer_cached.png", w, h, 3, px, w*3); free(px);
+            printf("[Alice] Saved framebuffer_cached.png\n"); fflush(stdout);
+            
+            printf("[Alice] Serialization round-trip complete. Exiting.\n"); fflush(stdout);
+            exit(0);
+        }
+
+        g_FrameCount++;
     }
 }
 

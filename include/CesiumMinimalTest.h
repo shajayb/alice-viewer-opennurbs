@@ -145,28 +145,46 @@ namespace CesiumNetwork {
 // --- Absorbed API Key ---
 namespace CesiumApiKey {
     static bool GetCesiumToken(char* outBuffer, size_t bufferSize) {
+        printf("[Cesium] Checking for API Key...\n"); fflush(stdout);
         if (const char* envToken = std::getenv("CESIUM_ION_TOKEN")) {
-            if (strlen(envToken) < bufferSize) { strncpy(outBuffer, envToken, bufferSize); outBuffer[bufferSize - 1] = '\0'; return true; }
+            if (strlen(envToken) < bufferSize) { 
+                strncpy(outBuffer, envToken, bufferSize); outBuffer[bufferSize - 1] = '\0'; 
+                printf("[Cesium] Using token from Environment Variable.\n"); fflush(stdout);
+                return true; 
+            }
         }
         const char* paths[] = { "API_KEYS.txt", "../API_KEYS.txt" };
         for (const char* path : paths) {
             std::ifstream file(path);
-            if (!file.is_open()) continue;
-            std::string line;
-            while (std::getline(file, line)) {
-                if (line.find("CESIUM_ION_KEYS") != std::string::npos) {
-                    size_t eqPos = line.find('=');
-                    size_t firstQuote = line.find('"', eqPos != std::string::npos ? eqPos : 0);
+            if (!file.is_open()) {
+                printf("[Cesium] Could not open %s\n", path); fflush(stdout);
+                continue;
+            }
+            printf("[Cesium] Reading %s...\n", path); fflush(stdout);
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            size_t keyPos = content.find("CESIUM_ION_KEYS");
+            if (keyPos != std::string::npos) {
+                size_t eqPos = content.find('=', keyPos);
+                if (eqPos != std::string::npos) {
+                    size_t firstQuote = content.find('"', eqPos);
                     if (firstQuote != std::string::npos) {
-                        size_t secondQuote = line.find('"', firstQuote + 1);
+                        size_t secondQuote = content.find('"', firstQuote + 1);
                         if (secondQuote != std::string::npos) {
-                            std::string token = line.substr(firstQuote + 1, secondQuote - firstQuote - 1);
-                            if (token.length() > 10 && token.length() < bufferSize) { strncpy(outBuffer, token.c_str(), bufferSize); outBuffer[bufferSize - 1] = '\0'; return true; }
+                            std::string token = content.substr(firstQuote + 1, secondQuote - firstQuote - 1);
+                            // Strip any whitespace/newlines from the token
+                            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+                            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+                            if (token.length() > 10 && token.length() < bufferSize) { 
+                                strncpy(outBuffer, token.c_str(), bufferSize); outBuffer[bufferSize - 1] = '\0'; 
+                                printf("[Cesium] Token successfully extracted from %s (starts with %.4s..., length %zu)\n", path, outBuffer, token.length()); fflush(stdout);
+                                return true; 
+                            }
                         }
                     }
                 }
             }
         }
+        printf("[Cesium] [ERROR] No valid Cesium Ion Token found in environment or API_KEYS.txt\n"); fflush(stdout);
         return false;
     }
 }
@@ -181,7 +199,14 @@ namespace CesiumMinimal {
         HttpResponse get(const std::string& url, const std::string& token = "") {
             HttpResponse res; long sc = 0;
             bool ok = CesiumNetwork::Fetch(url.c_str(), res.data, &sc, token.empty() ? nullptr : token.c_str());
-            res.statusCode = (int)sc; if (!ok) res.error = "CURL Fetch Failed";
+            res.statusCode = (int)sc; 
+            if (!ok) {
+                res.error = "CURL Fetch Failed";
+                printf("[Cesium] [NET_ERROR] URL: %s | Status: %ld\n", url.c_str(), sc); fflush(stdout);
+            } else if (sc >= 400) {
+                res.error = "HTTP Error " + std::to_string(sc);
+                printf("[Cesium] [HTTP_FAIL] URL: %s | Status: %ld\n", url.c_str(), sc); fflush(stdout);
+            }
             return res;
         }
     };
@@ -192,13 +217,25 @@ namespace CesiumMinimal {
     public:
         static std::optional<IonAssetEndpoint> discover(AliceCurlClient& client, int64_t assetId, const std::string& ionToken) {
             std::string url = "https://api.cesium.com/v1/assets/" + std::to_string(assetId) + "/endpoint?access_token=" + ionToken;
+            printf("[Cesium] Handshake starting for Asset %lld...\n", assetId); fflush(stdout);
             HttpResponse response = client.get(url);
-            if (response.statusCode != 200) return std::nullopt;
+            if (response.statusCode != 200) {
+                printf("[Cesium] [HANDSHAKE_FAILED] Asset %lld | Status: %d | Response: %s\n", assetId, response.statusCode, response.data.empty() ? "EMPTY" : (const char*)response.data.data());
+                fflush(stdout);
+                g_NetStats.apiConnected = false;
+                return std::nullopt;
+            }
             try {
                 auto j = nlohmann::json::parse(response.data.begin(), response.data.end());
                 IonAssetEndpoint endpoint; endpoint.url = j["url"]; endpoint.accessToken = j["accessToken"];
+                printf("[Cesium] Handshake Success. Tileset URL: %s\n", endpoint.url.c_str()); fflush(stdout);
+                g_NetStats.apiConnected = true;
                 return endpoint;
-            } catch (...) { return std::nullopt; }
+            } catch (...) { 
+                printf("[Cesium] [PARSE_ERROR] Failed to parse Ion discovery JSON.\n"); fflush(stdout);
+                g_NetStats.apiConnected = false;
+                return std::nullopt; 
+            }
         }
     };
 
@@ -476,11 +513,17 @@ namespace Alice {
             printf("[Alice] Frame %d: Rendering %u tiles\n", g_FrameCount, g_Tileset.renderListCount);
             fflush(stdout);
         }
+
+        if (g_FrameCount == 200 && !av->m_computeAABB) {
+            printf("[Alice] Triggering Zoom Extents...\n");
+            av->frameScene();
+        }
+
         if (++g_FrameCount == 300) {
             unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
             stbi_flip_vertically_on_write(1); stbi_write_png("framebuffer.png", w, h, 3, px, w*3); free(px);
             printf("[CesiumMinimal] Saved framebuffer.png\n"); fflush(stdout);
-            glfwSetWindowShouldClose(av->window, 1);
+            // glfwSetWindowShouldClose(av->window, 1);
         }
     }
 }

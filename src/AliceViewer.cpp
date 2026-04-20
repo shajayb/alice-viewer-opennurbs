@@ -770,8 +770,8 @@ void AliceViewer::run()
 #ifdef ALICE_TEST_MODE
         static int agentFrameCount = 0;
         if (!m_headlessCapture && agentFrameCount++ > 5) {
-            printf("AGENT_WATCHDOG: 5 frames rendered. Terminating safely.\n");
-            exit(0);
+            printf("AGENT_WATCHDOG: 5 frames rendered. Manual inspection mode enabled.\n");
+            // exit(0);
         }
 #endif
         glfwPollEvents();
@@ -914,9 +914,9 @@ void AliceViewer::run()
 
             if (captureFrame >= 105)
             {
-                printf("[HEADLESS] Capture sequence complete. Terminating.\n");
-                if (window) glfwSetWindowShouldClose(window, true);
-                else break;
+                printf("[HEADLESS] Capture sequence complete. Manual inspection enabled.\n");
+                // if (window) glfwSetWindowShouldClose(window, true);
+                // else break;
             }
         }
 

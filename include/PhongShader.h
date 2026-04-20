@@ -117,7 +117,7 @@ const int INSTANCE_COUNT = 100000;
 extern "C" void setup()
 {
     if(!Alice::g_Arena.memory) Alice::g_Arena.init(64 * 1024 * 1024);
-    if(!g_Shader.init()) exit(1);
+    if(!g_Shader.init()) return;
     
     g_Plane.initPlane(2000.0f);
     g_Sphere.initSphere(16, 8);

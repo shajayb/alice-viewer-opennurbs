@@ -91,7 +91,7 @@ static unsigned int g_CheckerTexture;
 extern "C" void setup()
 {
     if(!Alice::g_Arena.memory) Alice::g_Arena.init(64 * 1024 * 1024);
-    if(!g_NormalShader.init()) exit(1);
+    if(!g_NormalShader.init()) return;
     
     g_Plane.initPlane(20.0f);
     g_Box.initBox();

@@ -586,6 +586,15 @@ namespace Alice {
             char filename[256];
             snprintf(filename, 256, "framebuffer_%d.png", g_CurrentLocation);
             unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
+            
+            // Mandatory Pixel Coverage Check
+            int coveredPixels = 0;
+            for (int i = 0; i < w * h; ++i) {
+                if (px[i*3] != 25 || px[i*3+1] != 25 || px[i*3+2] != 25) coveredPixels++;
+            }
+            float coverage = (float)coveredPixels / (float)(w * h) * 100.0f;
+            printf("[CesiumMinimal] Pixel Coverage: %.2f%%\n", coverage);
+            
             stbi_flip_vertically_on_write(1); stbi_write_png(filename, w, h, 3, px, w*3); free(px);
             printf("[CesiumMinimal] Saved %s\n", filename); fflush(stdout);
             

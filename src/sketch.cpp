@@ -7,8 +7,11 @@
 namespace Alice { LinearArena g_Arena; }
 
 // Active Test
-#define CESIUM_MINIMAL_TEST_RUN_TEST
-#include "CesiumMinimalTest.h"
+#define CACHED_MESH_COMPARISON_TEST_RUN_TEST
+#include "CachedMeshComparisonTest.h"
+
+//#define CESIUM_MINIMAL_TEST_RUN_TEST
+//#include "CesiumMinimalTest.h"
 
 //#define CESIUM_ST_PAULS_TEST_RUN_TEST
 //#include "CesiumStPaulsTest.h"
@@ -26,5 +29,3 @@ namespace Alice { LinearArena g_Arena; }
 
 //#define GLB_TEST_RUN_TEST
 //#include "GLBTest.h"
-
-

@@ -8,6 +8,7 @@
 #include <thread>
 #include <vector>
 #include <algorithm>
+#include <atomic>
 
 #pragma pack(push, 1)
 
@@ -239,6 +240,12 @@ public:
     unsigned int timerQuery;
     unsigned int resolveTimerQuery;
     bool m_headlessCapture = false;
+    float currentAspectRatio = 1280.0f / 720.0f;
+    bool m_isRenderingOffscreen = false;
+
+    M4 m_currentView;
+    M4 m_currentProj;
+    std::atomic<int> m_pendingCaptures{0};
 
     bool m_computeAABB = false;
     AABB m_sceneAABB;

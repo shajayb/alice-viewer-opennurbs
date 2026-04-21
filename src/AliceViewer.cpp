@@ -148,8 +148,8 @@ struct PrimitiveBatch
             
             glBufferSubData(GL_ARRAY_BUFFER, 0, count * sizeof(Vertex), vertices);
 
-            M4 view = g_instance->camera.getViewMatrix();
-            M4 proj = g_instance->makeInfiniteReversedZProjRH(g_instance->fov, 1280.0f/720.0f, g_instance->nearClip);
+            M4 view = g_instance->m_currentView;
+            M4 proj = g_instance->m_currentProj;
 
             glUseProgram(g_instance->shaderProgram);
             glUniformMatrix4fv(glGetUniformLocation(g_instance->shaderProgram, "u_ModelView"), 1, 0, view.m);
@@ -249,12 +249,14 @@ void aliceColor3f(float r, float g, float b)
 void backGround(float grey) 
 { 
     glClearColor(grey, grey, grey, 1.0f); 
+    glClearDepth(0.0); // Reversed-Z: 0.0 is Infinity
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); 
 }
 
 void backGround(float r, float g, float b) 
 { 
     glClearColor(r, g, b, 1.0f); 
+    glClearDepth(0.0); // Reversed-Z
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); 
 }
 
@@ -892,31 +894,11 @@ void AliceViewer::run()
             static int captureFrame = 0;
             captureFrame++;
 
-            if (captureFrame == 100)
+            if (captureFrame >= 10000) // Effectively disabled
             {
-                int width, height;
-                glfwGetFramebufferSize(window, &width, &height);
-                size_t bufferSize = (size_t)width * height * 3;
-                unsigned char* pixelBuffer = (unsigned char*)Alice::g_Arena.allocate(bufferSize);
-                if (pixelBuffer)
-                {
-                    glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixelBuffer);
-                    stbi_flip_vertically_on_write(true);
-                    
-                    if (stbi_write_png("framebuffer.png", width, height, 3, pixelBuffer, width * 3))
-                    {
-                        printf("SUCCESS: Frame 100 captured\n");
-                    }
-                }
-                
-                captureHighResStencils("prod_4k");
-            }
-
-            if (captureFrame >= 105)
-            {
-                printf("[HEADLESS] Capture sequence complete. Manual inspection enabled.\n");
-                // if (window) glfwSetWindowShouldClose(window, true);
-                // else break;
+                printf("[HEADLESS] Timeout Safeguard Reached.\n");
+                if (window) glfwSetWindowShouldClose(window, true);
+                else break;
             }
         }
 
@@ -977,6 +959,9 @@ void AliceViewer::frameScene()
 
 void AliceViewer::captureHighResStencils(const char* prefix)
 {
+    m_isRenderingOffscreen = true;
+    currentAspectRatio = (float)m_offscreen.width / m_offscreen.height;
+
     if (!m_offscreen.allocated)
     {
         glGenFramebuffers(1, &m_offscreen.fbo);
@@ -1016,20 +1001,19 @@ void AliceViewer::captureHighResStencils(const char* prefix)
     glBindFramebuffer(GL_FRAMEBUFFER, m_offscreen.fbo);
     glViewport(0, 0, m_offscreen.width, m_offscreen.height);
     
-    // Clear targets
     glClearColor(backColor.x, backColor.y, backColor.z, 1.0f);
-    glClearDepth(0.0); // Reversed-Z
+    glClearDepth(0.0); // Reversed-Z: 0.0 is Infinity
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     
-    // Mock segmentation clear (dark charcoal)
     GLfloat segClear[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
     glClearBufferfv(GL_COLOR, 1, segClear);
-    // Depth clear (black/infinity)
     GLfloat depthClear[1] = { 0.0f };
     glClearBufferfv(GL_COLOR, 2, depthClear);
 
     M4 view = camera.getViewMatrix();
-    M4 proj = makeInfiniteReversedZProjRH(fov, (float)m_offscreen.width / m_offscreen.height, nearClip);
+    M4 proj = makeInfiniteReversedZProjRH(fov, currentAspectRatio, nearClip);
+    m_currentView = view;
+    m_currentProj = proj;
 
     glUseProgram(shaderProgram);
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_ModelView"), 1, 0, view.m);
@@ -1049,68 +1033,55 @@ void AliceViewer::captureHighResStencils(const char* prefix)
     g_lineBatch.flush();
     g_pointBatch.flush();
 
-    // EXTRACTION
     size_t pixelCount = (size_t)m_offscreen.width * m_offscreen.height;
-    unsigned char* colorData = (unsigned char*)Alice::g_Arena.allocate(pixelCount * 3);
-    unsigned char* segData = (unsigned char*)Alice::g_Arena.allocate(pixelCount * 3);
-    unsigned char* depth8 = (unsigned char*)Alice::g_Arena.allocate(pixelCount);
+    auto colorData = std::make_shared<std::vector<unsigned char>>(pixelCount * 3);
+    auto segData = std::make_shared<std::vector<unsigned char>>(pixelCount * 3);
+    auto depth8 = std::make_shared<std::vector<unsigned char>>(pixelCount);
 
-    if (colorData && segData && depth8)
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glReadPixels(0, 0, m_offscreen.width, m_offscreen.height, GL_RGB, GL_UNSIGNED_BYTE, colorData->data());
+    
+    glReadBuffer(GL_COLOR_ATTACHMENT1);
+    glReadPixels(0, 0, m_offscreen.width, m_offscreen.height, GL_RGB, GL_UNSIGNED_BYTE, segData->data());
+
+    glReadBuffer(GL_COLOR_ATTACHMENT2);
+    glReadPixels(0, 0, m_offscreen.width, m_offscreen.height, GL_RED, GL_UNSIGNED_BYTE, depth8->data());
+
+    size_t nonBackgroundCount = 0;
+    unsigned char bgR = (unsigned char)(std::clamp(backColor.x, 0.0f, 1.0f) * 255.0f);
+    unsigned char bgG = (unsigned char)(std::clamp(backColor.y, 0.0f, 1.0f) * 255.0f);
+    unsigned char bgB = (unsigned char)(std::clamp(backColor.z, 0.0f, 1.0f) * 255.0f);
+
+    for (size_t i = 0; i < pixelCount; ++i)
     {
-        glReadBuffer(GL_COLOR_ATTACHMENT0);
-        glReadPixels(0, 0, m_offscreen.width, m_offscreen.height, GL_RGB, GL_UNSIGNED_BYTE, colorData);
-        
-        glReadBuffer(GL_COLOR_ATTACHMENT1);
-        glReadPixels(0, 0, m_offscreen.width, m_offscreen.height, GL_RGB, GL_UNSIGNED_BYTE, segData);
-
-        glReadBuffer(GL_COLOR_ATTACHMENT2);
-        glReadPixels(0, 0, m_offscreen.width, m_offscreen.height, GL_RED, GL_UNSIGNED_BYTE, depth8);
-
-        // Pixel Coverage Calculation
-        size_t nonBackgroundCount = 0;
-        unsigned char bgR = (unsigned char)(std::clamp(backColor.x, 0.0f, 1.0f) * 255.0f);
-        unsigned char bgG = (unsigned char)(std::clamp(backColor.y, 0.0f, 1.0f) * 255.0f);
-        unsigned char bgB = (unsigned char)(std::clamp(backColor.z, 0.0f, 1.0f) * 255.0f);
-
-        for (size_t i = 0; i < pixelCount; ++i)
-        {
-            if (abs((int)colorData[i * 3 + 0] - (int)bgR) > 2 || 
-                abs((int)colorData[i * 3 + 1] - (int)bgG) > 2 || 
-                abs((int)colorData[i * 3 + 2] - (int)bgB) > 2)
-            {
-                nonBackgroundCount++;
-            }
-        }
-        float coverage = (float)nonBackgroundCount / (float)pixelCount * 100.0f;
-        printf("[AliceViewer] High-res Pixel Coverage: %.4f%%\n", coverage);
-        
-        // Asynchronous File I/O
-        int w = m_offscreen.width;
-        int h = m_offscreen.height;
-        std::string prefixStr = prefix;
-        
-        std::thread([colorData, segData, depth8, w, h, prefixStr]() {
-            stbi_flip_vertically_on_write(true);
-            char path[256];
-            
-            snprintf(path, 256, "%s_beauty.png", prefixStr.c_str());
-            stbi_write_png(path, w, h, 3, colorData, w * 3);
-
-            snprintf(path, 256, "%s_seg.png", prefixStr.c_str());
-            stbi_write_png(path, w, h, 3, segData, w * 3);
-
-            snprintf(path, 256, "%s_depth.png", prefixStr.c_str());
-            stbi_write_png(path, w, h, 1, depth8, w);
-            
-            printf("[AliceViewer] Asynchronous capture complete: %s\n", prefixStr.c_str());
-        }).detach();
+        unsigned char* p = &(*colorData)[i * 3];
+        if (abs((int)p[0] - (int)bgR) > 2 || abs((int)p[1] - (int)bgG) > 2 || abs((int)p[2] - (int)bgB) > 2)
+            nonBackgroundCount++;
     }
-    else
-    {
-        printf("[ERROR] Failed to allocate extraction buffers. color:%p seg:%p depth:%p\n", colorData, segData, depth8);
-    }
+    float coverage = (float)nonBackgroundCount / (float)pixelCount * 100.0f;
+    printf("[AliceViewer] High-res Pixel Coverage: %.4f%%\n", coverage);
+    
+    m_pendingCaptures++;
+    int w = m_offscreen.width;
+    int h = m_offscreen.height;
+    std::string prefixStr = prefix;
+    
+    std::thread([colorData, segData, depth8, w, h, prefixStr, this]() {
+        stbi_flip_vertically_on_write(true);
+        char path[512];
+        snprintf(path, 512, "%s_beauty.png", prefixStr.c_str());
+        stbi_write_png(path, w, h, 3, colorData->data(), w * 3);
+        snprintf(path, 512, "%s_seg.png", prefixStr.c_str());
+        stbi_write_png(path, w, h, 3, segData->data(), w * 3);
+        snprintf(path, 512, "%s_depth.png", prefixStr.c_str());
+        stbi_write_png(path, w, h, 1, depth8->data(), w);
+        printf("[AliceViewer] Async capture complete: %s (Root: ./%s_beauty.png)\n", prefixStr.c_str(), prefixStr.c_str());
+        m_pendingCaptures--;
+    }).detach();
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    m_isRenderingOffscreen = false;
+    currentAspectRatio = 1280.0f / 720.0f; 
 }
 
 

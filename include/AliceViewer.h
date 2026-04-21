@@ -243,6 +243,8 @@ public:
     bool m_computeAABB = false;
     AABB m_sceneAABB;
     OffscreenCaptureState m_offscreen;
+    M4 m_currentView;
+    M4 m_currentProj;
 
     int init(int argc, char** argv);
     void run();

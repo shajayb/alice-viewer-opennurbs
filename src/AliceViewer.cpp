@@ -14,6 +14,8 @@
 #include <cstddef>
 #include <cstring>
 #include <vector>
+#include <thread>
+#include <string>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
@@ -150,8 +152,8 @@ struct PrimitiveBatch
             
             glBufferSubData(GL_ARRAY_BUFFER, 0, count * sizeof(Vertex), vertices);
 
-            M4 view = g_instance->camera.getViewMatrix();
-            M4 proj = g_instance->makeInfiniteReversedZProjRH(g_instance->fov, 1280.0f/720.0f, g_instance->nearClip);
+            M4 view = g_instance->m_currentView;
+            M4 proj = g_instance->m_currentProj;
 
             glUseProgram(g_instance->shaderProgram);
             glUniformMatrix4fv(glGetUniformLocation(g_instance->shaderProgram, "u_ModelView"), 1, 0, view.m);
@@ -656,7 +658,7 @@ int AliceViewer::init(int argc, char** argv)
     
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_GREATER);
+    glDepthFunc(GL_GEQUAL);
     glClearDepth(0.0);
     glEnable(GL_MULTISAMPLE);
 
@@ -859,14 +861,14 @@ void AliceViewer::run()
         if (w > 0 && h > 0) 
         {
             glViewport(0, 0, w, h);
-            M4 view = camera.getViewMatrix();
-            M4 proj = makeInfiniteReversedZProjRH(fov, (float)w / h, nearClip);
+            m_currentView = camera.getViewMatrix();
+            m_currentProj = makeInfiniteReversedZProjRH(fov, (float)w / h, nearClip);
             
             glBeginQuery(GL_TIME_ELAPSED, timerQuery);
 
             glUseProgram(shaderProgram);
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_ModelView"), 1, 0, view.m);
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_Projection"), 1, 0, proj.m);
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_ModelView"), 1, 0, m_currentView.m);
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_Projection"), 1, 0, m_currentProj.m);
             glUniform1f(glGetUniformLocation(shaderProgram, "u_AmbientIntensity"), ambientIntensity);
             glUniform1f(glGetUniformLocation(shaderProgram, "u_DiffuseIntensity"), diffuseIntensity);
             
@@ -1030,17 +1032,21 @@ void AliceViewer::captureHighResStencils(const char* prefix)
     GLfloat depthClear[1] = { 0.0f };
     glClearBufferfv(GL_COLOR, 2, depthClear);
 
-    M4 view = camera.getViewMatrix();
-    M4 proj = makeInfiniteReversedZProjRH(fov, (float)m_offscreen.width / m_offscreen.height, nearClip);
+    // Save old state
+    M4 oldView = m_currentView;
+    M4 oldProj = m_currentProj;
+
+    m_currentView = camera.getViewMatrix();
+    m_currentProj = makeInfiniteReversedZProjRH(fov, (float)m_offscreen.width / m_offscreen.height, nearClip);
 
     glUseProgram(shaderProgram);
-    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_ModelView"), 1, 0, view.m);
-    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_Projection"), 1, 0, proj.m);
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_ModelView"), 1, 0, m_currentView.m);
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_Projection"), 1, 0, m_currentProj.m);
     glUniform1f(glGetUniformLocation(shaderProgram, "u_AmbientIntensity"), ambientIntensity);
     glUniform1f(glGetUniformLocation(shaderProgram, "u_DiffuseIntensity"), diffuseIntensity);
     
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_GREATER);
+    glDepthFunc(GL_GEQUAL);
 
 #ifdef ALICE_VIEWER_RUN_TEST
     aliceTestDraw();
@@ -1085,32 +1091,42 @@ void AliceViewer::captureHighResStencils(const char* prefix)
         }
         float coverage = (float)nonBackgroundCount / (float)pixelCount * 100.0f;
         printf("[AliceViewer] High-res Pixel Coverage: %.4f%%\n", coverage);
+        fflush(stdout);
         
-        // Asynchronous File I/O
+        // Deep copy data for background thread to avoid race conditions with g_Arena
+        auto colorCopy = std::make_shared<std::vector<unsigned char>>(colorData, colorData + (pixelCount * 3));
+        auto segCopy = std::make_shared<std::vector<unsigned char>>(segData, segData + (pixelCount * 3));
+        auto depthCopy = std::make_shared<std::vector<unsigned char>>(depth8, depth8 + pixelCount);
+
         int w = m_offscreen.width;
         int h = m_offscreen.height;
         std::string prefixStr = prefix;
         
-        std::thread([colorData, segData, depth8, w, h, prefixStr]() {
+        std::thread([colorCopy, segCopy, depthCopy, w, h, prefixStr]() {
             stbi_flip_vertically_on_write(true);
             char path[256];
             
             snprintf(path, 256, "%s_beauty.png", prefixStr.c_str());
-            stbi_write_png(path, w, h, 3, colorData, w * 3);
+            stbi_write_png(path, w, h, 3, colorCopy->data(), w * 3);
 
             snprintf(path, 256, "%s_seg.png", prefixStr.c_str());
-            stbi_write_png(path, w, h, 3, segData, w * 3);
+            stbi_write_png(path, w, h, 3, segCopy->data(), w * 3);
 
             snprintf(path, 256, "%s_depth.png", prefixStr.c_str());
-            stbi_write_png(path, w, h, 1, depth8, w);
+            stbi_write_png(path, w, h, 1, depthCopy->data(), w);
             
             printf("[AliceViewer] Asynchronous capture complete: %s\n", prefixStr.c_str());
+            fflush(stdout);
         }).detach();
     }
     else
     {
         printf("[ERROR] Failed to allocate extraction buffers. color:%p seg:%p depth:%p\n", colorData, segData, depth8);
     }
+
+    // Restore old state
+    m_currentView = oldView;
+    m_currentProj = oldProj;
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }

@@ -1,6 +1,6 @@
 #define NOMINMAX
 #define ALICE_FRAMEWORK
-#define ALICE_VIEWER_RUN_TEST
+//#define ALICE_VIEWER_RUN_TEST
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -31,6 +31,13 @@ namespace Alice { extern LinearArena g_Arena; }
 #ifdef _MSC_VER
 extern "C" 
 {
+    void setup();
+    void update(float dt);
+    void draw();
+    void keyPress(unsigned char k, int x, int y);
+    void mousePress(int b, int s, int x, int y);
+    void mouseMotion(int x, int y);
+
     void def_setup() 
     {
     }
@@ -59,6 +66,13 @@ extern "C"
 #else
 extern "C" 
 {
+    void setup();
+    void update(float dt);
+    void draw();
+    void keyPress(unsigned char k, int x, int y);
+    void mousePress(int b, int s, int x, int y);
+    void mouseMotion(int x, int y);
+
     void __attribute__((weak)) setup() 
     {
     }
@@ -873,12 +887,7 @@ void AliceViewer::run()
             glUniform1f(glGetUniformLocation(shaderProgram, "u_DiffuseIntensity"), diffuseIntensity);
             
             glEnable(GL_DEPTH_TEST); 
-#ifdef ALICE_VIEWER_RUN_TEST
-            void aliceTestDraw();
-            aliceTestDraw();
-#else
             draw();
-#endif
             g_triangleBatch.flush();
             g_lineBatch.flush(); 
             g_pointBatch.flush();
@@ -891,39 +900,6 @@ void AliceViewer::run()
         ImGui::Render(); 
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         
-        if (m_headlessCapture)
-        {
-            static int captureFrame = 0;
-            captureFrame++;
-
-            if (captureFrame == 100)
-            {
-                int width, height;
-                glfwGetFramebufferSize(window, &width, &height);
-                size_t bufferSize = (size_t)width * height * 3;
-                unsigned char* pixelBuffer = (unsigned char*)Alice::g_Arena.allocate(bufferSize);
-                if (pixelBuffer)
-                {
-                    glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixelBuffer);
-                    stbi_flip_vertically_on_write(true);
-                    
-                    if (stbi_write_png("framebuffer.png", width, height, 3, pixelBuffer, width * 3))
-                    {
-                        printf("SUCCESS: Frame 100 captured\n");
-                    }
-                }
-                
-                captureHighResStencils("prod_4k");
-            }
-
-            if (captureFrame >= 105)
-            {
-                printf("[HEADLESS] Capture sequence complete. Manual inspection enabled.\n");
-                // if (window) glfwSetWindowShouldClose(window, true);
-                // else break;
-            }
-        }
-
         if (window) glfwSwapBuffers(window);
     }
 }
@@ -1035,9 +1011,11 @@ void AliceViewer::captureHighResStencils(const char* prefix)
     // Save old state
     M4 oldView = m_currentView;
     M4 oldProj = m_currentProj;
+    bool oldComputeAABB = m_computeAABB;
 
     m_currentView = camera.getViewMatrix();
     m_currentProj = makeInfiniteReversedZProjRH(fov, (float)m_offscreen.width / m_offscreen.height, nearClip);
+    m_computeAABB = true; // Use as recursion guard for draw() overrides
 
     glUseProgram(shaderProgram);
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_ModelView"), 1, 0, m_currentView.m);
@@ -1048,14 +1026,14 @@ void AliceViewer::captureHighResStencils(const char* prefix)
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_GEQUAL);
 
-#ifdef ALICE_VIEWER_RUN_TEST
-    aliceTestDraw();
-#else
     draw();
-#endif
+
     g_triangleBatch.flush();
     g_lineBatch.flush();
     g_pointBatch.flush();
+
+    // Restore state early to avoid affecting the extraction phase if it used any state
+    m_computeAABB = oldComputeAABB;
 
     // EXTRACTION
     size_t pixelCount = (size_t)m_offscreen.width * m_offscreen.height;
@@ -1127,6 +1105,7 @@ void AliceViewer::captureHighResStencils(const char* prefix)
     // Restore old state
     m_currentView = oldView;
     m_currentProj = oldProj;
+    m_computeAABB = oldComputeAABB;
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }

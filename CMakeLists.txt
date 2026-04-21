@@ -12,7 +12,6 @@ find_package(imgui CONFIG REQUIRED)
 find_package(opennurbs CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(CURL REQUIRED)
-find_package(nlohmann_json CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 
 # Include directories
@@ -23,10 +22,10 @@ include_directories("docs/code snippets")
 if(MSVC)
     add_compile_options(/EHsc) # Enable exceptions
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        add_compile_options(/MTd /Zi /Ob0 /Od /RTC1)
+        add_compile_options(/MDd /Zi /Ob0 /Od /RTC1)
         add_definitions(-D_DEBUG -D_ITERATOR_DEBUG_LEVEL=2)
     else()
-        add_compile_options(/MT /O2 /Ob2)
+        add_compile_options(/MD /O2 /Ob2)
         add_definitions(-DNDEBUG)
     endif()
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
@@ -47,7 +46,6 @@ target_link_libraries(AliceViewer
     imgui::imgui
     opennurbs::opennurbs
     CURL::libcurl
-    nlohmann_json::nlohmann_json
     glm::glm
     ${OPENGL_LIBRARIES}
 )

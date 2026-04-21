@@ -16,7 +16,7 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
-#include <nlohmann/json.hpp>
+#include "AliceJson.h"
 #include "cgltf.h"
 #include "AliceViewer.h"
 #include "AliceMemory.h"
@@ -172,15 +172,14 @@ namespace CesiumMinimal {
             std::string url = "https://api.cesium.com/v1/assets/" + std::to_string(assetId) + "/endpoint?access_token=" + ionToken;
             HttpResponse response = client.get(url);
             if (response.statusCode != 200) return std::nullopt;
-            try {
-                auto j = nlohmann::json::parse(response.data.begin(), response.data.end());
-                IonAssetEndpoint endpoint; endpoint.url = j["url"]; endpoint.accessToken = j["accessToken"];
-                return endpoint;
-            } catch (...) { return std::nullopt; }
+            auto j = AliceJson::parse(response.data.data(), response.data.size());
+            if (j.type == AliceJson::J_NULL) return std::nullopt;
+            IonAssetEndpoint endpoint; endpoint.url = j["url"].get<std::string>(); endpoint.accessToken = j["accessToken"].get<std::string>();
+            return endpoint;
         }
     };
     struct BoundingVolume { DVec3 centerECEF; double radius; bool valid = false; };
-    struct RenderResources { GLuint vao = 0; GLuint vbo = 0; GLuint ebo = 0; int count = 0; };
+    struct RenderResources { GLuint vao = 0; GLuint vbo = 0; GLuint ebo = 0; int count = 0; uint32_t vertexCount = 0; };
     struct Tile { BoundingVolume bounds; char contentUri[256]; Tile** children; uint32_t childrenCount; uint8_t* payload; size_t payloadSize; bool isLoaded; RenderResources* rendererResources; DMat4 transform; };
     struct Tileset {
         Tile* root; char baseUrl[512]; char token[2048]; AliceCurlClient* client; Tile** renderList; uint32_t renderListCount; uint32_t renderListCapacity;
@@ -197,7 +196,10 @@ namespace CesiumMinimal {
             if (node->contentUri[0] != '\0' && !node->isLoaded) {
                 auto res = client->get(std::string(baseUrl) + node->contentUri, token);
                 if (res.statusCode == 200) {
-                    if (strstr(node->contentUri, ".json")) { try { auto j = nlohmann::json::parse(res.data.begin(), res.data.end()); parseNode(node, j["root"], baseUrl, node->transform); } catch (...) {} }
+                    if (strstr(node->contentUri, ".json")) { 
+                        auto j = AliceJson::parse(res.data.data(), res.data.size()); 
+                        if (j.type != AliceJson::J_NULL) parseNode(node, j["root"], baseUrl, node->transform);
+                    }
                     else { node->payloadSize = res.data.size(); node->payload = (uint8_t*)Alice::g_Arena.allocate(node->payloadSize); memcpy(node->payload, res.data.data(), node->payloadSize); }
                     node->isLoaded = true;
                 }
@@ -205,7 +207,7 @@ namespace CesiumMinimal {
             if (node->isLoaded && node->payload) { if (renderListCount < renderListCapacity) renderList[renderListCount++] = node; }
             for (uint32_t i = 0; i < node->childrenCount; ++i) traverse(node->children[i], camPos, radiusLimit);
         }
-        void parseNode(Tile* tile, const nlohmann::json& jNode, const char* currentBase, const DMat4& parentTransform) {
+        void parseNode(Tile* tile, const AliceJson::JsonValue& jNode, const char* currentBase, const DMat4& parentTransform) {
             DMat4 localTransform = CesiumMath::dmat4_identity();
             if (jNode.contains("transform")) { auto arr = jNode["transform"]; for (int i = 0; i < 16; ++i) localTransform.m[i] = (double)arr[i]; }
             tile->transform = CesiumMath::dmat4_mul(parentTransform, localTransform);
@@ -320,11 +322,13 @@ namespace Alice {
         if (endpoint) {
             auto res = g_Client.get(endpoint->url, endpoint->accessToken);
             if (res.statusCode == 200) {
-                auto j = nlohmann::json::parse(res.data.begin(), res.data.end());
-                std::string base = endpoint->url.substr(0, endpoint->url.find_last_of('/')+1);
-                strncpy(g_Tileset.baseUrl, base.c_str(), 511); strncpy(g_Tileset.token, endpoint->accessToken.c_str(), 2047);
-                g_Tileset.root = (CesiumMinimal::Tile*)g_Arena.allocate(sizeof(CesiumMinimal::Tile)); memset(g_Tileset.root, 0, sizeof(CesiumMinimal::Tile));
-                g_Tileset.root->transform = CesiumMath::dmat4_identity(); g_Tileset.parseNode(g_Tileset.root, j["root"], g_Tileset.baseUrl, CesiumMath::dmat4_identity());
+                auto j = AliceJson::parse(res.data.data(), res.data.size());
+                if (j.type != AliceJson::J_NULL) {
+                    std::string base = endpoint->url.substr(0, endpoint->url.find_last_of('/')+1);
+                    strncpy(g_Tileset.baseUrl, base.c_str(), 511); strncpy(g_Tileset.token, endpoint->accessToken.c_str(), 2047);
+                    g_Tileset.root = (CesiumMinimal::Tile*)g_Arena.allocate(sizeof(CesiumMinimal::Tile)); memset(g_Tileset.root, 0, sizeof(CesiumMinimal::Tile));
+                    g_Tileset.root->transform = CesiumMath::dmat4_identity(); g_Tileset.parseNode(g_Tileset.root, j["root"], g_Tileset.baseUrl, CesiumMath::dmat4_identity());
+                }
             }
         }
         AliceViewer* av = AliceViewer::instance();
@@ -432,11 +436,19 @@ namespace Alice {
                                 glDisableVertexAttribArray(1); 
                                 glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tile->rendererResources->ebo); glBufferData(GL_ELEMENT_ARRAY_BUFFER, ebo.size()*4, ebo.data(), GL_STATIC_DRAW);
                                 tile->rendererResources->count = (int)ebo.size();
+                                tile->rendererResources->vertexCount = (uint32_t)(vbo.size() / 6);
                             }
                             cgltf_free(data);
                         }
                     }
                 }
+            }
+
+            // Set geometry color to 0.8 grey to match the reference
+            aliceColor3f(0.8f, 0.8f, 0.8f);
+
+            for (uint32_t i = 0; i < g_Tileset.renderListCount; ++i) {
+                auto* tile = g_Tileset.renderList[i];
                 if (tile->rendererResources && tile->rendererResources->vao) { 
                     glBindVertexArray(tile->rendererResources->vao); 
                     if (pass == 0) glVertexAttrib3f(1, 0.8f, 0.8f, 0.8f); // Beauty Grey
@@ -449,11 +461,27 @@ namespace Alice {
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glDisable(GL_POLYGON_OFFSET_FILL);
 
+        uint32_t totalVertices = 0;
+        for (uint32_t i = 0; i < g_Tileset.renderListCount; ++i) {
+            if (g_Tileset.renderList[i]->rendererResources) 
+                totalVertices += g_Tileset.renderList[i]->rendererResources->vertexCount;
+        }
+
         if (g_CurrentState == STATE_STREAMING) {
             if (g_NetStats.activeRequests == 0 && g_Tileset.renderListCount > 0) g_StableFrames++;
             else g_StableFrames = 0;
 
             if (g_StableFrames > 300) {
+                unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
+                uint32_t nonBackgroundPixels = 0;
+                for (int i = 0; i < w * h; ++i) {
+                    if (px[i*3] != 149 || px[i*3+1] != 149 || px[i*3+2] != 149) nonBackgroundPixels++;
+                }
+                float coverage = (float)nonBackgroundPixels / (float)(w * h) * 100.0f;
+                printf("frustum_vertex_count: %u\n", totalVertices);
+                printf("pixel_coverage_percentage: %.2f%%\n", coverage);
+                free(px);
+
                 char prefix[256]; snprintf(prefix, 256, "prod_4k_%d", g_CurrentLocation);
                 printf("[Test] Initiating 4K BEAUTY Capture for %s (Location %d)...\n", g_Locations[g_CurrentLocation].name, g_CurrentLocation); fflush(stdout);
                 

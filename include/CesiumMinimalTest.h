@@ -10,16 +10,17 @@
 #include <cmath>
 #include <algorithm>
 #include <fstream>
+#include <type_traits>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
-#include <nlohmann/json.hpp>
 #include "cgltf.h"
 #include "AliceViewer.h"
 #include "AliceMemory.h"
 #include <curl/curl.h>
 #include <stb_image_write.h>
+#include "AliceJson.h"
 
 // --- Optimized DOD Math ---
 namespace CesiumMath {
@@ -158,6 +159,29 @@ namespace CesiumMath {
         det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12];
         if (det != 0) { det = 1.0f / det; for (int i = 0; i < 16; i++) res[i] = inv[i] * det; }
     }
+
+    struct Plane { DVec3 n; double d; };
+    struct Frustum { Plane p[6]; };
+
+    inline Frustum calculate_frustum(const float* m) {
+        Frustum f;
+        f.p[0] = { {m[3]+m[0], m[7]+m[4], m[11]+m[8]}, m[15]+m[12] };
+        f.p[1] = { {m[3]-m[0], m[7]-m[4], m[11]-m[8]}, m[15]-m[12] };
+        f.p[2] = { {m[3]+m[1], m[7]+m[5], m[11]+m[9]}, m[15]+m[13] };
+        f.p[3] = { {m[3]-m[1], m[7]-m[5], m[11]-m[9]}, m[15]-m[13] };
+        f.p[4] = { {m[3]+m[2], m[7]+m[6], m[11]+m[10]}, m[15]+m[14] };
+        f.p[5] = { {m[3]-m[2], m[7]-m[6], m[11]-m[10]}, m[15]-m[14] };
+        for (int i=0; i<6; ++i) {
+            double l = sqrt(f.p[i].n.x*f.p[i].n.x + f.p[i].n.y*f.p[i].n.y + f.p[i].n.z*f.p[i].n.z);
+            f.p[i].n.x /= l; f.p[i].n.y /= l; f.p[i].n.z /= l; f.p[i].d /= l;
+        }
+        return f;
+    }
+
+    inline bool sphere_in_frustum(const Frustum& f, const DVec3& c, double r) {
+        for (int i=0; i<6; ++i) if (f.p[i].n.x*c.x + f.p[i].n.y*c.y + f.p[i].n.z*c.z + f.p[i].d < -r) return false;
+        return true;
+    }
 }
 
 // --- Absorbed Network ---
@@ -171,8 +195,7 @@ namespace CesiumNetwork {
         CURL* c = curl_easy_init(); if (!c) return 0;
         curl_easy_setopt(c, CURLOPT_URL, u); curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, wc); curl_easy_setopt(c, CURLOPT_WRITEDATA, &b);
         curl_easy_setopt(c, CURLOPT_TIMEOUT, 15L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L); curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(c, CURLOPT_USERAGENT, "Alice/1.0");
-        curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
+        curl_easy_setopt(c, CURLOPT_USERAGENT, "Alice/1.0"); curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
         struct curl_slist* headers = NULL;
         if (bt) { char auth[2048]; snprintf(auth, 2048, "Authorization: Bearer %s", bt); headers = curl_slist_append(headers, auth); curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers); }
         CURLcode r = curl_easy_perform(c); if (sc) curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, sc);
@@ -183,250 +206,142 @@ namespace CesiumNetwork {
 // --- Absorbed API Key ---
 namespace CesiumApiKey {
     static bool GetCesiumToken(char* outBuffer, size_t bufferSize) {
-        printf("[Cesium] Checking for API Key...\n"); fflush(stdout);
         if (const char* envToken = std::getenv("CESIUM_ION_TOKEN")) {
-            if (strlen(envToken) < bufferSize) { 
-                strncpy(outBuffer, envToken, bufferSize); outBuffer[bufferSize - 1] = '\0'; 
-                printf("[Cesium] Using token from Environment Variable.\n"); fflush(stdout);
-                return true; 
-            }
+            if (strlen(envToken) < bufferSize) { strncpy(outBuffer, envToken, bufferSize); return true; }
         }
         const char* paths[] = { "API_KEYS.txt", "../API_KEYS.txt" };
         for (const char* path : paths) {
             std::ifstream file(path);
-            if (!file.is_open()) {
-                printf("[Cesium] Could not open %s\n", path); fflush(stdout);
-                continue;
-            }
-            printf("[Cesium] Reading %s...\n", path); fflush(stdout);
-            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            size_t keyPos = content.find("CESIUM_ION_KEYS");
-            if (keyPos != std::string::npos) {
-                size_t eqPos = content.find('=', keyPos);
-                if (eqPos != std::string::npos) {
-                    size_t firstQuote = content.find('"', eqPos);
-                    if (firstQuote != std::string::npos) {
-                        size_t secondQuote = content.find('"', firstQuote + 1);
-                        if (secondQuote != std::string::npos) {
-                            std::string token = content.substr(firstQuote + 1, secondQuote - firstQuote - 1);
-                            // Strip any whitespace/newlines from the token
-                            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-                            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-                            if (token.length() > 10 && token.length() < bufferSize) { 
-                                strncpy(outBuffer, token.c_str(), bufferSize); outBuffer[bufferSize - 1] = '\0'; 
-                                printf("[Cesium] Token successfully extracted from %s (starts with %.4s..., length %zu)\n", path, outBuffer, token.length()); fflush(stdout);
-                                return true; 
-                            }
-                        }
+            if (file.is_open()) {
+                std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                size_t keyPos = content.find("CESIUM_ION_KEYS");
+                if (keyPos != std::string::npos) {
+                    size_t firstQuote = content.find('"', content.find('=', keyPos));
+                    size_t secondQuote = content.find('"', firstQuote + 1);
+                    if (firstQuote != std::string::npos && secondQuote != std::string::npos) {
+                        std::string token = content.substr(firstQuote + 1, secondQuote - firstQuote - 1);
+                        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+                        token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+                        if (token.length() > 10 && token.length() < bufferSize) { strncpy(outBuffer, token.c_str(), bufferSize); return true; }
                     }
                 }
             }
         }
-        printf("[Cesium] [ERROR] No valid Cesium Ion Token found in environment or API_KEYS.txt\n"); fflush(stdout);
         return false;
     }
 }
 
 namespace CesiumMinimal {
     using namespace CesiumMath;
-
     struct HttpResponse { int statusCode; std::vector<uint8_t> data; std::string error; };
-
     class AliceCurlClient {
     public:
         HttpResponse get(const std::string& url, const std::string& token = "") {
             HttpResponse res; long sc = 0;
             bool ok = CesiumNetwork::Fetch(url.c_str(), res.data, &sc, token.empty() ? nullptr : token.c_str());
-            res.statusCode = (int)sc; 
-            if (!ok) {
-                res.error = "CURL Fetch Failed";
-                printf("[Cesium] [NET_ERROR] URL: %s | Status: %ld\n", url.c_str(), sc); fflush(stdout);
-            } else if (sc >= 400) {
-                res.error = "HTTP Error " + std::to_string(sc);
-                printf("[Cesium] [HTTP_FAIL] URL: %s | Status: %ld\n", url.c_str(), sc); fflush(stdout);
-            }
+            res.statusCode = (int)sc; if (!ok) res.error = "CURL Fetch Failed";
             return res;
         }
     };
-
     struct IonAssetEndpoint { std::string url; std::string accessToken; };
-
     class IonDiscovery {
     public:
         static std::optional<IonAssetEndpoint> discover(AliceCurlClient& client, int64_t assetId, const std::string& ionToken) {
             std::string url = "https://api.cesium.com/v1/assets/" + std::to_string(assetId) + "/endpoint?access_token=" + ionToken;
             printf("[Cesium] Handshake starting for Asset %lld...\n", assetId); fflush(stdout);
-            HttpResponse response = client.get(url);
+            HttpResponse response = client.get(url); 
             if (response.statusCode != 200) {
-                printf("[Cesium] [HANDSHAKE_FAILED] Asset %lld | Status: %d | Response: %s\n", assetId, response.statusCode, response.data.empty() ? "EMPTY" : (const char*)response.data.data());
-                fflush(stdout);
-                g_NetStats.apiConnected = false;
+                printf("[Cesium] [HANDSHAKE_FAILED] Status: %d\n", response.statusCode); fflush(stdout);
                 return std::nullopt;
             }
-            try {
-                auto j = nlohmann::json::parse(response.data.begin(), response.data.end());
-                IonAssetEndpoint endpoint; endpoint.url = j["url"]; endpoint.accessToken = j["accessToken"];
-                printf("[Cesium] Handshake Success. Tileset URL: %s\n", endpoint.url.c_str()); fflush(stdout);
-                g_NetStats.apiConnected = true;
-                return endpoint;
-            } catch (...) { 
-                printf("[Cesium] [PARSE_ERROR] Failed to parse Ion discovery JSON.\n"); fflush(stdout);
-                g_NetStats.apiConnected = false;
-                return std::nullopt; 
+            printf("[Cesium] Response received, parsing...\n"); fflush(stdout);
+            auto j = AliceJson::parse(response.data.data(), response.data.size());
+            if (j.type == AliceJson::J_NULL) {
+                printf("[Cesium] [PARSE_FAILED] Root is NULL\n"); fflush(stdout);
+                return std::nullopt;
             }
+            IonAssetEndpoint endpoint; 
+            endpoint.url = j["url"].get<std::string>(); 
+            endpoint.accessToken = j["accessToken"].get<std::string>();
+            printf("[Cesium] Handshake Success. URL: %s\n", endpoint.url.c_str()); fflush(stdout);
+            return endpoint;
         }
     };
-
     struct BoundingVolume { DVec3 centerECEF; double radius; bool valid = false; };
-
-    struct RenderResources {
-        GLuint vao = 0;
-        GLuint vbo = 0;
-        GLuint ebo = 0;
-        int count = 0;
-    };
-
-    struct Tile {
-        BoundingVolume bounds;
-        char contentUri[256];
-        Tile** children;
-        uint32_t childrenCount;
-        uint8_t* payload;
-        size_t payloadSize;
-        bool isLoaded;
-        RenderResources* rendererResources;
-        DMat4 transform;
-    };
-
+    struct RenderResources { GLuint vao = 0; GLuint vbo = 0; GLuint ebo = 0; int count = 0; uint32_t vertexCount = 0; };
+    struct Tile { BoundingVolume bounds; char contentUri[256]; Tile** children; uint32_t childrenCount; uint8_t* payload; size_t payloadSize; bool isLoaded; RenderResources* rendererResources; DMat4 transform; };
     struct Tileset {
-        Tile* root;
-        char baseUrl[512];
-        char token[2048];
-        AliceCurlClient* client;
-        Tile** renderList;
-        uint32_t renderListCount;
-        uint32_t renderListCapacity;
-
+        Tile* root; char baseUrl[512]; char token[2048]; AliceCurlClient* client; Tile** renderList; uint32_t renderListCount; uint32_t renderListCapacity;
         void init(AliceCurlClient* c) {
-            root = nullptr;
-            baseUrl[0] = '\0';
-            token[0] = '\0';
-            client = c;
-            renderListCapacity = 2048;
-            renderList = (Tile**)Alice::g_Arena.allocate(renderListCapacity * sizeof(Tile*));
-            renderListCount = 0;
+            root = nullptr; baseUrl[0] = '\0'; token[0] = '\0'; client = c;
+            renderListCapacity = 2048; renderList = (Tile**)Alice::g_Arena.allocate(renderListCapacity * sizeof(Tile*)); renderListCount = 0;
         }
-
-        void updateView(const DVec3& camPos, double radiusLimit) {
-            renderListCount = 0;
-            if (root) traverse(root, camPos, radiusLimit);
-        }
-
+        void updateView(const DVec3& camPos, double radiusLimit) { renderListCount = 0; if (root) traverse(root, camPos, radiusLimit); }
         void traverse(Tile* node, const DVec3& camPos, double radiusLimit) {
             if (node->bounds.valid) {
-                double dx = node->bounds.centerECEF.x - camPos.x;
-                double dy = node->bounds.centerECEF.y - camPos.y;
-                double dz = node->bounds.centerECEF.z - camPos.z;
-                double dist = sqrt(dx*dx + dy*dy + dz*dz);
-                if (dist > node->bounds.radius + radiusLimit) return;
+                double dx = node->bounds.centerECEF.x - camPos.x; double dy = node->bounds.centerECEF.y - camPos.y; double dz = node->bounds.centerECEF.z - camPos.z;
+                double dist = sqrt(dx*dx + dy*dy + dz*dz); if (dist > node->bounds.radius + radiusLimit) return;
             }
             if (node->contentUri[0] != '\0' && !node->isLoaded) {
-                printf("[Alice] Fetching: %s\n", node->contentUri); fflush(stdout);
                 auto res = client->get(std::string(baseUrl) + node->contentUri, token);
                 if (res.statusCode == 200) {
                     if (strstr(node->contentUri, ".json")) {
-                        try {
-                            auto j = nlohmann::json::parse(res.data.begin(), res.data.end());
-                            parseNode(node, j["root"], baseUrl, node->transform);
-                        } catch (...) {}
+                        auto j = AliceJson::parse(res.data.data(), res.data.size());
+                        parseNode(node, j["root"], baseUrl, node->transform);
                     } else {
-                        node->payloadSize = res.data.size();
-                        node->payload = (uint8_t*)Alice::g_Arena.allocate(node->payloadSize);
+                        node->payloadSize = res.data.size(); node->payload = (uint8_t*)Alice::g_Arena.allocate(node->payloadSize);
                         memcpy(node->payload, res.data.data(), node->payloadSize);
                     }
                     node->isLoaded = true;
                 }
             }
-            if (node->isLoaded && node->payload) {
-                if (renderListCount < renderListCapacity) renderList[renderListCount++] = node;
-            }
+            if (node->isLoaded && node->payload) { if (renderListCount < renderListCapacity) renderList[renderListCount++] = node; }
             for (uint32_t i = 0; i < node->childrenCount; ++i) traverse(node->children[i], camPos, radiusLimit);
         }
-
-        void parseNode(Tile* tile, const nlohmann::json& jNode, const char* currentBase, const DMat4& parentTransform) {
+        void parseNode(Tile* tile, const AliceJson::JsonValue& jNode, const char* currentBase, const DMat4& parentTransform) {
             DMat4 localTransform = CesiumMath::dmat4_identity();
-            if (jNode.contains("transform")) {
-                auto arr = jNode["transform"];
-                for (int i = 0; i < 16; ++i) localTransform.m[i] = (double)arr[i];
-            }
+            if (jNode.contains("transform")) { auto arr = jNode["transform"]; for (int i = 0; i < 16; ++i) localTransform.m[i] = (double)arr[i]; }
             tile->transform = CesiumMath::dmat4_mul(parentTransform, localTransform);
-
             if (jNode.contains("boundingVolume")) {
                 auto bv = jNode["boundingVolume"];
                 if (bv.contains("region")) {
-                    auto arr = bv["region"];
-                    double rw = arr[0], rs = arr[1], re = arr[2], rn = arr[3];
+                    auto arr = bv["region"]; double rs = arr[1], rw = arr[0], rn = arr[3], re = arr[2];
                     tile->bounds.centerECEF = lla_to_ecef((rs+rn)*0.5, (rw+re)*0.5, 0.0);
                     double latD = (rn-rs)*6378137.0; double lonD = (re-rw)*6378137.0*cos((rs+rn)*0.5);
-                    tile->bounds.radius = sqrt(latD*latD + lonD*lonD)*0.5;
-                    tile->bounds.valid = true;
+                    tile->bounds.radius = sqrt(latD*latD + lonD*lonD)*0.5; tile->bounds.valid = true;
                 } else if (bv.contains("box")) {
-                    auto arr = bv["box"];
-                    DVec4 localCenter = {arr[0], arr[1], arr[2], 1.0};
-                    DVec4 worldCenter = dmat4_mul_vec4(tile->transform, localCenter);
+                    auto arr = bv["box"]; DVec4 worldCenter = dmat4_mul_vec4(tile->transform, {arr[0], arr[1], arr[2], 1.0});
                     tile->bounds.centerECEF = {worldCenter.x, worldCenter.y, worldCenter.z};
-                    double ux = arr[3], uy = arr[4], uz = arr[5];
-                    tile->bounds.radius = sqrt(ux*ux + uy*uy + uz*uz) * 2.0;
-                    tile->bounds.valid = true;
+                    double ux = arr[3], uy = arr[4], uz = arr[5]; tile->bounds.radius = sqrt(ux*ux + uy*uy + uz*uz) * 2.0; tile->bounds.valid = true;
                 }
             }
             if (jNode.contains("content")) {
-                std::string uri;
-                if (jNode["content"].contains("uri")) uri = jNode["content"]["uri"].get<std::string>();
+                std::string uri; if (jNode["content"].contains("uri")) uri = jNode["content"]["uri"].get<std::string>();
                 else if (jNode["content"].contains("url")) uri = jNode["content"]["url"].get<std::string>();
                 if (!uri.empty()) strncpy(tile->contentUri, uri.c_str(), 255);
             }
             if (jNode.contains("children")) {
-                auto childrenArr = jNode["children"];
-                tile->childrenCount = (uint32_t)childrenArr.size();
+                auto childrenArr = jNode["children"]; tile->childrenCount = (uint32_t)childrenArr.size();
                 tile->children = (Tile**)Alice::g_Arena.allocate(tile->childrenCount * sizeof(Tile*));
                 for (uint32_t i = 0; i < tile->childrenCount; ++i) {
-                    tile->children[i] = (Tile*)Alice::g_Arena.allocate(sizeof(Tile));
-                    memset(tile->children[i], 0, sizeof(Tile));
-                    tile->children[i]->transform = CesiumMath::dmat4_identity();
-                    parseNode(tile->children[i], childrenArr[i], currentBase, tile->transform);
+                    tile->children[i] = (Tile*)Alice::g_Arena.allocate(sizeof(Tile)); memset(tile->children[i], 0, sizeof(Tile));
+                    tile->children[i]->transform = CesiumMath::dmat4_identity(); parseNode(tile->children[i], childrenArr[i], currentBase, tile->transform);
                 }
             }
         }
     };
 }
 
-// --- Integration & Test ---
 namespace Alice {
-    struct TestLocation {
-        int64_t assetId;
-        double lat, lon;
-        V3 focusPoint;
-        float cameraDistance;
-        float pitch, yaw;
-        const char* name;
-    };
-
+    struct TestLocation { int64_t assetId; double lat, lon; V3 focusPoint; float cameraDistance; float pitch, yaw; const char* name; };
     static TestLocation g_Locations[] = {
         { 96188,  51.5138, -0.0984, {0, -40, 60}, 450.0f, 0.55f, 4.2f, "St. Paul's" },
         { 96188,  48.8584,  2.2945, {0, -50, 150}, 800.0f, 0.40f, 3.1f, "Eiffel Tower" },
         { 96188,  40.6892, -74.0445, {0, -20, 60}, 400.0f, 0.35f, 1.2f, "Statue of Liberty" }
     };
-    static int g_CurrentLocation = -1;
-    static uint32_t g_FrameCount = 0;
-    static uint32_t g_LastTeleportFrame = 0;
-    static bool g_Started = false;
-    static CesiumMinimal::AliceCurlClient g_Client;
-    static CesiumMinimal::Tileset g_Tileset;
-    static CesiumMath::DVec3 g_OriginEcef;
-    static double g_EnuMatrix[16];
-    static GLuint g_Program = 0;
-    static char g_IonToken[2048] = {0};
+    static int g_CurrentLocation = -1; static uint32_t g_FrameCount = 0; static uint32_t g_LastTeleportFrame = 0; static bool g_Started = false;
+    static CesiumMinimal::AliceCurlClient g_Client; static CesiumMinimal::Tileset g_Tileset; static CesiumMath::DVec3 g_OriginEcef;
+    static double g_EnuMatrix[16]; static GLuint g_Program = 0; static char g_IonToken[2048] = {0};
 
     static void* cgltf_alloc(void* user, size_t size) { return Alice::g_Arena.allocate(size); }
     static void cgltf_free_cb(void* user, void* ptr) {}
@@ -450,10 +365,7 @@ namespace Alice {
         if (node->mesh) {
             for (size_t i=0; i<node->mesh->primitives_count; ++i) {
                 cgltf_primitive* p = &node->mesh->primitives[i];
-                cgltf_accessor *pa=0;
-                for (size_t k=0; k<p->attributes_count; ++k) {
-                    if (p->attributes[k].type == cgltf_attribute_type_position) pa = p->attributes[k].data;
-                }
+                cgltf_accessor *pa=0; for (size_t k=0; k<p->attributes_count; ++k) if (p->attributes[k].type == cgltf_attribute_type_position) pa = p->attributes[k].data;
                 uint32_t offset = (uint32_t)(vbo.size()/6);
                 for (size_t k=0; k<pa->count; ++k) {
                     float pos[3]; cgltf_accessor_read_float(pa, k, pos, 3);
@@ -472,63 +384,32 @@ namespace Alice {
 
     static void teleportTo(int index) {
         if (index < 0 || index >= 3) return;
-        TestLocation& loc = g_Locations[index];
-        printf("[Alice] Teleporting to Location %d: %s (Asset %lld)\n", index, loc.name, loc.assetId);
-        fflush(stdout);
-
-        bool locationChanged = (g_CurrentLocation != index);
-        g_CurrentLocation = index;
-        g_LastTeleportFrame = g_FrameCount;
-
-        if (locationChanged) {
-            printf("[Alice] Location changed. Resetting Arena and re-initializing.\n");
-            fflush(stdout);
-            
-            double latRad = loc.lat * 0.0174532925, lonRad = loc.lon * 0.0174532925;
-            g_OriginEcef = CesiumMath::lla_to_ecef(latRad, lonRad, 0.0);
-            CesiumMath::denu_matrix(g_EnuMatrix, latRad, lonRad);
-
-            g_Arena.reset();
-            g_Tileset.init(&g_Client);
-
-            auto endpoint = CesiumMinimal::IonDiscovery::discover(g_Client, loc.assetId, g_IonToken);
-            if (endpoint) {
-                auto res = g_Client.get(endpoint->url, endpoint->accessToken);
-                if (res.statusCode == 200) {
-                    auto j = nlohmann::json::parse(res.data.begin(), res.data.end());
-                    std::string base = endpoint->url.substr(0, endpoint->url.find_last_of('/')+1);
-                    strncpy(g_Tileset.baseUrl, base.c_str(), 511);
-                    strncpy(g_Tileset.token, endpoint->accessToken.c_str(), 2047);
-                    g_Tileset.root = (CesiumMinimal::Tile*)g_Arena.allocate(sizeof(CesiumMinimal::Tile));
-                    memset(g_Tileset.root, 0, sizeof(CesiumMinimal::Tile));
-                    g_Tileset.root->transform = CesiumMath::dmat4_identity();
-                    g_Tileset.parseNode(g_Tileset.root, j["root"], g_Tileset.baseUrl, CesiumMath::dmat4_identity());
-                }
+        TestLocation& loc = g_Locations[index]; g_CurrentLocation = index; g_LastTeleportFrame = g_FrameCount;
+        double latRad = loc.lat * 0.0174532925, lonRad = loc.lon * 0.0174532925;
+        g_OriginEcef = CesiumMath::lla_to_ecef(latRad, lonRad, 0.0); CesiumMath::denu_matrix(g_EnuMatrix, latRad, lonRad);
+        g_Arena.reset(); g_Tileset.init(&g_Client);
+        auto endpoint = CesiumMinimal::IonDiscovery::discover(g_Client, loc.assetId, g_IonToken);
+        if (endpoint) {
+            auto res = g_Client.get(endpoint->url, endpoint->accessToken);
+            if (res.statusCode == 200) {
+                auto j = AliceJson::parse(res.data.data(), res.data.size());
+                std::string base = endpoint->url.substr(0, endpoint->url.find_last_of('/')+1);
+                strncpy(g_Tileset.baseUrl, base.c_str(), 511); strncpy(g_Tileset.token, endpoint->accessToken.c_str(), 2047);
+                g_Tileset.root = (CesiumMinimal::Tile*)g_Arena.allocate(sizeof(CesiumMinimal::Tile)); memset(g_Tileset.root, 0, sizeof(CesiumMinimal::Tile));
+                g_Tileset.root->transform = CesiumMath::dmat4_identity(); g_Tileset.parseNode(g_Tileset.root, j["root"], g_Tileset.baseUrl, CesiumMath::dmat4_identity());
             }
         }
-
-        AliceViewer* av = AliceViewer::instance();
-        av->camera.focusPoint = loc.focusPoint;
-        av->camera.distance = loc.cameraDistance;
-        av->camera.pitch = loc.pitch;
-        av->camera.yaw = loc.yaw;
+        AliceViewer* av = AliceViewer::instance(); av->camera.focusPoint = loc.focusPoint; av->camera.distance = loc.cameraDistance; av->camera.pitch = loc.pitch; av->camera.yaw = loc.yaw;
     }
 
     static void setup() {
-        printf("[Alice] setup started\n"); fflush(stdout);
         if (!g_Arena.memory) g_Arena.init(512*1024*1024);
-        initShaders();
-        CesiumApiKey::GetCesiumToken(g_IonToken, 2048);
-        teleportTo(0);
-        g_Started = true;
-        printf("[Alice] setup complete\n"); fflush(stdout);
+        initShaders(); CesiumApiKey::GetCesiumToken(g_IonToken, 2048); teleportTo(0); g_Started = true;
     }
 
     static void update(float dt) {
         if (!g_Started) return;
-        AliceViewer* av = AliceViewer::instance();
-        M4 view = av->camera.getViewMatrix();
-        float inv[16]; CesiumMath::mat4_inverse(inv, view.m);
+        AliceViewer* av = AliceViewer::instance(); M4 view = av->camera.getViewMatrix(); float inv[16]; CesiumMath::mat4_inverse(inv, view.m);
         CesiumMath::DVec3 camEcef = {
             g_OriginEcef.x + g_EnuMatrix[0]*inv[12] + g_EnuMatrix[4]*inv[13] + g_EnuMatrix[8]*inv[14],
             g_OriginEcef.y + g_EnuMatrix[1]*inv[12] + g_EnuMatrix[5]*inv[13] + g_EnuMatrix[9]*inv[14],
@@ -542,14 +423,15 @@ namespace Alice {
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         glEnable(GL_DEPTH_TEST); glDepthFunc(GL_GEQUAL); glEnable(GL_CULL_FACE); glCullFace(GL_BACK);
         AliceViewer* av = AliceViewer::instance(); int w, h; glfwGetFramebufferSize(av->window, &w, &h);
-        M4 v = av->camera.getViewMatrix(), p = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 0.1f);
-        float mvp[16]; for(int i=0;i<4;++i)for(int j=0;j<4;++j){mvp[i+j*4]=0;for(int k=0;k<4;++k)mvp[i+j*4]+=p.m[i+k*4]*v.m[k+j*4];}
+        M4 v = av->camera.getViewMatrix(), proj = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 0.1f);
+        float mvp[16]; for(int i=0;i<4;++i)for(int j=0;j<4;++j){mvp[i+j*4]=0;for(int k=0;k<4;++k)mvp[i+j*4]+=proj.m[i+k*4]*v.m[k+j*4];}
+        CesiumMath::Frustum frustum = CesiumMath::calculate_frustum(mvp);
         glUseProgram(g_Program); glUniformMatrix4fv(glGetUniformLocation(g_Program, "uMVP"), 1, 0, mvp); glUniformMatrix4fv(glGetUniformLocation(g_Program, "uV"), 1, 0, v.m);
+        uint32_t totalVertices = 0;
         for (uint32_t i = 0; i < g_Tileset.renderListCount; ++i) {
             auto* tile = g_Tileset.renderList[i];
             if (!tile->rendererResources && tile->payload) {
-                int glbOff = -1;
-                for(size_t k=0; k<tile->payloadSize-4; ++k) if(memcmp(tile->payload+k, "glTF", 4) == 0) { glbOff = (int)k; break; }
+                int glbOff = -1; for(size_t k=0; k<tile->payloadSize-4; ++k) if(memcmp(tile->payload+k, "glTF", 4) == 0) { glbOff = (int)k; break; }
                 if (glbOff >= 0) {
                     cgltf_options opt = {cgltf_file_type_glb}; opt.memory.alloc_func = cgltf_alloc; opt.memory.free_func = cgltf_free_cb;
                     cgltf_data* data = 0; if (cgltf_parse(&opt, tile->payload+glbOff, tile->payloadSize-glbOff, &data) == cgltf_result_success) {
@@ -557,8 +439,7 @@ namespace Alice {
                         tile->rendererResources = (CesiumMinimal::RenderResources*)g_Arena.allocate(sizeof(CesiumMinimal::RenderResources));
                         memset(tile->rendererResources, 0, sizeof(CesiumMinimal::RenderResources));
                         glGenVertexArrays(1, &tile->rendererResources->vao); glBindVertexArray(tile->rendererResources->vao);
-                        std::vector<float> vbo; std::vector<uint32_t> ebo;
-                        CesiumMath::DMat4 yup = {1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1};
+                        std::vector<float> vbo; std::vector<uint32_t> ebo; CesiumMath::DMat4 yup = {1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1};
                         if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], CesiumMath::dmat4_mul(tile->transform, yup), {0,0,0}, vbo, ebo);
                         if (!vbo.empty()) {
                             glGenBuffers(1, &tile->rendererResources->vbo); glGenBuffers(1, &tile->rendererResources->ebo);
@@ -566,44 +447,30 @@ namespace Alice {
                             glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, 0);
                             glEnableVertexAttribArray(1); glVertexAttribPointer(1, 3, GL_FLOAT, 0, 24, (void*)12);
                             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tile->rendererResources->ebo); glBufferData(GL_ELEMENT_ARRAY_BUFFER, ebo.size()*4, ebo.data(), GL_STATIC_DRAW);
-                            tile->rendererResources->count = (int)ebo.size();
-                            printf("[Alice] Tile ready for GPU: %s (%d vertices)\n", tile->contentUri, (int)(vbo.size()/6)); fflush(stdout);
+                            tile->rendererResources->count = (int)ebo.size(); tile->rendererResources->vertexCount = (uint32_t)(vbo.size()/6);
                         }
                         cgltf_free(data);
                     }
                 }
             }
             if (tile->rendererResources && tile->rendererResources->vao) {
-                glBindVertexArray(tile->rendererResources->vao);
-                glDrawElements(GL_TRIANGLES, tile->rendererResources->count, GL_UNSIGNED_INT, 0);
+                bool inFrustum = true;
+                if (tile->bounds.valid) {
+                    double dx = tile->bounds.centerECEF.x - g_OriginEcef.x, dy = tile->bounds.centerECEF.y - g_OriginEcef.y, dz = tile->bounds.centerECEF.z - g_OriginEcef.z;
+                    CesiumMath::DVec3 enu = {g_EnuMatrix[0]*dx+g_EnuMatrix[1]*dy+g_EnuMatrix[2]*dz, g_EnuMatrix[4]*dx+g_EnuMatrix[5]*dy+g_EnuMatrix[6]*dz, g_EnuMatrix[8]*dx+g_EnuMatrix[9]*dy+g_EnuMatrix[10]*dz};
+                    inFrustum = CesiumMath::sphere_in_frustum(frustum, enu, tile->bounds.radius);
+                }
+                if (inFrustum) { glBindVertexArray(tile->rendererResources->vao); glDrawElements(GL_TRIANGLES, tile->rendererResources->count, GL_UNSIGNED_INT, 0); totalVertices += tile->rendererResources->vertexCount; }
             }
         }
-        
-        g_FrameCount++;
-        uint32_t framesSinceTeleport = g_FrameCount - g_LastTeleportFrame;
-        
-        if (framesSinceTeleport == 600) {
-            char filename[256];
-            snprintf(filename, 256, "framebuffer_%d.png", g_CurrentLocation);
+        g_FrameCount++; if (g_FrameCount - g_LastTeleportFrame == 600) {
             unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
-            
-            // Mandatory Pixel Coverage Check
-            int coveredPixels = 0;
-            for (int i = 0; i < w * h; ++i) {
-                if (px[i*3] != 25 || px[i*3+1] != 25 || px[i*3+2] != 25) coveredPixels++;
-            }
-            float coverage = (float)coveredPixels / (float)(w * h) * 100.0f;
-            printf("[CesiumMinimal] Pixel Coverage: %.2f%%\n", coverage);
-            
-            stbi_flip_vertically_on_write(1); stbi_write_png(filename, w, h, 3, px, w*3); free(px);
-            printf("[CesiumMinimal] Saved %s\n", filename); fflush(stdout);
-            
-            if (g_CurrentLocation < 2) {
-                teleportTo(g_CurrentLocation + 1);
-            } else {
-                printf("[CesiumMinimal] All captures complete.\n"); fflush(stdout);
-                glfwSetWindowShouldClose(av->window, 1);
-            }
+            int hits = 0; for (int i = 0; i < w * h; ++i) if (px[i*3] != 25 || px[i*3+1] != 25 || px[i*3+2] != 25) hits++;
+            printf("frustum_vertex_count: %u\n", totalVertices);
+            printf("pixel_coverage_percentage: %.2f%%\n", (float)hits / (w * h) * 100.0f);
+            char fn[64]; snprintf(fn, 64, "framebuffer_%d.png", g_CurrentLocation);
+            stbi_flip_vertically_on_write(1); stbi_write_png(fn, w, h, 3, px, w*3); free(px);
+            if (g_CurrentLocation < 2) teleportTo(g_CurrentLocation + 1); else glfwSetWindowShouldClose(av->window, 1);
         }
     }
 }
@@ -614,4 +481,4 @@ extern "C" void update(float dt) { Alice::update(dt); }
 extern "C" void draw() { Alice::draw(); }
 #endif
 
-#endif // CESIUM_MINIMAL_TEST_H
+#endif

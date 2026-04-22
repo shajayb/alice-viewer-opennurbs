@@ -1,7 +1,6 @@
 {
-  "CMAKE_C_COMPILER": "C:/Program Files/LLVM/bin/clang-cl.exe",
-  "CMAKE_CXX_COMPILER": "C:/Program Files/LLVM/bin/clang-cl.exe",
-  "CMAKE_LINKER": "C:/Program Files/LLVM/bin/lld-link.exe",
-  "NINJA_PATH": "C:/Users/shajay.b/AppData/Local/Microsoft/WinGet/Packages/Ninja-build.Ninja_Microsoft.Winget.Source_8wekyb3d8bbwe/ninja.exe",
-  "VCPKG_TOOLCHAIN_FILE": "C:/Users/shajay.b/Documents/REPOS/vcpkg/scripts/buildsystems/vcpkg.cmake"
+  "compiler_path": "C:/Program Files/LLVM/bin/clang-cl.exe",
+  "linker_path": "C:/Program Files/LLVM/bin/lld-link.exe",
+  "ninja_path": "C:/Users/shajay.b.ZAHA-HADID/AppData/Local/Microsoft/WinGet/Packages/Ninja-build.Ninja_Microsoft.Winget.Source_8wekyb3d8bbwe/ninja.exe",
+  "vcpkg_toolchain": "C:/Users/shajay.b.ZAHA-HADID/source/repos/vcpkg/scripts/buildsystems/vcpkg.cmake"
 }

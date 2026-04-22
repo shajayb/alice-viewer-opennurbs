@@ -1,12 +1,17 @@
 # spawn_agents.ps1
 # Executor Implementation: Phase 1 (Local Implementation)
+# Upgraded for N-Agent Swarm Execution
+
+param (
+    [string[]]$AgentNames = @("gamma", "delta", "epsilon", "zeta", "eta")
+)
 
 # 1. State Check & Save
 $status = git status --porcelain
 if ($status) {
     Write-Host "[Executor] Uncommitted changes detected. Snapshotting state..." -ForegroundColor Yellow
     git add .
-    git commit -m "Orchestrator Snapshot"
+    git commit -m "Orchestrator Snapshot before spawning swarm"
 } else {
     Write-Host "[Executor] Clean state. Proceeding." -ForegroundColor Green
 }
@@ -14,8 +19,6 @@ if ($status) {
 # 2. Branch & Worktree Allocation
 $repoRoot = Get-Location
 $parentDir = Split-Path -Path $repoRoot.Path -Parent
-$alphaPath = Join-Path $parentDir "worktree_alpha"
-$betaPath = Join-Path $parentDir "worktree_beta"
 
 function Setup-Worktree {
     param(
@@ -53,20 +56,34 @@ function Setup-Worktree {
     }
 }
 
-Setup-Worktree -Path $alphaPath -Branch "feature-alpha"
-Setup-Worktree -Path $betaPath -Branch "feature-beta"
+$agentPaths = @{}
+
+foreach ($agent in $AgentNames) {
+    $branchName = "feature-$agent"
+    $worktreePath = Join-Path $parentDir "worktree_$agent"
+    Setup-Worktree -Path $worktreePath -Branch $branchName
+    $agentPaths[$agent] = $worktreePath
+}
 
 # 3. Prompt Acquisition
 Write-Host "`n[Executor] Prompt Acquisition Phase" -ForegroundColor Magenta
-$Prompt1 = Read-Host "Enter prompt for Agent 1 (ALPHA)"
-$Prompt2 = Read-Host "Enter prompt for Agent 2 (BETA)"
 
-if ([string]::IsNullOrWhiteSpace($Prompt1)) { $Prompt1 = "Analyze the current worktree and wait for instructions." }
-if ([string]::IsNullOrWhiteSpace($Prompt2)) { $Prompt2 = "Analyze the current worktree and wait for instructions." }
+$agentPrompts = @{}
+foreach ($agent in $AgentNames) {
+    $upperAgent = $agent.ToUpper()
+    $prompt = Read-Host "Enter prompt for Agent $upperAgent (or press Enter for default)"
+    if ([string]::IsNullOrWhiteSpace($prompt)) { 
+        $prompt = "Analyze the current worktree and wait for instructions to implement CesiumGEPR.h." 
+    }
+    $agentPrompts[$agent] = $prompt
+}
 
 # 4. IPC Hardening
-Set-Content -Path (Join-Path $alphaPath "init_prompt.txt") -Value $Prompt1
-Set-Content -Path (Join-Path $betaPath "init_prompt.txt") -Value $Prompt2
+foreach ($agent in $AgentNames) {
+    $path = $agentPaths[$agent]
+    $prompt = $agentPrompts[$agent]
+    Set-Content -Path (Join-Path $path "init_prompt.txt") -Value $prompt
+}
 
 # 5. Execution & Spawning
 function Launch-Agent {
@@ -76,17 +93,17 @@ function Launch-Agent {
     )
 
     $initFile = Join-Path $Path "init_prompt.txt"
-    # Note: We use -NoExit so the user can see the output and manually paste if needed.
-    # The command sequence: CD to worktree, load prompt to clipboard, provide instructions, launch gemini.
     $command = "Set-Location -LiteralPath '$Path'; Get-Content -Raw -LiteralPath '$initFile' | Set-Clipboard; Clear-Host; Write-Host '=== $Label AGENT TERMINAL ===' -ForegroundColor Green; Write-Host 'Prompt has been copied to clipboard.' -ForegroundColor Cyan; Write-Host 'ACTION: Press CTRL+V followed by ENTER to begin.' -ForegroundColor Yellow; gemini -y"
 
     Start-Process powershell -ArgumentList "-NoExit", "-Command", $command
 }
 
-Write-Host "`n[Executor] Spawning Agent Alpha..." -ForegroundColor Green
-Launch-Agent -Path $alphaPath -Label "ALPHA"
+Write-Host "`n[Executor] Spawning Agent Swarm..." -ForegroundColor Green
+foreach ($agent in $AgentNames) {
+    $upperAgent = $agent.ToUpper()
+    Write-Host "Spawning Agent $upperAgent..." -ForegroundColor Green
+    Launch-Agent -Path $agentPaths[$agent] -Label $upperAgent
+}
 
-Write-Host "[Executor] Spawning Agent Beta..." -ForegroundColor Green
-Launch-Agent -Path $betaPath -Label "BETA"
-
-Write-Host "`n[SUCCESS] Orchestration complete. Agents are active in separate terminals." -ForegroundColor Green
+$agentCount = $AgentNames.Count
+Write-Host "`n[SUCCESS] Orchestration complete. $agentCount agents are active in separate terminals." -ForegroundColor Green

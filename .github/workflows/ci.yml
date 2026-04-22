@@ -2,7 +2,7 @@ name: Cross-Platform Build
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "AG_WT_1" ]
   pull_request:
     branches: [ "main", "master" ]
 

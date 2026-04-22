@@ -132,12 +132,17 @@ namespace CesiumMath {
 }
 
 namespace CesiumNetwork {
+    struct FetchBuffer { uint8_t* data; size_t size; size_t capacity; };
     static size_t wc(void* p, size_t s, size_t n, void* u) {
-        size_t r = s * n; auto* m = (std::vector<uint8_t>*)u;
-        size_t o = m->size(); m->resize(o + r);
-        memcpy(m->data() + o, p, r); return r;
+        size_t r = s * n;
+        FetchBuffer* fb = (FetchBuffer*)u;
+        if (fb->size + r > fb->capacity) return 0; // OOM protect
+        memcpy(fb->data + fb->size, p, r);
+        fb->size += r;
+        return r;
     }
-    static bool Fetch(const char* u, std::vector<uint8_t>& b, long* sc = 0, const char* bt = 0) {
+    static bool Fetch(const char* u, FetchBuffer& b, long* sc = 0, const char* bt = 0) {
+        b.size = 0;
         CURL* c = curl_easy_init(); if (!c) return 0;
         curl_easy_setopt(c, CURLOPT_URL, u); curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, wc); curl_easy_setopt(c, CURLOPT_WRITEDATA, &b);
         curl_easy_setopt(c, CURLOPT_TIMEOUT, 15L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L); curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
@@ -195,36 +200,37 @@ namespace CesiumGEPR {
             renderListCount = 0;
         }
 
-        static std::string resolveUri(const std::string& base, const std::string& uri, const char* key, const char* session, const char* token) {
-            std::string res;
-            std::string b = base; size_t q = b.find('?'); if (q != std::string::npos) b = b.substr(0, q);
-            if (uri.find("://") != std::string::npos) res = uri;
-            else if (uri.empty()) res = b;
+        static void resolveUri(char* outUrl, size_t outSize, const char* base, const char* uri, const char* key, const char* session, const char* token) {
+            char b[1024]; strncpy(b, base, 1023); b[1023] = '\0';
+            char* q = strchr(b, '?'); if (q) *q = '\0';
+            
+            if (strstr(uri, "://")) { strncpy(outUrl, uri, outSize-1); outUrl[outSize-1] = '\0'; }
+            else if (!uri[0]) { strncpy(outUrl, b, outSize-1); outUrl[outSize-1] = '\0'; }
             else if (uri[0] == '/') {
-                size_t hostEnd = b.find('/', 8);
-                if (hostEnd != std::string::npos) res = b.substr(0, hostEnd) + uri;
-                else res = b + uri;
+                char* hostEnd = strchr(b + 8, '/');
+                if (hostEnd) { size_t hostLen = hostEnd - b; snprintf(outUrl, outSize, "%.*s%s", (int)hostLen, b, uri); }
+                else { snprintf(outUrl, outSize, "%s%s", b, uri); }
             } else {
-                if (!b.empty() && b.back() != '/') b += '/';
-                res = b + uri;
+                size_t blen = strlen(b);
+                if (blen > 0 && b[blen-1] != '/') snprintf(outUrl, outSize, "%s/%s", b, uri);
+                else snprintf(outUrl, outSize, "%s%s", b, uri);
             }
 
-            if (key && key[0] && res.find("key=") == std::string::npos) {
-                res += (res.find('?') == std::string::npos ? "?" : "&");
-                res += "key="; res += key;
+            if (key && key[0] && !strstr(outUrl, "key=")) {
+                strncat(outUrl, strchr(outUrl, '?') ? "&key=" : "?key=", outSize - strlen(outUrl) - 1);
+                strncat(outUrl, key, outSize - strlen(outUrl) - 1);
             }
-            if (session && session[0] && res.find("session=") == std::string::npos) {
-                res += (res.find('?') == std::string::npos ? "?" : "&");
-                res += "session="; res += session;
+            if (session && session[0] && !strstr(outUrl, "session=")) {
+                strncat(outUrl, strchr(outUrl, '?') ? "&session=" : "?session=", outSize - strlen(outUrl) - 1);
+                strncat(outUrl, session, outSize - strlen(outUrl) - 1);
             }
-            if (token && token[0] && res.find("access_token=") == std::string::npos) {
-                res += (res.find('?') == std::string::npos ? "?" : "&");
-                res += "access_token="; res += token;
+            if (token && token[0] && !strstr(outUrl, "access_token=")) {
+                strncat(outUrl, strchr(outUrl, '?') ? "&access_token=" : "?access_token=", outSize - strlen(outUrl) - 1);
+                strncat(outUrl, token, outSize - strlen(outUrl) - 1);
             }
-            return res;
         }
 
-        void traverse(Tile* node, int depth) {
+        void traverse(Tile* node, int depth, bool parentRendered = false) {
             if (!node || depth > 100) return;
 
             // --- Dynamic Frustum Culling ---
@@ -264,11 +270,13 @@ namespace CesiumGEPR {
             }
             if (depth > 20) shouldRefine = false; // Safety clamp
 
+            bool traverseChildren = false;
             bool anyVisibleChild = false;
             bool allVisibleChildrenLoaded = true;
+
             if (shouldRefine && node->childrenCount > 0) {
+                traverseChildren = true;
                 for (uint32_t i=0; i<node->childrenCount; ++i) {
-                    // We don't know if children are culled yet, but we can check their boundingAABB
                     if (currentFrustum.intersects(node->children[i]->boundingAABB)) {
                         anyVisibleChild = true;
                         if (!node->children[i]->isLoaded) allVisibleChildrenLoaded = false;
@@ -277,47 +285,60 @@ namespace CesiumGEPR {
             }
 
             if (node->contentUri[0] != '\0' && !node->isLoaded && g_TilesLoadedThisFrame < 50) {
-                std::vector<uint8_t> buffer; long sc = 0;
-                std::string url = resolveUri(node->baseUrl, node->contentUri, apiKey, sessionToken, token);
+                static uint8_t fetchRawBuffer[16 * 1024 * 1024]; // 16MB max per tile
+                CesiumNetwork::FetchBuffer buffer = { fetchRawBuffer, 0, sizeof(fetchRawBuffer) };
+                long sc = 0;
+                char url[1024];
+                resolveUri(url, 1024, node->baseUrl, node->contentUri, apiKey, sessionToken, token);
                 if (depth < 6) { printf("[GEPR] Fetching (depth %d): %s\n", depth, node->contentUri); fflush(stdout); }
-                if (CesiumNetwork::Fetch(url.c_str(), buffer, &sc, token[0] ? token : nullptr)) {
+                if (CesiumNetwork::Fetch(url, buffer, &sc, token[0] ? token : nullptr)) {
                     g_TilesLoadedThisFrame++;
                     if (sc >= 200 && sc < 300) {
-                        if (buffer.size() > 0 && buffer[0] == '{') {
-                            auto j = AliceJson::parse(buffer.data(), buffer.size());
+                        if (buffer.size > 0 && buffer.data[0] == '{') {
+                            auto j = AliceJson::parse(buffer.data, buffer.size);
                             if (j.type != AliceJson::J_NULL) {
-                                std::string b = url; size_t q = b.find('?'); if (q != std::string::npos) b = b.substr(0, q);
-                                std::string nextBase = b.substr(0, b.find_last_of('/') + 1);
+                                char nextBase[1024];
+                                resolveUri(nextBase, 1024, node->baseUrl, node->contentUri, nullptr, nullptr, nullptr);
+                                char* q = strchr(nextBase, '?'); if (q) *q = '\0';
+                                char* lastSlash = strrchr(nextBase, '/');
+                                if (lastSlash) *(lastSlash + 1) = '\0';
                                 parseNode(node, j["root"], node->transform, nextBase, depth);
                             }
                         } else {
-                            node->payloadSize = buffer.size();
+                            node->payloadSize = buffer.size;
                             node->payload = (uint8_t*)Alice::g_Arena.allocate(node->payloadSize);
-                            if (node->payload) {
-                                memcpy(node->payload, buffer.data(), node->payloadSize);
-                            }
+                            if (node->payload) memcpy(node->payload, buffer.data, node->payloadSize);
                         }
                     }
                     node->isLoaded = true;
                 }
             }
 
-            bool shouldRenderParent = (node->isLoaded && node->payload);
-            if (anyVisibleChild && allVisibleChildrenLoaded) shouldRenderParent = false;
+            bool renderThis = (node->isLoaded && node->payload);
+            
+            // LOD Conflict Resolution
+            if (traverseChildren && anyVisibleChild && allVisibleChildrenLoaded) {
+                renderThis = false; // Children will fully replace this
+            }
+            if (parentRendered) {
+                renderThis = false; // Prevent Z-fighting when a parent is actively rendered
+            }
 
-            if (shouldRenderParent) {
+            if (renderThis) {
                 if (renderListCount < renderListCapacity) renderList[renderListCount++] = node;
             }
-            if (shouldRefine && node->childrenCount > 0) {
-                for (uint32_t i = 0; i < node->childrenCount; ++i) traverse(node->children[i], depth + 1);
+
+            if (traverseChildren) {
+                for (uint32_t i = 0; i < node->childrenCount; ++i) {
+                    traverse(node->children[i], depth + 1, parentRendered || renderThis);
+                }
             }
         }
 
-        void parseNode(Tile* tile, const AliceJson::JsonValue& jNode, DMat4 parentTransform, const std::string& currentBase, int depth) {
+        void parseNode(Tile* tile, const AliceJson::JsonValue& jNode, DMat4 parentTransform, const char* currentBase, int depth) {
             if (depth > 100) return;
             memset(tile, 0, sizeof(Tile));
-            strncpy(tile->baseUrl, currentBase.c_str(), 511);
-            tile->localAABB = AABB();
+            strncpy(tile->baseUrl, currentBase, 511); tile->baseUrl[511] = '\0';          tile->localAABB = AABB();
             tile->boundingAABB = AABB();
             DMat4 localTransform = dmat4_identity();
             if (jNode.contains("transform")) {
@@ -502,9 +523,10 @@ namespace CesiumGEPR {
         if (!Alice::ApiKeyReader::GetCesiumToken(ionToken, 2048)) { printf("[GEPR] No Cesium Token\n"); return; }
         
         char url[512]; snprintf(url, 512, "https://api.cesium.com/v1/assets/2275207/endpoint?access_token=%s", ionToken);
-        std::vector<uint8_t> handshake; long sc=0;
+        static uint8_t hsBuf[1024*1024]; CesiumNetwork::FetchBuffer handshake = { hsBuf, 0, sizeof(hsBuf) };
+        long sc=0;
         if (CesiumNetwork::Fetch(url, handshake, &sc)) {
-            auto jhs = AliceJson::parse(handshake.data(), handshake.size());
+            auto jhs = AliceJson::parse(handshake.data, handshake.size);
             std::string turl, atok;
             if (jhs.contains("url")) turl = jhs["url"].get<std::string>();
             else if (jhs.contains("options") && jhs["options"].contains("url")) turl = jhs["options"]["url"].get<std::string>();
@@ -518,9 +540,9 @@ namespace CesiumGEPR {
                     strncpy(g_Tileset.apiKey, key.c_str(), 255);
                 }
                 strncpy(g_Tileset.baseUrl, turl.substr(0, turl.find_last_of('/')+1).c_str(), 1023);
-                std::vector<uint8_t> ts;
+                static uint8_t tsBuf[16*1024*1024]; CesiumNetwork::FetchBuffer ts = { tsBuf, 0, sizeof(tsBuf) };
                 if (CesiumNetwork::Fetch(turl.c_str(), ts, &sc, g_Tileset.token[0] ? g_Tileset.token : nullptr)) {
-                    auto jts = AliceJson::parse(ts.data(), ts.size());
+                    auto jts = AliceJson::parse(ts.data, ts.size);
                     if (jts.type != AliceJson::J_NULL) {
                         g_Tileset.root = (Tile*)Alice::g_Arena.allocate(sizeof(Tile));
                         memset(g_Tileset.root, 0, sizeof(Tile));

@@ -862,8 +862,8 @@ void AliceViewer::run()
             static bool framed = false;
             if (!framed && m_sceneAABB.initialized)
             {
-                printf("[HEADLESS] Triggering Zoom Extents...\n");
-                frameScene(); 
+                printf("[HEADLESS] Triggering Zoom Extents... (DISABLED FOR CESIUM)\n");
+                // frameScene(); 
                 framed = true;
             }
         }

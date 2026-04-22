@@ -4,11 +4,11 @@
     "C_Cpp.default.compilerPath": "C:/Program Files/LLVM/bin/clang-cl.exe",
     "cmake.cmakePath": "C:/Program Files/CMake/bin/cmake.exe",
     "cmake.configureArgs": [
-        "-DCMAKE_TOOLCHAIN_FILE=C:/Users/shajay.b/Documents/REPOS/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "-DCMAKE_TOOLCHAIN_FILE=C:/Users/shajay.b.ZAHA-HADID/source/repos/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "-DCMAKE_C_COMPILER=C:/Program Files/LLVM/bin/clang-cl.exe",
         "-DCMAKE_CXX_COMPILER=C:/Program Files/LLVM/bin/clang-cl.exe",
         "-DCMAKE_LINKER=C:/Program Files/LLVM/bin/lld-link.exe",
-        "-DCMAKE_MAKE_PROGRAM=C:/Users/shajay.b/AppData/Local/Microsoft/WinGet/Packages/Ninja-build.Ninja_Microsoft.Winget.Source_8wekyb3d8bbwe/ninja.exe",
+        "-DCMAKE_MAKE_PROGRAM=C:/Users/shajay.b.ZAHA-HADID/AppData/Local/Microsoft/WinGet/Packages/Ninja-build.Ninja_Microsoft.Winget.Source_8wekyb3d8bbwe/ninja.exe",
         "-DVCPKG_OVERLAY_PORTS=${workspaceFolder}/vcpkg-overlay-ports/ports",
         "-DVCPKG_TARGET_TRIPLET=x64-windows"
     ]

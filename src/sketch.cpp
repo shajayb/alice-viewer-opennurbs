@@ -1,14 +1,15 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "GLBLoader.h"
-
 #include "AliceMemory.h"
 namespace Alice { LinearArena g_Arena; }
 
 // Active Test
-#define STENCIL_VERIFICATION_TEST_RUN_TEST
-#include "StencilVerificationTest.h"
+#define CESIUM_GEPR_RUN_TEST
+#include "CesiumGEPR.h"
+
+//#define STENCIL_VERIFICATION_TEST_RUN_TEST
+//#include "StencilVerificationTest.h"
 
 //#define CACHED_MESH_COMPARISON_TEST_RUN_TEST
 //#include "CachedMeshComparisonTest.h"

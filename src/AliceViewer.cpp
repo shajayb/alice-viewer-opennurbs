@@ -17,6 +17,8 @@
 #include <stb_image_write.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+#define CGLTF_IMPLEMENTATION
+#include "cgltf.h"
 
 #include "AliceMemory.h"
 namespace Alice { extern LinearArena g_Arena; }
@@ -636,10 +638,14 @@ int AliceViewer::init(int argc, char** argv)
     {
         return 1;
     }
+    glfwSetErrorCallback([](int error, const char* description) {
+        printf("[GLFW ERROR %d] %s\n", error, description);
+    });
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4); 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, msaaSamples);
+    if (m_headlessCapture) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     window = glfwCreateWindow(1280, 720, "ALICE VIEWER 2.0 - CAD RENDERING PIPELINE", 0, 0);
     if (!window) 
     {
@@ -652,7 +658,14 @@ int AliceViewer::init(int argc, char** argv)
         }
     }
     glfwMakeContextCurrent(window); 
-    gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+    printf("[AliceViewer] Loading GLAD...\n"); fflush(stdout);
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+    {
+        printf("[FATAL] GLAD Loading Failed\n");
+        return 1;
+    }
+    printf("[AliceViewer] GLAD Loaded. Vendor: %s, Renderer: %s, Version: %s\n", glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION));
+    fflush(stdout);
     
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
     glEnable(GL_DEPTH_TEST);
@@ -766,7 +779,9 @@ int AliceViewer::init(int argc, char** argv)
 
 void AliceViewer::run()
 {
+    printf("[AliceViewer] run() started\n"); fflush(stdout);
     float lastTime = (float)glfwGetTime();
+    if (!window) { printf("[AliceViewer] window is NULL, skipping loop\n"); fflush(stdout); }
     while (window && !glfwWindowShouldClose(window))
     {
 #ifdef ALICE_TEST_MODE

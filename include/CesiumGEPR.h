@@ -284,13 +284,19 @@ namespace CesiumGEPR {
                 }
             }
 
-            if (node->contentUri[0] != '\0' && !node->isLoaded && g_TilesLoadedThisFrame < 50) {
+            bool skipPayload = false;
+            if (shouldRefine && node->childrenCount > 0 && !strstr(node->contentUri, ".json")) {
+                skipPayload = true; // Aggressively skip straight to the last available level
+                node->isLoaded = true; // Mark as loaded so parent LOD can be released
+            }
+
+            if (!skipPayload && node->contentUri[0] != '\0' && !node->isLoaded && g_TilesLoadedThisFrame < 2) {
                 static uint8_t fetchRawBuffer[16 * 1024 * 1024]; // 16MB max per tile
                 CesiumNetwork::FetchBuffer buffer = { fetchRawBuffer, 0, sizeof(fetchRawBuffer) };
                 long sc = 0;
                 char url[1024];
                 resolveUri(url, 1024, node->baseUrl, node->contentUri, apiKey, sessionToken, token);
-                if (depth < 6) { printf("[GEPR] Fetching (depth %d): %s\n", depth, node->contentUri); fflush(stdout); }
+                if (depth < 6) { printf("[GEPR] Fetching (depth %d)...\n", depth); fflush(stdout); }
                 if (CesiumNetwork::Fetch(url, buffer, &sc, token[0] ? token : nullptr)) {
                     g_TilesLoadedThisFrame++;
                     if (sc >= 200 && sc < 300) {

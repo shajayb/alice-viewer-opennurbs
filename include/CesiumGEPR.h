@@ -14,6 +14,7 @@
 #include <cmath>
 #include <algorithm>
 #include <fstream>
+#include <functional>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -148,9 +149,69 @@ namespace CesiumNetwork {
         curl_easy_setopt(c, CURLOPT_TIMEOUT, 15L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L); curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(c, CURLOPT_USERAGENT, "Alice/1.0"); curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
         struct curl_slist* headers = NULL;
-        if (bt) { char auth[2048]; snprintf(auth, 2048, "Authorization: Bearer %s", bt); headers = curl_slist_append(headers, auth); curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers); }
+        if (bt && bt[0]) { char auth[2048]; snprintf(auth, 2048, "Authorization: Bearer %s", bt); headers = curl_slist_append(headers, auth); curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers); }
         CURLcode r = curl_easy_perform(c); if (sc) curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, sc);
         if (headers) curl_slist_free_all(headers); curl_easy_cleanup(c); return r == CURLE_OK;
+    }
+
+    struct AsyncRequest {
+        CURL* handle; curl_slist* headers;
+        uint8_t* bufferData; size_t bufferCapacity; FetchBuffer buffer;
+        std::function<void(long, const FetchBuffer&)> callback;
+    };
+    static CURLM* g_Multi = nullptr;
+    static std::vector<AsyncRequest*> g_AsyncRequests;
+
+    static void FetchAsync(const char* u, size_t maxBytes, const char* bt, std::function<void(long, const FetchBuffer&)> cb) {
+        if (!g_Multi) g_Multi = curl_multi_init();
+        AsyncRequest* req = new AsyncRequest();
+        req->bufferData = (uint8_t*)malloc(maxBytes);
+        req->bufferCapacity = maxBytes;
+        req->buffer = { req->bufferData, 0, maxBytes };
+        req->callback = cb;
+        req->handle = curl_easy_init();
+        
+        curl_easy_setopt(req->handle, CURLOPT_URL, u);
+        curl_easy_setopt(req->handle, CURLOPT_WRITEFUNCTION, wc);
+        curl_easy_setopt(req->handle, CURLOPT_WRITEDATA, &req->buffer);
+        curl_easy_setopt(req->handle, CURLOPT_TIMEOUT, 15L);
+        curl_easy_setopt(req->handle, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(req->handle, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(req->handle, CURLOPT_USERAGENT, "Alice/1.0");
+        curl_easy_setopt(req->handle, CURLOPT_ACCEPT_ENCODING, "");
+        req->headers = NULL;
+        if (bt && bt[0]) {
+            char auth[2048]; snprintf(auth, 2048, "Authorization: Bearer %s", bt);
+            req->headers = curl_slist_append(req->headers, auth);
+            curl_easy_setopt(req->handle, CURLOPT_HTTPHEADER, req->headers);
+        }
+        curl_easy_setopt(req->handle, CURLOPT_PRIVATE, req);
+        curl_multi_add_handle(g_Multi, req->handle);
+        g_AsyncRequests.push_back(req);
+    }
+
+    static void UpdateAsync() {
+        if (!g_Multi) return;
+        int still_running = 0;
+        curl_multi_perform(g_Multi, &still_running);
+        int msgs_left = 0; CURLMsg* msg;
+        while ((msg = curl_multi_info_read(g_Multi, &msgs_left))) {
+            if (msg->msg == CURLMSG_DONE) {
+                CURL* e = msg->easy_handle;
+                AsyncRequest* req = nullptr;
+                curl_easy_getinfo(e, CURLINFO_PRIVATE, &req);
+                if (req) {
+                    long sc = 0; curl_easy_getinfo(e, CURLINFO_RESPONSE_CODE, &sc);
+                    req->callback(sc, req->buffer);
+                    if (req->headers) curl_slist_free_all(req->headers);
+                    curl_multi_remove_handle(g_Multi, e);
+                    curl_easy_cleanup(e); free(req->bufferData);
+                    auto it = std::find(g_AsyncRequests.begin(), g_AsyncRequests.end(), req);
+                    if (it != g_AsyncRequests.end()) g_AsyncRequests.erase(it);
+                    delete req;
+                }
+            }
+        }
     }
 }
 
@@ -163,11 +224,12 @@ namespace CesiumGEPR {
         DMat4 transform;
         char contentUri[512];
         char baseUrl[512];
+        bool isLoaded;
+        bool isLoading; // Async protection
         Tile** children;
         uint32_t childrenCount;
         uint8_t* payload;
         size_t payloadSize;
-        bool isLoaded;
         bool isCulled;
         double radius;
         double centerDist;
@@ -290,33 +352,40 @@ namespace CesiumGEPR {
                 node->isLoaded = true; // Mark as loaded so parent LOD can be released
             }
 
-            if (!skipPayload && node->contentUri[0] != '\0' && !node->isLoaded && g_TilesLoadedThisFrame < 2) {
-                static uint8_t fetchRawBuffer[16 * 1024 * 1024]; // 16MB max per tile
-                CesiumNetwork::FetchBuffer buffer = { fetchRawBuffer, 0, sizeof(fetchRawBuffer) };
-                long sc = 0;
-                char url[1024];
-                resolveUri(url, 1024, node->baseUrl, node->contentUri, apiKey, sessionToken, token);
-                if (depth < 6) { printf("[GEPR] Fetching (depth %d)...\n", depth); fflush(stdout); }
-                if (CesiumNetwork::Fetch(url, buffer, &sc, token[0] ? token : nullptr)) {
-                    g_TilesLoadedThisFrame++;
-                    if (sc >= 200 && sc < 300) {
-                        if (buffer.size > 0 && buffer.data[0] == '{') {
-                            auto j = AliceJson::parse(buffer.data, buffer.size);
-                            if (j.type != AliceJson::J_NULL) {
-                                char nextBase[1024];
-                                resolveUri(nextBase, 1024, node->baseUrl, node->contentUri, nullptr, nullptr, nullptr);
-                                char* q = strchr(nextBase, '?'); if (q) *q = '\0';
-                                char* lastSlash = strrchr(nextBase, '/');
-                                if (lastSlash) *(lastSlash + 1) = '\0';
-                                parseNode(node, j["root"], node->transform, nextBase, depth);
-                            }
-                        } else {
-                            node->payloadSize = buffer.size;
-                            node->payload = (uint8_t*)Alice::g_Arena.allocate(node->payloadSize);
-                            if (node->payload) memcpy(node->payload, buffer.data, node->payloadSize);
-                        }
+            if (!skipPayload && node->contentUri[0] != '\0' && !node->isLoaded && !node->isLoading) {
+                if (CesiumNetwork::g_AsyncRequests.size() < 20) {
+                    node->isLoading = true;
+                    char url[1024];
+                    resolveUri(url, 1024, node->baseUrl, node->contentUri, apiKey, sessionToken, token);
+                    if (depth < 6) { printf("[GEPR] Async Fetch (depth %d)...\n", depth); fflush(stdout); }
+                    
+                    std::string nextBaseStr;
+                    {
+                        char nextBase[1024];
+                        resolveUri(nextBase, 1024, node->baseUrl, node->contentUri, nullptr, nullptr, nullptr);
+                        char* q = strchr(nextBase, '?'); if (q) *q = '\0';
+                        char* lastSlash = strrchr(nextBase, '/');
+                        if (lastSlash) *(lastSlash + 1) = '\0';
+                        nextBaseStr = nextBase;
                     }
-                    node->isLoaded = true;
+
+                    CesiumNetwork::FetchAsync(url, 16 * 1024 * 1024, token[0] ? token : nullptr, 
+                    [this, node, nextBaseStr, depth](long sc, const CesiumNetwork::FetchBuffer& buffer) {
+                        if (sc >= 200 && sc < 300) {
+                            if (buffer.size > 0 && buffer.data[0] == '{') {
+                                auto j = AliceJson::parse(buffer.data, buffer.size);
+                                if (j.type != AliceJson::J_NULL) {
+                                    parseNode(node, j["root"], node->transform, nextBaseStr.c_str(), depth);
+                                }
+                            } else {
+                                node->payloadSize = buffer.size;
+                                node->payload = (uint8_t*)Alice::g_Arena.allocate(node->payloadSize);
+                                if (node->payload) memcpy(node->payload, buffer.data, node->payloadSize);
+                            }
+                        }
+                        node->isLoaded = true;
+                        node->isLoading = false;
+                    });
                 }
             }
 
@@ -561,6 +630,7 @@ namespace CesiumGEPR {
     }
 
     static void update(float dt) {
+        CesiumNetwork::UpdateAsync();
         AliceViewer* av = AliceViewer::instance();
         if (g_FrameCount == 0) {
             av->camera.focusPoint = {0,0,0}; av->camera.distance = 500.0f; av->camera.pitch = 0.2f; av->camera.yaw = 0.0f;
@@ -587,7 +657,6 @@ namespace CesiumGEPR {
 
     static void draw() {
         uint32_t frameIdx = g_FrameCount++;
-        if (g_FrameCount > 1000) { printf("[GEPR] Timeout. Exiting.\n"); exit(0); }
         AliceViewer* av = AliceViewer::instance();
         
         // --- AABB Accumulation ---

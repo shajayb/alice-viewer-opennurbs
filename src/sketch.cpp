@@ -1,3 +1,12 @@
+#define ALICE_TEST_CESIUM_GEPR
+
+#ifdef ALICE_TEST_CESIUM_GEPR
+#define CESIUM_GEPR_RUN_TEST
+#include "AliceMemory.h"
+namespace Alice { LinearArena g_Arena; }
+#include "CesiumGEPR.h"
+#else
+
 #include "AliceViewer.h"
 #include "AliceMemory.h"
 #include <glad/glad.h>
@@ -289,3 +298,4 @@ extern "C" {
     void mousePress(int button, int state, int x, int y) {}
     void mouseMotion(int x, int y) {}
 }
+#endif // ALICE_TEST_CESIUM_GEPR

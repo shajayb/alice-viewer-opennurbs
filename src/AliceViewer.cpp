@@ -627,7 +627,7 @@ V3 AliceViewer::screenToWorld(int x, int y, float planeZ)
 
 int AliceViewer::init(int argc, char** argv)
 {
-    if (!Alice::g_Arena.memory) Alice::g_Arena.init(512 * 1024 * 1024); // 512MB for 4K stencils
+    if (!Alice::g_Arena.memory) Alice::g_Arena.init(4096ULL * 1024 * 1024); // 4GB for Cesium Tiles & CAD
     
     for (int i = 1; i < argc; ++i)
     {

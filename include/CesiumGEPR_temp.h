@@ -218,59 +218,7 @@ namespace CesiumNetwork {
 namespace CesiumGEPR {
     using namespace CesiumMath;
 
-    static uint32_t g_TotalLoadedTiles = 0;
-    static uint32_t g_TotalVRAMAllocations = 0;
-    static uint32_t g_MaxDepthReached = 0;
-
-    struct RenderResources { GLuint vao, vbo, ebo; int count; bool inUse; };
-
-    struct PayloadBlock { uint8_t* data; bool inUse; };
-    static const int PAYLOAD_POOL_SIZE = 2500;
-    static const int RESOURCE_POOL_SIZE = 5000;
-    static const size_t PAYLOAD_BLOCK_SIZE = 4 * 1024 * 1024; // 4MB per block
-    
-    static PayloadBlock g_PayloadPool[PAYLOAD_POOL_SIZE];
-    static RenderResources g_ResourcePool[RESOURCE_POOL_SIZE];
-
-    static RenderResources* allocResource() {
-        for (int i=0; i<RESOURCE_POOL_SIZE; ++i) {
-            if (!g_ResourcePool[i].inUse) {
-                g_ResourcePool[i].inUse = true;
-                memset(&g_ResourcePool[i], 0, sizeof(RenderResources));
-                g_ResourcePool[i].inUse = true;
-                return &g_ResourcePool[i];
-            }
-        }
-        return nullptr;
-    }
-    static void freeResource(RenderResources* res) {
-        if (!res) return;
-        if (res->vao) glDeleteVertexArrays(1, &res->vao);
-        if (res->vbo) glDeleteBuffers(1, &res->vbo);
-        if (res->ebo) glDeleteBuffers(1, &res->ebo);
-        res->vao = res->vbo = res->ebo = 0;
-        res->inUse = false;
-    }
-
-    static uint8_t* allocPayload(size_t size) {
-        if (size > PAYLOAD_BLOCK_SIZE) return nullptr;
-        for (int i=0; i<PAYLOAD_POOL_SIZE; ++i) {
-            if (!g_PayloadPool[i].inUse) {
-                g_PayloadPool[i].inUse = true;
-                return g_PayloadPool[i].data;
-            }
-        }
-        return nullptr;
-    }
-    static void freePayload(uint8_t* p) {
-        if (!p) return;
-        for (int i=0; i<PAYLOAD_POOL_SIZE; ++i) {
-            if (g_PayloadPool[i].data == p) {
-                g_PayloadPool[i].inUse = false;
-                return;
-            }
-        }
-    }
+    struct RenderResources { GLuint vao, vbo, ebo; int count; };
 
     struct Tile {
         DMat4 transform;
@@ -289,14 +237,11 @@ namespace CesiumGEPR {
         AABB boundingAABB;
         AABB localAABB;
         RenderResources* rendererResources;
-        uint32_t lastAccessedFrame;
     };
 
     static uint32_t g_TilesLoadedThisFrame = 0;
     static DVec3 g_OriginEcef;
     static double g_EnuMatrix[16];
-
-    static uint32_t g_FrameCount = 0;
 
     struct Tileset {
         Tile* root;
@@ -347,35 +292,8 @@ namespace CesiumGEPR {
             }
         }
 
-        void evictStaleTiles(Tile* node) {
-            if (!node) return;
-            if (node->isLoaded && !node->isLoading && node->lastAccessedFrame < g_FrameCount - 10) {
-                if (node->rendererResources || node->payload) {
-                    static uint32_t lastLogFrame = 0;
-                    if (g_FrameCount > lastLogFrame + 100) {
-                        printf("[GC] Evicting tile (Last: %u, Cur: %u)\n", node->lastAccessedFrame, g_FrameCount);
-                        lastLogFrame = g_FrameCount;
-                    }
-                    if (node->rendererResources) {
-                        freeResource(node->rendererResources);
-                        node->rendererResources = nullptr;
-                    }
-                    if (node->payload) {
-                        freePayload(node->payload);
-                        node->payload = nullptr;
-                    }
-                    node->isLoaded = false;
-                }
-            }
-            for (uint32_t i = 0; i < node->childrenCount; ++i) {
-                evictStaleTiles(node->children[i]);
-            }
-        }
-
-        int traverse(Tile* node, int depth) {
-            if (!node || depth > 100) return 1;
-            node->lastAccessedFrame = g_FrameCount;
-            if (depth > (int)g_MaxDepthReached) g_MaxDepthReached = (uint32_t)depth;
+        void traverse(Tile* node, int depth, bool parentRendered = false) {
+            if (!node || depth > 100) return;
 
             // --- Dynamic Frustum Culling ---
             AABB testBox = node->localAABB.initialized ? node->localAABB : node->boundingAABB;
@@ -386,7 +304,7 @@ namespace CesiumGEPR {
                 float d2 = testBox.center().x * testBox.center().x + testBox.center().y * testBox.center().y + testBox.center().z * testBox.center().z;
                 if (d2 < 40000.0f) visible = true; // 200m radius
             }
-            if (!visible) return 1;
+            if (!visible) return;
 
             // --- Screen-Space Error Calculation ---
             bool shouldRefine = false;
@@ -408,26 +326,33 @@ namespace CesiumGEPR {
                 errorOffsetNdc.x /= errorOffsetNdc.w; errorOffsetNdc.y /= errorOffsetNdc.w; errorOffsetNdc.z /= errorOffsetNdc.w; errorOffsetNdc.w = 1.0;
                 double ndcError = errorOffsetNdc.y - centerNdc.y;
                 sse = std::abs(ndcError) * h / 2.0;
-
-                double targetSSE = 0.2; // Extreme detail for the statue
-                if (testBox.initialized) {
-                    float distToOrigin = sqrtf(testBox.center().x * testBox.center().x + testBox.center().y * testBox.center().y + testBox.center().z * testBox.center().z);
-                    if (distToOrigin > 150.0f) targetSSE = 100.0; // Coarse background
-                }
-                if (sse > targetSSE) shouldRefine = true;
+                if (sse > 16.0) shouldRefine = true;
             } else if (node->childrenCount > 0) {
                 shouldRefine = true;
             }
+            if (depth > 20) shouldRefine = false; // Safety clamp
 
-            if (testBox.initialized) {
-                float distToOrigin = sqrtf(testBox.center().x * testBox.center().x + testBox.center().y * testBox.center().y + testBox.center().z * testBox.center().z);
-                if (distToOrigin < 50.0f && depth < 25) shouldRefine = true;
+            bool traverseChildren = false;
+            bool anyVisibleChild = false;
+            bool allVisibleChildrenLoaded = true;
+
+            if (shouldRefine && node->childrenCount > 0) {
+                traverseChildren = true;
+                for (uint32_t i=0; i<node->childrenCount; ++i) {
+                    if (currentFrustum.intersects(node->children[i]->boundingAABB)) {
+                        anyVisibleChild = true;
+                        if (!node->children[i]->isLoaded) allVisibleChildrenLoaded = false;
+                    }
+                }
             }
 
-            if (depth > 30) shouldRefine = false; // Safety clamp
+            bool skipPayload = false;
+            if (shouldRefine && node->childrenCount > 0 && !strstr(node->contentUri, ".json")) {
+                skipPayload = true; // Aggressively skip straight to the last available level
+                node->isLoaded = true; // Mark as loaded so parent LOD can be released
+            }
 
-            // Trigger fetch if not loaded
-            if (node->contentUri[0] != '\0' && !node->isLoaded && !node->isLoading) {
+            if (!skipPayload && node->contentUri[0] != '\0' && !node->isLoaded && !node->isLoading) {
                 if (CesiumNetwork::g_AsyncRequests.size() < 20) {
                     node->isLoading = true;
                     char url[1024];
@@ -454,11 +379,8 @@ namespace CesiumGEPR {
                                 }
                             } else {
                                 node->payloadSize = buffer.size;
-                                node->payload = allocPayload(node->payloadSize);
-                                if (node->payload) {
-                                    memcpy(node->payload, buffer.data, node->payloadSize);
-                                    g_TotalLoadedTiles++;
-                                }
+                                node->payload = (uint8_t*)Alice::g_Arena.allocate(node->payloadSize);
+                                if (node->payload) memcpy(node->payload, buffer.data, node->payloadSize);
                             }
                         }
                         node->isLoaded = true;
@@ -467,20 +389,25 @@ namespace CesiumGEPR {
                 }
             }
 
-            if (shouldRefine && node->childrenCount > 0) {
-                int allHandled = 1;
-                for (uint32_t i = 0; i < node->childrenCount; ++i) {
-                    if (traverse(node->children[i], depth + 1) == 0) allHandled = 0;
-                }
-                if (allHandled) return 1;
+            bool renderThis = (node->isLoaded && node->payload);
+            
+            // LOD Conflict Resolution
+            if (traverseChildren && anyVisibleChild && allVisibleChildrenLoaded) {
+                renderThis = false; // Children will fully replace this
+            }
+            if (parentRendered) {
+                renderThis = false; // Prevent Z-fighting when a parent is actively rendered
             }
 
-            if (node->isLoaded && node->payload) {
+            if (renderThis) {
                 if (renderListCount < renderListCapacity) renderList[renderListCount++] = node;
-                return 1;
             }
 
-            return 0;
+            if (traverseChildren) {
+                for (uint32_t i = 0; i < node->childrenCount; ++i) {
+                    traverse(node->children[i], depth + 1, parentRendered || renderThis);
+                }
+            }
         }
 
         void parseNode(Tile* tile, const AliceJson::JsonValue& jNode, DMat4 parentTransform, const char* currentBase, int depth) {
@@ -587,6 +514,7 @@ namespace CesiumGEPR {
 
     static Tileset g_Tileset;
     static GLuint g_Program = 0;
+    static uint32_t g_FrameCount = 0;
     static uint64_t g_TotalFrustumVertices = 0;
     static float* g_ScratchVbo = nullptr;
     static uint32_t* g_ScratchEbo = nullptr;
@@ -596,7 +524,7 @@ namespace CesiumGEPR {
 
     static void initShaders() {
         const char* vs = "#version 400 core\nlayout(location=0)in vec3 p;uniform mat4 uMVP;uniform mat4 uV;out vec3 vVP;void main(){vVP=(uV*vec4(p,1.0)).xyz;gl_Position=uMVP*vec4(p,1.0);}";
-        const char* fs = "#version 400 core\nout vec4 f;in vec3 vVP;void main(){vec3 N=normalize(cross(dFdx(vVP),dFdy(vVP)));if(!gl_FrontFacing)N=-N;float d=max(dot(N,normalize(vec3(0.5,0.8,0.6))),0.0);vec3 c=vec3(0.7)*d+vec3(0.15);if(fract(vVP.x*0.1)<0.05||fract(vVP.y*0.1)<0.05)c*=0.8;f=vec4(c,1.0);}";
+        const char* fs = "#version 400 core\nout vec4 f;in vec3 vVP;void main(){vec3 N=normalize(cross(dFdx(vVP),dFdy(vVP)));if(!gl_FrontFacing)N=-N;float d=max(dot(N,normalize(vec3(0.5,0.8,0.6))),0.0);f=vec4(vec3(0.85)*d + vec3(0.15),1.0);}";
         GLuint v=glCreateShader(GL_VERTEX_SHADER); glShaderSource(v,1,&vs,0); glCompileShader(v);
         GLuint f=glCreateShader(GL_FRAGMENT_SHADER); glShaderSource(f,1,&fs,0); glCompileShader(f);
         g_Program=glCreateProgram(); glAttachShader(g_Program,v); glAttachShader(g_Program,f); glLinkProgram(g_Program);
@@ -658,15 +586,6 @@ namespace CesiumGEPR {
     static void setup() {
         printf("[GEPR] setup started\n"); fflush(stdout);
         if (!Alice::g_Arena.memory) Alice::g_Arena.init(2048ULL*1024ULL*1024ULL); 
-        
-        // Initialize Pools
-        for (int i=0; i<PAYLOAD_POOL_SIZE; ++i) {
-            g_PayloadPool[i].data = (uint8_t*)malloc(PAYLOAD_BLOCK_SIZE);
-            if (!g_PayloadPool[i].data) { printf("[GEPR] FATAL: Payload Pool Allocation Failed\n"); exit(1); }
-            g_PayloadPool[i].inUse = false;
-        }
-        for (int i=0; i<RESOURCE_POOL_SIZE; ++i) g_ResourcePool[i].inUse = false;
-
         initShaders(); g_Tileset.init();
         
         if (!g_ScratchVbo) g_ScratchVbo = (float*)malloc(120000*6*4);
@@ -713,13 +632,9 @@ namespace CesiumGEPR {
     static void update(float dt) {
         CesiumNetwork::UpdateAsync();
         AliceViewer* av = AliceViewer::instance();
-        
         if (g_FrameCount == 0) {
-            av->camera.focusPoint = {0, 0, 35}; 
-            av->camera.distance = 8.0f;
-            av->camera.pitch = 0.4f;
-            av->camera.yaw = 0.0f;
-            printf("[GEPR] Camera Reset to Macro Focus\n"); fflush(stdout);
+            av->camera.focusPoint = {0,0,0}; av->camera.distance = 500.0f; av->camera.pitch = 0.2f; av->camera.yaw = 0.0f;
+            printf("[GEPR] Camera Reset: distance=500, pitch=0.2\n"); fflush(stdout);
         }
 
         // --- Frustum Extraction ---
@@ -743,9 +658,6 @@ namespace CesiumGEPR {
     static void draw() {
         uint32_t frameIdx = g_FrameCount++;
         AliceViewer* av = AliceViewer::instance();
-
-        // Evict stale tiles
-        if (g_Tileset.root) g_Tileset.evictStaleTiles(g_Tileset.root);
         
         // --- AABB Accumulation ---
         av->m_sceneAABB = AABB();
@@ -759,7 +671,7 @@ namespace CesiumGEPR {
 
         av->backColor = {0,0,0};
         if (frameIdx % 20 == 0) { printf("[GEPR] Frame %u, RenderList: %u\n", frameIdx, g_Tileset.renderListCount); fflush(stdout); }
-        glClearColor(0.0f, 1.0f, 0.0f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         glEnable(GL_DEPTH_TEST); glDepthFunc(GL_GEQUAL);
         int w, h; glfwGetFramebufferSize(av->window, &w, &h);
         M4 v = av->camera.getViewMatrix(), p = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 0.1f);
@@ -783,7 +695,7 @@ namespace CesiumGEPR {
                         if (ft.contains("RTC_CENTER")) {
                             auto rtc = ft["RTC_CENTER"];
                             rtcCenter = {(double)rtc[0], (double)rtc[1], (double)rtc[2]};
-                            if (frameIdx % 1000 == 0) printf("[DEBUG] RTC_CENTER = %f, %f, %f\n", rtcCenter.x, rtcCenter.y, rtcCenter.z);
+                            printf("[DEBUG] RTC_CENTER = %f, %f, %f\n", rtcCenter.x, rtcCenter.y, rtcCenter.z);
                         }
                     }
                     uint32_t headerLen = 28 + ftj + ftb + btj + btb;
@@ -791,8 +703,9 @@ namespace CesiumGEPR {
                 }
                 if (cgltf_parse(&opt, glbPayload, glbSize, &data) == cgltf_result_success) {
                     cgltf_load_buffers(&opt, data, 0);
-                    RenderResources* res = allocResource();
+                    RenderResources* res = (RenderResources*)Alice::g_Arena.allocate(sizeof(RenderResources));
                     if (res && g_ScratchVbo && g_ScratchEbo) {
+                        memset(res, 0, sizeof(RenderResources));
                         uint32_t vIdx=0, eIdx=0;
                         if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
                         for (uint32_t vIdx2 = 0; vIdx2 < vIdx; ++vIdx2) t->localAABB.expand({g_ScratchVbo[vIdx2*6+0], g_ScratchVbo[vIdx2*6+1], g_ScratchVbo[vIdx2*6+2]});
@@ -801,38 +714,29 @@ namespace CesiumGEPR {
                         glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, 0);
                         glGenBuffers(1, &res->ebo); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, res->ebo); glBufferData(GL_ELEMENT_ARRAY_BUFFER, eIdx*4, g_ScratchEbo, GL_STATIC_DRAW);
                         res->count = eIdx; t->rendererResources = res;
-                        g_TotalVRAMAllocations++;
                     }
                     cgltf_free(data);
                 }
             }
             if (t->rendererResources) { glBindVertexArray(t->rendererResources->vao); glDrawElements(GL_TRIANGLES, t->rendererResources->count, GL_UNSIGNED_INT, 0); g_TotalFrustumVertices += (uint64_t)t->rendererResources->count; }
         }
-
-        if (frameIdx % 100 == 0) {
-            uint32_t activePayloads = 0; for(int i=0; i<PAYLOAD_POOL_SIZE; ++i) if(g_PayloadPool[i].inUse) activePayloads++;
-            uint32_t activeResources = 0; for(int i=0; i<RESOURCE_POOL_SIZE; ++i) if(g_ResourcePool[i].inUse) activeResources++;
-            printf("[GEPR] Frame %u, Depth: %u, RenderList: %u, Payloads: %u/%d, Resources: %u/%d\n", frameIdx, g_MaxDepthReached, g_Tileset.renderListCount, activePayloads, PAYLOAD_POOL_SIZE, activeResources, RESOURCE_POOL_SIZE);
-            fflush(stdout);
-        }
-
-        if (frameIdx == 2000) {
+        // Removed frameScene() call to maintain focus on the statue
+        if (frameIdx == 600) {
             unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
-            stbi_flip_vertically_on_write(1);
-            stbi_write_png("production_framebuffer_macro_final.png", w, h, 3, px, w*3);
-            free(px);
-            uint32_t activePayloads = 0; for(int i=0; i<PAYLOAD_POOL_SIZE; ++i) if(g_PayloadPool[i].inUse) activePayloads++;
-            printf("[STRESS_TEST] Final Depth: %u, Payloads: %u/%d\n", g_MaxDepthReached, activePayloads, PAYLOAD_POOL_SIZE);
-            fflush(stdout);
+            long long hits = 0; for(int i=0; i<w*h; ++i) if(px[i*3]>15||px[i*3+1]>15||px[i*3+2]>15) hits++;
+            printf("frustum_vertex_count: %llu\n", g_TotalFrustumVertices);
+            printf("pixel_coverage_percentage: %.2f%%\n", (double)hits/(w*h)*100.0);
+            stbi_flip_vertically_on_write(1); stbi_write_png("production_framebuffer.png", w, h, 3, px, w*3);
+            printf("[GEPR] Mission Accomplished. Exiting.\n"); fflush(stdout);
+            free(px); exit(0);
         }
     }
 }
 
-#ifdef ALICE_TEST_CESIUM_GEPR
+#ifdef CESIUM_GEPR_RUN_TEST
 extern "C" void setup() { CesiumGEPR::setup(); }
 extern "C" void update(float dt) { CesiumGEPR::update(dt); }
 extern "C" void draw() { CesiumGEPR::draw(); }
 #endif
 
 #endif // CESIUM_GEPR_H
-

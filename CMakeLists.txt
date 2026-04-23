@@ -71,3 +71,20 @@ else()
     target_link_libraries(AliceViewer PRIVATE -Wl,--start-group opennurbs::opennurbs ZLIB::ZLIB -Wl,--end-group)
     set_target_properties(AliceViewer PROPERTIES LINK_FLAGS "-Wl,--allow-multiple-definition -Wl,--defsym,z_deflate=deflate -Wl,--defsym,z_inflate=inflate -Wl,--defsym,z_deflateEnd=deflateEnd -Wl,--defsym,z_inflateEnd=inflateEnd -Wl,--defsym,z_deflateInit_=deflateInit_ -Wl,--defsym,z_inflateInit_=inflateInit_ -Wl,--defsym,z_crc32=crc32 -Wl,--defsym,z_adler32=adler32 -Wl,--defsym,z_inflateReset=inflateReset")
 endif()
+
+# Auto-generate convenience batch scripts into the build directory
+if(WIN32)
+    file(WRITE ${CMAKE_BINARY_DIR}/temp_build.bat
+        "@echo off\n"
+        "call \"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Auxiliary\\Build\\vcvars64.bat\"\n"
+        "ninja -C .\n"
+    )
+
+    file(WRITE ${CMAKE_BINARY_DIR}/run_all.bat
+        "@echo off\n"
+        "set \"PATH=C:\\Program Files\\LLVM\\bin;%PATH%\"\n"
+        "call \"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Auxiliary\\Build\\vcvars64.bat\"\n"
+        "ninja -C .\n"
+        ".\\bin\\AliceViewer.exe --headless --headless-capture > executor_console.log 2>&1\n"
+    )
+endif()

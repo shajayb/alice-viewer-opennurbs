@@ -273,6 +273,11 @@ void drawPoint(V3 p)
     g_pointBatch.add(p, g_currentVertexColor); 
 }
 
+extern "C" void aliceTriangleBatchFlush()
+{
+    g_triangleBatch.flush();
+}
+
 extern "C" void drawTriangle(V3 a, V3 b, V3 c)
 {
     g_triangleBatch.add(a, g_currentVertexColor);
@@ -874,14 +879,19 @@ void AliceViewer::run()
         if (w > 0 && h > 0) 
         {
             glViewport(0, 0, w, h);
-            M4 view = camera.getViewMatrix();
-            M4 proj = makeInfiniteReversedZProjRH(fov, (float)w / h, nearClip);
+            if (!m_manualMatrices)
+            {
+                M4 view = camera.getViewMatrix();
+                M4 proj = makeInfiniteReversedZProjRH(fov, (float)w / h, nearClip);
+                m_currentView = view;
+                m_currentProj = proj;
+            }
             
             glBeginQuery(GL_TIME_ELAPSED, timerQuery);
 
             glUseProgram(shaderProgram);
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_ModelView"), 1, 0, view.m);
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_Projection"), 1, 0, proj.m);
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_ModelView"), 1, 0, m_currentView.m);
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_Projection"), 1, 0, m_currentProj.m);
             glUniform1f(glGetUniformLocation(shaderProgram, "u_AmbientIntensity"), ambientIntensity);
             glUniform1f(glGetUniformLocation(shaderProgram, "u_DiffuseIntensity"), diffuseIntensity);
             
@@ -1025,14 +1035,17 @@ void AliceViewer::captureHighResStencils(const char* prefix)
     GLfloat depthClear[1] = { 0.0f };
     glClearBufferfv(GL_COLOR, 2, depthClear);
 
-    M4 view = camera.getViewMatrix();
-    M4 proj = makeInfiniteReversedZProjRH(fov, currentAspectRatio, nearClip);
-    m_currentView = view;
-    m_currentProj = proj;
+    if (!m_manualMatrices)
+    {
+        M4 view = camera.getViewMatrix();
+        M4 proj = makeInfiniteReversedZProjRH(fov, currentAspectRatio, nearClip);
+        m_currentView = view;
+        m_currentProj = proj;
+    }
 
     glUseProgram(shaderProgram);
-    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_ModelView"), 1, 0, view.m);
-    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_Projection"), 1, 0, proj.m);
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_ModelView"), 1, 0, m_currentView.m);
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "u_Projection"), 1, 0, m_currentProj.m);
     glUniform1f(glGetUniformLocation(shaderProgram, "u_AmbientIntensity"), ambientIntensity);
     glUniform1f(glGetUniformLocation(shaderProgram, "u_DiffuseIntensity"), diffuseIntensity);
     

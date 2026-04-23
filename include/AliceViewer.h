@@ -242,6 +242,7 @@ public:
     bool m_headlessCapture = false;
     float currentAspectRatio = 1280.0f / 720.0f;
     bool m_isRenderingOffscreen = false;
+    bool m_manualMatrices = false;
 
     M4 m_currentView;
     M4 m_currentProj;

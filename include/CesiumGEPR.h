@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <fstream>
 #include <functional>
-
+#include <filesystem>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
@@ -25,6 +25,7 @@
 #include "AliceMemory.h"
 #include "ApiKeyReader.h"
 #include <curl/curl.h>
+#include <opennurbs.h>
 
 #include <stb_image_write.h>
 #include <stb_image.h>
@@ -219,7 +220,7 @@ namespace CesiumNetwork {
 namespace CesiumGEPR {
     using namespace CesiumMath;
 
-    enum TestState { STATE_STREAMING, STATE_AGGREGATE, STATE_LOAD_CACHED, STATE_VERIFY, STATE_DONE };
+    enum TestState { STATE_STREAMING, STATE_STREAMING_STENCIL_WAIT, STATE_AGGREGATE, STATE_LOAD_CACHED, STATE_CACHED_STENCIL_WAIT, STATE_VERIFY, STATE_DONE };
     static TestState g_CurrentState = STATE_STREAMING;
     static uint32_t g_StateFrameStart = 0;
     static GLuint g_CachedVAO = 0, g_CachedVBO = 0, g_CachedEBO = 0;
@@ -240,6 +241,7 @@ namespace CesiumGEPR {
         double lon;
         double alt;
         char semantic[256];
+        bool export_3dm;
     };
     static std::vector<TestLocation> g_Locations;
     static int g_CurrentLocationIndex = 0;
@@ -654,6 +656,7 @@ namespace CesiumGEPR {
                     loc.lon = (double)locs[(uint32_t)i]["lon"];
                     loc.alt = (double)locs[(uint32_t)i]["alt"];
                     strncpy(loc.semantic, locs[(uint32_t)i]["semantic_criteria"].get<std::string>().c_str(), 255);
+                    loc.export_3dm = locs[(uint32_t)i].contains("export_3dm") && locs[(uint32_t)i]["export_3dm"].type == AliceJson::J_BOOL ? locs[(uint32_t)i]["export_3dm"].boolean : false;
                     g_Locations.push_back(loc);
                 }
             }
@@ -709,8 +712,42 @@ namespace CesiumGEPR {
     static void cgltf_free_cb(void* user, void* ptr) {}
 
     static void initShaders() {
-        const char* vs = "#version 400 core\nlayout(location=0)in vec3 p;uniform mat4 uMVP;uniform mat4 uV;out vec3 vVP;void main(){vVP=(uV*vec4(p,1.0)).xyz;gl_Position=uMVP*vec4(p,1.0);}";
-        const char* fs = "#version 400 core\nout vec4 f;in vec3 vVP;void main(){vec3 N=normalize(cross(dFdx(vVP),dFdy(vVP)));if(!gl_FrontFacing)N=-N;float d=max(dot(N,normalize(vec3(0.5,0.8,0.6))),0.0);vec3 c=vec3(0.7)*d+vec3(0.15);if(fract(vVP.x*0.1)<0.05||fract(vVP.y*0.1)<0.05)c*=0.8;f=vec4(c,1.0);}";
+        const char* vs = 
+            "#version 430 core\n"
+            "layout(location=0) in vec3 p;\n"
+            "uniform mat4 uMVP;\n"
+            "uniform mat4 uV;\n"
+            "out vec3 vVP;\n"
+            "void main() {\n"
+            "    vVP = (uV * vec4(p, 1.0)).xyz;\n"
+            "    gl_Position = uMVP * vec4(p, 1.0);\n"
+            "}";
+            
+        const char* fs = 
+            "#version 430 core\n"
+            "uniform int uPass;\n"
+            "layout(location = 0) out vec4 f_Color;\n"
+            "layout(location = 1) out vec4 f_Seg;\n"
+            "layout(location = 2) out float f_Depth;\n"
+            "in vec3 vVP;\n"
+            "void main() {\n"
+            "    if(uPass == 1) {\n"
+            "        f_Color = vec4(0.0, 0.0, 0.0, 1.0);\n"
+            "        f_Seg = vec4(0.0, 0.0, 0.0, 1.0);\n"
+            "        f_Depth = 0.0;\n"
+            "        return;\n"
+            "    }\n"
+            "    vec3 N = normalize(cross(dFdx(vVP), dFdy(vVP)));\n"
+            "    if(!gl_FrontFacing) N = -N;\n"
+            "    float d = max(dot(N, normalize(vec3(0.5, 0.8, 0.6))), 0.2);\n"
+            "    f_Color = vec4(vec3(0.85) * d, 1.0);\n"
+            "    f_Seg = vec4(1.0, 1.0, 1.0, 1.0);\n"
+            "    float near = 0.1;\n"
+            "    float far = 5000.0;\n"
+            "    float dist = -vVP.z;\n"
+            "    f_Depth = clamp(1.0 - (dist - near) / (far - near), 0.0, 1.0);\n"
+            "}";
+            
         GLuint v=glCreateShader(GL_VERTEX_SHADER); glShaderSource(v,1,&vs,0); glCompileShader(v);
         GLuint f=glCreateShader(GL_FRAGMENT_SHADER); glShaderSource(f,1,&fs,0); glCompileShader(f);
         g_Program=glCreateProgram(); glAttachShader(g_Program,v); glAttachShader(g_Program,f); glLinkProgram(g_Program);
@@ -790,7 +827,9 @@ namespace CesiumGEPR {
         loadLocationData();
         loadTilesetForCurrentLocation();
         
-        FILE* outJson = fopen("output.json", "w");
+        std::filesystem::create_directories("build/bin/OUTPUT");
+        
+        FILE* outJson = fopen("build/bin/OUTPUT/output.json", "w");
         if (outJson) {
             fprintf(outJson, "{\n  \"renders\": [\n");
             fclose(outJson);
@@ -834,7 +873,7 @@ namespace CesiumGEPR {
         AliceViewer* av = AliceViewer::instance();
 
         // Evict stale tiles
-        if (g_Tileset.root && g_CurrentState == STATE_STREAMING) g_Tileset.evictStaleTiles(g_Tileset.root);
+        if (g_Tileset.root && (g_CurrentState == STATE_STREAMING || g_CurrentState == STATE_STREAMING_STENCIL_WAIT)) g_Tileset.evictStaleTiles(g_Tileset.root);
         
         // --- AABB Accumulation ---
         av->m_sceneAABB = AABB();
@@ -848,7 +887,17 @@ namespace CesiumGEPR {
 
         av->backColor = {0,0,0};
         if (frameIdx % 20 == 0) { printf("[GEPR] Frame %u, RenderList: %u\n", frameIdx, g_Tileset.renderListCount); fflush(stdout); }
-        glClearColor(0.0f, 1.0f, 0.0f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        
+        if (av->m_isRenderingOffscreen) {
+            float cColor[] = {0.588f, 0.588f, 0.588f, 1.0f};
+            float zero[] = {0.0f, 0.0f, 0.0f, 0.0f};
+            glClearBufferfv(GL_COLOR, 0, cColor);
+            glClearBufferfv(GL_COLOR, 1, zero);
+            glClearBufferfv(GL_COLOR, 2, zero);
+            glClearDepth(0.0f); glClear(GL_DEPTH_BUFFER_BIT);
+        } else {
+            glClearColor(0.588f, 0.588f, 0.588f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        }
         glEnable(GL_DEPTH_TEST); glDepthFunc(GL_GEQUAL);
         int w, h; glfwGetFramebufferSize(av->window, &w, &h);
         M4 v = av->camera.getViewMatrix(), p = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 0.1f);
@@ -858,7 +907,7 @@ namespace CesiumGEPR {
         
         g_TotalFrustumVertices = 0;
         
-        if (g_CurrentState == STATE_STREAMING) {
+        if (g_CurrentState == STATE_STREAMING || g_CurrentState == STATE_STREAMING_STENCIL_WAIT) {
             for (uint32_t i=0; i<g_Tileset.renderListCount; ++i) {
                 Tile* t = g_Tileset.renderList[i];
                 if (!t->rendererResources && t->payload) {
@@ -896,8 +945,24 @@ namespace CesiumGEPR {
                         cgltf_free(data);
                     }
                 }
-                if (t->rendererResources) { glBindVertexArray(t->rendererResources->vao); glDrawElements(GL_TRIANGLES, t->rendererResources->count, GL_UNSIGNED_INT, 0); g_TotalFrustumVertices += (uint64_t)t->rendererResources->count; }
             }
+            
+            GLint locPass = glGetUniformLocation(g_Program, "uPass");
+            for (int pass = 0; pass < 2; ++pass) {
+                if (pass == 0) { glPolygonMode(GL_FRONT_AND_BACK, GL_FILL); glUniform1i(locPass, 0); }
+                else { glEnable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(-1.0f, -1.0f); glPolygonMode(GL_FRONT_AND_BACK, GL_LINE); glUniform1i(locPass, 1); }
+                
+                for (uint32_t i=0; i<g_Tileset.renderListCount; ++i) {
+                    Tile* t = g_Tileset.renderList[i];
+                    if (t->rendererResources) { 
+                        glBindVertexArray(t->rendererResources->vao); 
+                        glDrawElements(GL_TRIANGLES, t->rendererResources->count, GL_UNSIGNED_INT, 0); 
+                        if (pass == 0) g_TotalFrustumVertices += (uint64_t)t->rendererResources->count; 
+                    }
+                }
+            }
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glDisable(GL_POLYGON_OFFSET_FILL);
 
             if (frameIdx % 100 == 0) {
                 uint32_t activePayloads = 0; for(int i=0; i<PAYLOAD_POOL_SIZE; ++i) if(g_PayloadPool[i].inUse) activePayloads++;
@@ -907,15 +972,25 @@ namespace CesiumGEPR {
             }
             
             // Checking for silence to transition
-            if (frameIdx - g_StateFrameStart > 400 && CesiumNetwork::g_AsyncRequests.size() == 0 && g_Tileset.renderListCount > 0) {
+            if (g_CurrentState == STATE_STREAMING && frameIdx - g_StateFrameStart > 400 && CesiumNetwork::g_AsyncRequests.size() == 0 && g_Tileset.renderListCount > 0) {
                 unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
                 stbi_flip_vertically_on_write(1); 
-                char path[256]; snprintf(path, 256, "streamed_gepr_loc%d_view%d.png", g_CurrentLocationIndex, g_CurrentViewIndex);
+                char path[256]; snprintf(path, 256, "build/bin/OUTPUT/streamed_gepr_loc%d_view%d.png", g_CurrentLocationIndex, g_CurrentViewIndex);
                 stbi_write_png(path, w, h, 3, px, w*3); free(px);
-                g_CurrentState = STATE_AGGREGATE; g_StateFrameStart = frameIdx;
-                printf("[Test] View %d STREAMING Complete. Proceeding to AGGREGATE.\n", g_CurrentViewIndex); fflush(stdout);
+                
+                g_CurrentState = STATE_STREAMING_STENCIL_WAIT; g_StateFrameStart = frameIdx;
+                char prefix[256]; snprintf(prefix, 256, "build/bin/OUTPUT/streamed_prod_4k_loc%d_view%d", g_CurrentLocationIndex, g_CurrentViewIndex);
+                av->captureHighResStencils(prefix);
+                
+                printf("[Test] View %d STREAMING Complete. Proceeding to STREAMING_STENCIL_WAIT.\n", g_CurrentViewIndex); fflush(stdout);
             }
-            
+        } 
+        
+        if (g_CurrentState == STATE_STREAMING_STENCIL_WAIT) {
+            if (av->m_pendingCaptures.load() == 0 && frameIdx - g_StateFrameStart > 10) {
+                g_CurrentState = STATE_AGGREGATE; g_StateFrameStart = frameIdx;
+                printf("[Test] View %d STREAMING_STENCIL_WAIT Complete. Proceeding to AGGREGATE.\n", g_CurrentViewIndex); fflush(stdout);
+            }
         } else if (g_CurrentState == STATE_AGGREGATE) {
             std::vector<float> totalVBO; std::vector<uint32_t> totalEBO;
             for (uint32_t i = 0; i < g_Tileset.renderListCount; ++i) {
@@ -950,19 +1025,90 @@ namespace CesiumGEPR {
                     }
                 }
             }
-            char binPath[256]; snprintf(binPath, 256, "cache_gepr_loc%d_view%d.bin", g_CurrentLocationIndex, g_CurrentViewIndex);
+            char binPath[256]; snprintf(binPath, 256, "build/bin/OUTPUT/cache_gepr_loc%d_view%d.bin", g_CurrentLocationIndex, g_CurrentViewIndex);
             FILE* f = fopen(binPath, "wb");
             if (f) {
                 uint32_t vCount = (uint32_t)totalVBO.size(), iCount = (uint32_t)totalEBO.size();
                 fwrite(&vCount, sizeof(uint32_t), 1, f); fwrite(&iCount, sizeof(uint32_t), 1, f);
                 fwrite(totalVBO.data(), sizeof(float), vCount, f); fwrite(totalEBO.data(), sizeof(uint32_t), iCount, f); fclose(f);
             }
+            
+            if (g_CurrentViewIndex == 0 && g_Locations[g_CurrentLocationIndex].export_3dm) {
+                char dmpPath[256]; snprintf(dmpPath, 256, "build/bin/OUTPUT/export_loc%d.3dm", g_CurrentLocationIndex);
+                ONX_Model model;
+                ON_Mesh* mesh = new ON_Mesh();
+                
+                std::vector<float> exportVBO; std::vector<uint32_t> exportEBO;
+                
+                for (uint32_t i = 0; i < g_Tileset.renderListCount; ++i) {
+                    Tile* t = g_Tileset.renderList[i];
+                    if (!t->payload) continue;
+                    
+                    float distToOrigin = 0.0f;
+                    if (t->boundingAABB.initialized) {
+                        distToOrigin = sqrtf(t->boundingAABB.center().x * t->boundingAABB.center().x + 
+                                             t->boundingAABB.center().y * t->boundingAABB.center().y + 
+                                             t->boundingAABB.center().z * t->boundingAABB.center().z);
+                    }
+                    
+                    // Filter: Only include high resolution tiles near the POI
+                    if (distToOrigin > 1500.0f) continue;
+                    if (t->geometricError > 50.0) continue;
+                    
+                    cgltf_options opt = {cgltf_file_type_glb}; opt.memory.alloc_func = cgltf_alloc; opt.memory.free_func = cgltf_free_cb;
+                    cgltf_data* data = 0;
+                    uint8_t* glbPayload = t->payload; size_t glbSize = t->payloadSize;
+                    DVec3 rtcCenter = {0,0,0};
+                    if (glbSize >= 28 && memcmp(glbPayload, "b3dm", 4) == 0) {
+                        uint32_t ftj = *(uint32_t*)(glbPayload + 12), ftb = *(uint32_t*)(glbPayload + 16);
+                        uint32_t btj = *(uint32_t*)(glbPayload + 20), btb = *(uint32_t*)(glbPayload + 24);
+                        if (ftj > 0) {
+                            auto ft = AliceJson::parse(glbPayload + 28, ftj);
+                            if (ft.contains("RTC_CENTER")) {
+                                auto rtc = ft["RTC_CENTER"]; rtcCenter = {(double)rtc[0], (double)rtc[1], (double)rtc[2]};
+                            }
+                        }
+                        uint32_t headerLen = 28 + ftj + ftb + btj + btb;
+                        if (headerLen < glbSize) { glbPayload += headerLen; glbSize -= headerLen; }
+                    }
+                    if (cgltf_parse(&opt, glbPayload, glbSize, &data) == cgltf_result_success) {
+                        cgltf_load_buffers(&opt, data, 0);
+                        if (g_ScratchVbo && g_ScratchEbo) {
+                            uint32_t vIdx=0, eIdx=0;
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
+                            uint32_t offset = (uint32_t)(exportVBO.size()/6);
+                            for(uint32_t v=0; v<vIdx*6; ++v) exportVBO.push_back(g_ScratchVbo[v]);
+                            for(uint32_t e=0; e<eIdx; ++e) exportEBO.push_back(g_ScratchEbo[e] + offset);
+                        }
+                        cgltf_free(data);
+                    }
+                }
+                
+                int vCount = exportVBO.size() / 6;
+                mesh->m_V.Reserve(vCount);
+                for (int i=0; i<vCount; i++) mesh->SetVertex(i, ON_3dPoint(exportVBO[i*6], exportVBO[i*6+1], exportVBO[i*6+2]));
+                int fCount = exportEBO.size() / 3;
+                mesh->m_F.Reserve(fCount);
+                for (int i=0; i<fCount; i++) mesh->SetTriangle(i, exportEBO[i*3], exportEBO[i*3+1], exportEBO[i*3+2]);
+                mesh->ComputeVertexNormals();
+                model.AddManagedModelGeometryComponent(mesh, nullptr);
+                model.Write(dmpPath, 7, nullptr);
+                printf("[Test] View 0 Exported 3DM to %s\n", dmpPath); fflush(stdout);
+                
+                ONX_Model testModel;
+                if (testModel.Read(dmpPath)) {
+                    printf("[Test] VERIFIED 3DM read back successfully for %s\n", dmpPath); fflush(stdout);
+                } else {
+                    printf("[Test] ERROR: Could not read back 3DM %s\n", dmpPath); fflush(stdout);
+                }
+            }
+            
             g_CurrentState = STATE_LOAD_CACHED; g_StateFrameStart = frameIdx;
             printf("[Test] View %d AGGREGATE Complete. Proceeding to LOAD_CACHED.\n", g_CurrentViewIndex); fflush(stdout);
             
-        } else if (g_CurrentState == STATE_LOAD_CACHED) {
+        } else if (g_CurrentState == STATE_LOAD_CACHED || g_CurrentState == STATE_CACHED_STENCIL_WAIT) {
             if (g_CachedVAO == 0) {
-                char binPath[256]; snprintf(binPath, 256, "cache_gepr_loc%d_view%d.bin", g_CurrentLocationIndex, g_CurrentViewIndex);
+                char binPath[256]; snprintf(binPath, 256, "build/bin/OUTPUT/cache_gepr_loc%d_view%d.bin", g_CurrentLocationIndex, g_CurrentViewIndex);
                 FILE* f = fopen(binPath, "rb");
                 if (f) {
                     uint32_t vCount, iCount; fread(&vCount, sizeof(uint32_t), 1, f); fread(&iCount, sizeof(uint32_t), 1, f);
@@ -976,20 +1122,40 @@ namespace CesiumGEPR {
                     g_CachedCount = (int)iCount;
                 }
             }
-            if (g_CachedVAO) { glBindVertexArray(g_CachedVAO); glDrawElements(GL_TRIANGLES, g_CachedCount, GL_UNSIGNED_INT, 0); }
-            if (frameIdx - g_StateFrameStart > 10) {
+            GLint locPass = glGetUniformLocation(g_Program, "uPass");
+            if (g_CachedVAO) {
+                for (int pass = 0; pass < 2; ++pass) {
+                    if (pass == 0) { glPolygonMode(GL_FRONT_AND_BACK, GL_FILL); glUniform1i(locPass, 0); }
+                    else { glEnable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(-1.0f, -1.0f); glPolygonMode(GL_FRONT_AND_BACK, GL_LINE); glUniform1i(locPass, 1); }
+                    glBindVertexArray(g_CachedVAO); 
+                    glDrawElements(GL_TRIANGLES, g_CachedCount, GL_UNSIGNED_INT, 0);
+                }
+                glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                glDisable(GL_POLYGON_OFFSET_FILL);
+            }
+            if (g_CurrentState == STATE_LOAD_CACHED && frameIdx - g_StateFrameStart > 10) {
                 unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
                 stbi_flip_vertically_on_write(1); 
-                char path[256]; snprintf(path, 256, "cached_gepr_loc%d_view%d.png", g_CurrentLocationIndex, g_CurrentViewIndex);
+                char path[256]; snprintf(path, 256, "build/bin/OUTPUT/cached_gepr_loc%d_view%d.png", g_CurrentLocationIndex, g_CurrentViewIndex);
                 stbi_write_png(path, w, h, 3, px, w*3); free(px);
-                g_CurrentState = STATE_VERIFY; g_StateFrameStart = frameIdx;
-                printf("[Test] View %d LOAD_CACHED Complete. Proceeding to VERIFY.\n", g_CurrentViewIndex); fflush(stdout);
+                
+                g_CurrentState = STATE_CACHED_STENCIL_WAIT; g_StateFrameStart = frameIdx;
+                char prefix[256]; snprintf(prefix, 256, "build/bin/OUTPUT/cached_prod_4k_loc%d_view%d", g_CurrentLocationIndex, g_CurrentViewIndex);
+                av->captureHighResStencils(prefix);
+                
+                printf("[Test] View %d LOAD_CACHED Complete. Proceeding to CACHED_STENCIL_WAIT.\n", g_CurrentViewIndex); fflush(stdout);
             }
-            
+        } 
+        
+        if (g_CurrentState == STATE_CACHED_STENCIL_WAIT) {
+            if (av->m_pendingCaptures.load() == 0 && frameIdx - g_StateFrameStart > 10) {
+                g_CurrentState = STATE_VERIFY; g_StateFrameStart = frameIdx;
+                printf("[Test] View %d CACHED_STENCIL_WAIT Complete. Proceeding to VERIFY.\n", g_CurrentViewIndex); fflush(stdout);
+            }
         } else if (g_CurrentState == STATE_VERIFY) {
             char p1[256], p2[256]; 
-            snprintf(p1, 256, "streamed_gepr_loc%d_view%d.png", g_CurrentLocationIndex, g_CurrentViewIndex);
-            snprintf(p2, 256, "cached_gepr_loc%d_view%d.png", g_CurrentLocationIndex, g_CurrentViewIndex);
+            snprintf(p1, 256, "build/bin/OUTPUT/streamed_gepr_loc%d_view%d.png", g_CurrentLocationIndex, g_CurrentViewIndex);
+            snprintf(p2, 256, "build/bin/OUTPUT/cached_gepr_loc%d_view%d.png", g_CurrentLocationIndex, g_CurrentViewIndex);
             int w1, h1, c1, w2, h2, c2;
             uint8_t *img1 = stbi_load(p1, &w1, &h1, &c1, 3), *img2 = stbi_load(p2, &w2, &h2, &c2, 3);
             if (img1 && img2) {
@@ -1000,7 +1166,7 @@ namespace CesiumGEPR {
                 printf("[Verify] Error loading images for verification.\n");
             }
             
-            FILE* outJson = fopen("output.json", "a");
+            FILE* outJson = fopen("build/bin/OUTPUT/output.json", "a");
             if (outJson) {
                 if (g_CurrentLocationIndex > 0 || g_CurrentViewIndex > 0) fprintf(outJson, ",\n");
                 fprintf(outJson, "    {\n");
@@ -1059,7 +1225,7 @@ namespace CesiumGEPR {
                 av->camera.pitch = g_Views[0].pitch;
                 av->camera.yaw = g_Views[0].yaw;
             } else {
-                FILE* outJson = fopen("output.json", "a");
+                FILE* outJson = fopen("build/bin/OUTPUT/output.json", "a");
                 if (outJson) {
                     fprintf(outJson, "\n  ]\n}\n");
                     fclose(outJson);

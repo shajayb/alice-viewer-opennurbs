@@ -1,0 +1,32 @@
+{
+  "locations": [
+    {
+      "name": "St Pauls Cathedral, London",
+      "lat": 51.5138,
+      "lon": -0.0984,
+      "alt": 50.0,
+      "semantic_criteria": "A massive domed cathedral surrounded by dense central London architecture."
+    },
+    {
+      "name": "Eiffel Tower, Paris",
+      "lat": 48.8584,
+      "lon": 2.2945,
+      "alt": 50.0,
+      "semantic_criteria": "A highly intricate wrought-iron lattice tower standing tall over a flat Parisian park."
+    },
+    {
+      "name": "Statue of Liberty, New York",
+      "lat": 40.6892,
+      "lon": -74.0445,
+      "alt": 20.0,
+      "semantic_criteria": "A colossal neoclassical copper statue situated on an island surrounded by water."
+    },
+    {
+      "name": "Christ The Redeemer, Rio",
+      "lat": -22.951916,
+      "lon": -43.210487,
+      "alt": 710.0,
+      "semantic_criteria": "An Art Deco statue of Jesus Christ situated on the peak of the Corcovado mountain."
+    }
+  ]
+}

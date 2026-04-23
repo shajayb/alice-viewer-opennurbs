@@ -27,6 +27,7 @@
 #include <curl/curl.h>
 
 #include <stb_image_write.h>
+#include <stb_image.h>
 
 // --- Optimized DOD Math ---
 namespace CesiumMath {
@@ -217,6 +218,53 @@ namespace CesiumNetwork {
 
 namespace CesiumGEPR {
     using namespace CesiumMath;
+
+    enum TestState { STATE_STREAMING, STATE_AGGREGATE, STATE_LOAD_CACHED, STATE_VERIFY, STATE_DONE };
+    static TestState g_CurrentState = STATE_STREAMING;
+    static uint32_t g_StateFrameStart = 0;
+    static GLuint g_CachedVAO = 0, g_CachedVBO = 0, g_CachedEBO = 0;
+    static int g_CachedCount = 0;
+    
+    struct TestView { V3 focusPoint; float distance; float pitch; float yaw; };
+    static TestView g_Views[4] = {
+        { {0, 0, 50}, 150.0f, 0.2f, 0.0f },      // 0: Front full body
+        { {0, 0, 50}, 250.0f, 0.4f, 1.57f },     // 1: Side environment
+        { {0, 0, 80}, 400.0f, 0.6f, -0.78f },    // 2: Wide Angle Aerial
+        { {0, 0, 50}, 200.0f, 0.2f, 3.14f }      // 3: Back Angle
+    };
+    static int g_CurrentViewIndex = 0;
+
+    struct TestLocation {
+        char name[128];
+        double lat;
+        double lon;
+        double alt;
+        char semantic[256];
+    };
+    static std::vector<TestLocation> g_Locations;
+    static int g_CurrentLocationIndex = 0;
+
+
+
+    static float evaluateStructuralFit(const uint8_t* img1, const uint8_t* img2, int w, int h) {
+        auto get_edges = [&](const uint8_t* img, uint8_t* edges) {
+            for (int y = 1; y < h - 1; ++y) {
+                for (int x = 1; x < w - 1; ++x) {
+                    auto get_v = [&](int ox, int oy) {
+                        int idx = ((y + oy) * w + (x + ox)) * 3;
+                        return (img[idx] * 0.299f + img[idx + 1] * 0.587f + img[idx + 2] * 0.114f);
+                    };
+                    float gx = -1*get_v(-1,-1) + 1*get_v(1,-1) - 2*get_v(-1,0) + 2*get_v(1,0) - 1*get_v(-1,1) + 1*get_v(1,1);
+                    float gy = -1*get_v(-1,-1) - 2*get_v(0,-1) - 1*get_v(1,-1) + 1*get_v(-1,1) + 2*get_v(0,1) + 1*get_v(1,1);
+                    edges[y*w + x] = (sqrtf(gx*gx + gy*gy) > 25.0f) ? 255 : 0;
+                }
+            }
+        };
+        std::vector<uint8_t> e1(w*h), e2(w*h); get_edges(img1, e1.data()); get_edges(img2, e2.data());
+        int match = 0, total = 0;
+        for (int i=0; i<w*h; ++i) { if (e1[i] == 255) { total++; if (e2[i] == 255) match++; } }
+        return (total == 0) ? 1.0f : (float)match / (float)total;
+    }
 
     static uint32_t g_TotalLoadedTiles = 0;
     static uint32_t g_TotalVRAMAllocations = 0;
@@ -409,10 +457,11 @@ namespace CesiumGEPR {
                 double ndcError = errorOffsetNdc.y - centerNdc.y;
                 sse = std::abs(ndcError) * h / 2.0;
 
-                double targetSSE = 0.2; // Extreme detail for the statue
+                double targetSSE = 16.0; // Base detail for surroundings
                 if (testBox.initialized) {
                     float distToOrigin = sqrtf(testBox.center().x * testBox.center().x + testBox.center().y * testBox.center().y + testBox.center().z * testBox.center().z);
-                    if (distToOrigin > 150.0f) targetSSE = 100.0; // Coarse background
+                    if (distToOrigin < 50.0f) targetSSE = 0.2; // Extreme detail for the statue
+                    else if (distToOrigin < 250.0f) targetSSE = 2.0; // High detail for the mountain peak
                 }
                 if (sse > targetSSE) shouldRefine = true;
             } else if (node->childrenCount > 0) {
@@ -591,6 +640,71 @@ namespace CesiumGEPR {
     static float* g_ScratchVbo = nullptr;
     static uint32_t* g_ScratchEbo = nullptr;
 
+    static void loadLocationData() {
+        std::ifstream f("locations.json");
+        if (f.is_open()) {
+            std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            auto j = AliceJson::parse((const uint8_t*)content.c_str(), content.size());
+            if (j.contains("locations")) {
+                auto locs = j["locations"];
+                for (size_t i=0; i<locs.size(); ++i) {
+                    TestLocation loc;
+                    strncpy(loc.name, locs[(uint32_t)i]["name"].get<std::string>().c_str(), 127);
+                    loc.lat = (double)locs[(uint32_t)i]["lat"];
+                    loc.lon = (double)locs[(uint32_t)i]["lon"];
+                    loc.alt = (double)locs[(uint32_t)i]["alt"];
+                    strncpy(loc.semantic, locs[(uint32_t)i]["semantic_criteria"].get<std::string>().c_str(), 255);
+                    g_Locations.push_back(loc);
+                }
+            }
+        }
+        if (g_Locations.empty()) {
+            printf("[GEPR] No locations found, defaulting to Rio.\n");
+            g_Locations.push_back({"Christ The Redeemer", -22.951916, -43.210487, 710.0, ""});
+        }
+    }
+
+    static void loadTilesetForCurrentLocation() {
+        double lat = g_Locations[g_CurrentLocationIndex].lat * 0.0174532925;
+        double lon = g_Locations[g_CurrentLocationIndex].lon * 0.0174532925;
+        double alt = g_Locations[g_CurrentLocationIndex].alt;
+        g_OriginEcef = lla_to_ecef(lat, lon, alt); 
+        denu_matrix(g_EnuMatrix, lat, lon);
+        
+        char ionToken[2048];
+        if (!Alice::ApiKeyReader::GetCesiumToken(ionToken, 2048)) return;
+        
+        char url[512]; snprintf(url, 512, "https://api.cesium.com/v1/assets/2275207/endpoint?access_token=%s", ionToken);
+        static uint8_t hsBuf[1024*1024]; CesiumNetwork::FetchBuffer handshake = { hsBuf, 0, sizeof(hsBuf) };
+        long sc=0;
+        if (CesiumNetwork::Fetch(url, handshake, &sc)) {
+            auto jhs = AliceJson::parse(handshake.data, handshake.size);
+            std::string turl, atok;
+            if (jhs.contains("url")) turl = jhs["url"].get<std::string>();
+            else if (jhs.contains("options") && jhs["options"].contains("url")) turl = jhs["options"]["url"].get<std::string>();
+            if (jhs.contains("accessToken")) atok = jhs["accessToken"].get<std::string>();
+            if (!atok.empty()) strncpy(g_Tileset.token, atok.c_str(), 2047);
+            if (!turl.empty()) {
+                size_t kPos = turl.find("key=");
+                if (kPos != std::string::npos) {
+                    size_t kEnd = turl.find('&', kPos);
+                    std::string key = turl.substr(kPos + 4, kEnd == std::string::npos ? std::string::npos : kEnd - (kPos + 4));
+                    strncpy(g_Tileset.apiKey, key.c_str(), 255);
+                }
+                strncpy(g_Tileset.baseUrl, turl.substr(0, turl.find_last_of('/')+1).c_str(), 1023);
+                static uint8_t tsBuf[16*1024*1024]; CesiumNetwork::FetchBuffer ts = { tsBuf, 0, sizeof(tsBuf) };
+                if (CesiumNetwork::Fetch(turl.c_str(), ts, &sc, g_Tileset.token[0] ? g_Tileset.token : nullptr)) {
+                    auto jts = AliceJson::parse(ts.data, ts.size);
+                    if (jts.type != AliceJson::J_NULL) {
+                        g_Tileset.root = (Tile*)Alice::g_Arena.allocate(sizeof(Tile));
+                        memset(g_Tileset.root, 0, sizeof(Tile));
+                        g_Tileset.parseNode(g_Tileset.root, jts["root"], dmat4_identity(), g_Tileset.baseUrl, 0);
+                    }
+                }
+            }
+        }
+        printf("[GEPR] Switched Location to %s\n", g_Locations[g_CurrentLocationIndex].name);
+    }
     static void* cgltf_alloc(void* user, size_t size) { return Alice::g_Arena.allocate(size); }
     static void cgltf_free_cb(void* user, void* ptr) {}
 
@@ -667,46 +781,21 @@ namespace CesiumGEPR {
         }
         for (int i=0; i<RESOURCE_POOL_SIZE; ++i) g_ResourcePool[i].inUse = false;
 
-        initShaders(); g_Tileset.init();
+        initShaders(); 
+        g_Tileset.init();
         
         if (!g_ScratchVbo) g_ScratchVbo = (float*)malloc(120000*6*4);
         if (!g_ScratchEbo) g_ScratchEbo = (uint32_t*)malloc(250000*4);
         
-        double lat = -22.951916 * 0.0174532925, lon = -43.210487 * 0.0174532925;
-        g_OriginEcef = lla_to_ecef(lat, lon, 710.0); denu_matrix(g_EnuMatrix, lat, lon);
+        loadLocationData();
+        loadTilesetForCurrentLocation();
         
-        char ionToken[2048];
-        if (!Alice::ApiKeyReader::GetCesiumToken(ionToken, 2048)) { printf("[GEPR] No Cesium Token\n"); return; }
-        
-        char url[512]; snprintf(url, 512, "https://api.cesium.com/v1/assets/2275207/endpoint?access_token=%s", ionToken);
-        static uint8_t hsBuf[1024*1024]; CesiumNetwork::FetchBuffer handshake = { hsBuf, 0, sizeof(hsBuf) };
-        long sc=0;
-        if (CesiumNetwork::Fetch(url, handshake, &sc)) {
-            auto jhs = AliceJson::parse(handshake.data, handshake.size);
-            std::string turl, atok;
-            if (jhs.contains("url")) turl = jhs["url"].get<std::string>();
-            else if (jhs.contains("options") && jhs["options"].contains("url")) turl = jhs["options"]["url"].get<std::string>();
-            if (jhs.contains("accessToken")) atok = jhs["accessToken"].get<std::string>();
-            if (!atok.empty()) strncpy(g_Tileset.token, atok.c_str(), 2047);
-            if (!turl.empty()) {
-                size_t kPos = turl.find("key=");
-                if (kPos != std::string::npos) {
-                    size_t kEnd = turl.find('&', kPos);
-                    std::string key = turl.substr(kPos + 4, kEnd == std::string::npos ? std::string::npos : kEnd - (kPos + 4));
-                    strncpy(g_Tileset.apiKey, key.c_str(), 255);
-                }
-                strncpy(g_Tileset.baseUrl, turl.substr(0, turl.find_last_of('/')+1).c_str(), 1023);
-                static uint8_t tsBuf[16*1024*1024]; CesiumNetwork::FetchBuffer ts = { tsBuf, 0, sizeof(tsBuf) };
-                if (CesiumNetwork::Fetch(turl.c_str(), ts, &sc, g_Tileset.token[0] ? g_Tileset.token : nullptr)) {
-                    auto jts = AliceJson::parse(ts.data, ts.size);
-                    if (jts.type != AliceJson::J_NULL) {
-                        g_Tileset.root = (Tile*)Alice::g_Arena.allocate(sizeof(Tile));
-                        memset(g_Tileset.root, 0, sizeof(Tile));
-                        g_Tileset.parseNode(g_Tileset.root, jts["root"], dmat4_identity(), g_Tileset.baseUrl, 0);
-                    }
-                }
-            }
+        FILE* outJson = fopen("output.json", "w");
+        if (outJson) {
+            fprintf(outJson, "{\n  \"renders\": [\n");
+            fclose(outJson);
         }
+        
         printf("[GEPR] setup finished\n"); fflush(stdout);
     }
 
@@ -715,11 +804,11 @@ namespace CesiumGEPR {
         AliceViewer* av = AliceViewer::instance();
         
         if (g_FrameCount == 0) {
-            av->camera.focusPoint = {0, 0, 35}; 
-            av->camera.distance = 8.0f;
-            av->camera.pitch = 0.4f;
-            av->camera.yaw = 0.0f;
-            printf("[GEPR] Camera Reset to Macro Focus\n"); fflush(stdout);
+            av->camera.focusPoint = g_Views[0].focusPoint; 
+            av->camera.distance = g_Views[0].distance;
+            av->camera.pitch = g_Views[0].pitch;
+            av->camera.yaw = g_Views[0].yaw;
+            printf("[GEPR] Camera Reset to View %d\n", 0); fflush(stdout);
         }
 
         // --- Frustum Extraction ---
@@ -745,7 +834,7 @@ namespace CesiumGEPR {
         AliceViewer* av = AliceViewer::instance();
 
         // Evict stale tiles
-        if (g_Tileset.root) g_Tileset.evictStaleTiles(g_Tileset.root);
+        if (g_Tileset.root && g_CurrentState == STATE_STREAMING) g_Tileset.evictStaleTiles(g_Tileset.root);
         
         // --- AABB Accumulation ---
         av->m_sceneAABB = AABB();
@@ -768,62 +857,216 @@ namespace CesiumGEPR {
         glUniformMatrix4fv(glGetUniformLocation(g_Program, "uV"), 1, 0, v.m);
         
         g_TotalFrustumVertices = 0;
-        for (uint32_t i=0; i<g_Tileset.renderListCount; ++i) {
-            Tile* t = g_Tileset.renderList[i];
-            if (!t->rendererResources && t->payload) {
-                cgltf_options opt = {cgltf_file_type_glb}; opt.memory.alloc_func = cgltf_alloc; opt.memory.free_func = cgltf_free_cb;
-                cgltf_data* data = 0;
-                uint8_t* glbPayload = t->payload; size_t glbSize = t->payloadSize;
-                DVec3 rtcCenter = {0,0,0};
-                if (glbSize >= 28 && memcmp(glbPayload, "b3dm", 4) == 0) {
-                    uint32_t ftj = *(uint32_t*)(glbPayload + 12), ftb = *(uint32_t*)(glbPayload + 16);
-                    uint32_t btj = *(uint32_t*)(glbPayload + 20), btb = *(uint32_t*)(glbPayload + 24);
-                    if (ftj > 0) {
-                        auto ft = AliceJson::parse(glbPayload + 28, ftj);
-                        if (ft.contains("RTC_CENTER")) {
-                            auto rtc = ft["RTC_CENTER"];
-                            rtcCenter = {(double)rtc[0], (double)rtc[1], (double)rtc[2]};
-                            if (frameIdx % 1000 == 0) printf("[DEBUG] RTC_CENTER = %f, %f, %f\n", rtcCenter.x, rtcCenter.y, rtcCenter.z);
+        
+        if (g_CurrentState == STATE_STREAMING) {
+            for (uint32_t i=0; i<g_Tileset.renderListCount; ++i) {
+                Tile* t = g_Tileset.renderList[i];
+                if (!t->rendererResources && t->payload) {
+                    cgltf_options opt = {cgltf_file_type_glb}; opt.memory.alloc_func = cgltf_alloc; opt.memory.free_func = cgltf_free_cb;
+                    cgltf_data* data = 0;
+                    uint8_t* glbPayload = t->payload; size_t glbSize = t->payloadSize;
+                    DVec3 rtcCenter = {0,0,0};
+                    if (glbSize >= 28 && memcmp(glbPayload, "b3dm", 4) == 0) {
+                        uint32_t ftj = *(uint32_t*)(glbPayload + 12), ftb = *(uint32_t*)(glbPayload + 16);
+                        uint32_t btj = *(uint32_t*)(glbPayload + 20), btb = *(uint32_t*)(glbPayload + 24);
+                        if (ftj > 0) {
+                            auto ft = AliceJson::parse(glbPayload + 28, ftj);
+                            if (ft.contains("RTC_CENTER")) {
+                                auto rtc = ft["RTC_CENTER"];
+                                rtcCenter = {(double)rtc[0], (double)rtc[1], (double)rtc[2]};
+                            }
                         }
+                        uint32_t headerLen = 28 + ftj + ftb + btj + btb;
+                        if (headerLen < glbSize) { glbPayload += headerLen; glbSize -= headerLen; }
                     }
-                    uint32_t headerLen = 28 + ftj + ftb + btj + btb;
-                    if (headerLen < glbSize) { glbPayload += headerLen; glbSize -= headerLen; }
+                    if (cgltf_parse(&opt, glbPayload, glbSize, &data) == cgltf_result_success) {
+                        cgltf_load_buffers(&opt, data, 0);
+                        RenderResources* res = allocResource();
+                        if (res && g_ScratchVbo && g_ScratchEbo) {
+                            uint32_t vIdx=0, eIdx=0;
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
+                            for (uint32_t vIdx2 = 0; vIdx2 < vIdx; ++vIdx2) t->localAABB.expand({g_ScratchVbo[vIdx2*6+0], g_ScratchVbo[vIdx2*6+1], g_ScratchVbo[vIdx2*6+2]});
+                            glGenVertexArrays(1, &res->vao); glBindVertexArray(res->vao);
+                            glGenBuffers(1, &res->vbo); glBindBuffer(GL_ARRAY_BUFFER, res->vbo); glBufferData(GL_ARRAY_BUFFER, vIdx*6*4, g_ScratchVbo, GL_STATIC_DRAW);
+                            glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, 0);
+                            glGenBuffers(1, &res->ebo); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, res->ebo); glBufferData(GL_ELEMENT_ARRAY_BUFFER, eIdx*4, g_ScratchEbo, GL_STATIC_DRAW);
+                            res->count = eIdx; t->rendererResources = res;
+                            g_TotalVRAMAllocations++;
+                        }
+                        cgltf_free(data);
+                    }
                 }
-                if (cgltf_parse(&opt, glbPayload, glbSize, &data) == cgltf_result_success) {
-                    cgltf_load_buffers(&opt, data, 0);
-                    RenderResources* res = allocResource();
-                    if (res && g_ScratchVbo && g_ScratchEbo) {
-                        uint32_t vIdx=0, eIdx=0;
-                        if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
-                        for (uint32_t vIdx2 = 0; vIdx2 < vIdx; ++vIdx2) t->localAABB.expand({g_ScratchVbo[vIdx2*6+0], g_ScratchVbo[vIdx2*6+1], g_ScratchVbo[vIdx2*6+2]});
-                        glGenVertexArrays(1, &res->vao); glBindVertexArray(res->vao);
-                        glGenBuffers(1, &res->vbo); glBindBuffer(GL_ARRAY_BUFFER, res->vbo); glBufferData(GL_ARRAY_BUFFER, vIdx*6*4, g_ScratchVbo, GL_STATIC_DRAW);
-                        glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, 0);
-                        glGenBuffers(1, &res->ebo); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, res->ebo); glBufferData(GL_ELEMENT_ARRAY_BUFFER, eIdx*4, g_ScratchEbo, GL_STATIC_DRAW);
-                        res->count = eIdx; t->rendererResources = res;
-                        g_TotalVRAMAllocations++;
+                if (t->rendererResources) { glBindVertexArray(t->rendererResources->vao); glDrawElements(GL_TRIANGLES, t->rendererResources->count, GL_UNSIGNED_INT, 0); g_TotalFrustumVertices += (uint64_t)t->rendererResources->count; }
+            }
+
+            if (frameIdx % 100 == 0) {
+                uint32_t activePayloads = 0; for(int i=0; i<PAYLOAD_POOL_SIZE; ++i) if(g_PayloadPool[i].inUse) activePayloads++;
+                uint32_t activeResources = 0; for(int i=0; i<RESOURCE_POOL_SIZE; ++i) if(g_ResourcePool[i].inUse) activeResources++;
+                printf("[GEPR] Frame %u, Depth: %u, RenderList: %u, Payloads: %u/%d, Resources: %u/%d\n", frameIdx, g_MaxDepthReached, g_Tileset.renderListCount, activePayloads, PAYLOAD_POOL_SIZE, activeResources, RESOURCE_POOL_SIZE);
+                fflush(stdout);
+            }
+            
+            // Checking for silence to transition
+            if (frameIdx - g_StateFrameStart > 400 && CesiumNetwork::g_AsyncRequests.size() == 0 && g_Tileset.renderListCount > 0) {
+                unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
+                stbi_flip_vertically_on_write(1); 
+                char path[256]; snprintf(path, 256, "streamed_gepr_loc%d_view%d.png", g_CurrentLocationIndex, g_CurrentViewIndex);
+                stbi_write_png(path, w, h, 3, px, w*3); free(px);
+                g_CurrentState = STATE_AGGREGATE; g_StateFrameStart = frameIdx;
+                printf("[Test] View %d STREAMING Complete. Proceeding to AGGREGATE.\n", g_CurrentViewIndex); fflush(stdout);
+            }
+            
+        } else if (g_CurrentState == STATE_AGGREGATE) {
+            std::vector<float> totalVBO; std::vector<uint32_t> totalEBO;
+            for (uint32_t i = 0; i < g_Tileset.renderListCount; ++i) {
+                Tile* t = g_Tileset.renderList[i];
+                if (t->payload) {
+                    cgltf_options opt = {cgltf_file_type_glb}; opt.memory.alloc_func = cgltf_alloc; opt.memory.free_func = cgltf_free_cb;
+                    cgltf_data* data = 0;
+                    uint8_t* glbPayload = t->payload; size_t glbSize = t->payloadSize;
+                    DVec3 rtcCenter = {0,0,0};
+                    if (glbSize >= 28 && memcmp(glbPayload, "b3dm", 4) == 0) {
+                        uint32_t ftj = *(uint32_t*)(glbPayload + 12), ftb = *(uint32_t*)(glbPayload + 16);
+                        uint32_t btj = *(uint32_t*)(glbPayload + 20), btb = *(uint32_t*)(glbPayload + 24);
+                        if (ftj > 0) {
+                            auto ft = AliceJson::parse(glbPayload + 28, ftj);
+                            if (ft.contains("RTC_CENTER")) {
+                                auto rtc = ft["RTC_CENTER"]; rtcCenter = {(double)rtc[0], (double)rtc[1], (double)rtc[2]};
+                            }
+                        }
+                        uint32_t headerLen = 28 + ftj + ftb + btj + btb;
+                        if (headerLen < glbSize) { glbPayload += headerLen; glbSize -= headerLen; }
                     }
-                    cgltf_free(data);
+                    if (cgltf_parse(&opt, glbPayload, glbSize, &data) == cgltf_result_success) {
+                        cgltf_load_buffers(&opt, data, 0);
+                        if (g_ScratchVbo && g_ScratchEbo) {
+                            uint32_t vIdx=0, eIdx=0;
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
+                            uint32_t offset = (uint32_t)(totalVBO.size()/6);
+                            for(uint32_t v=0; v<vIdx*6; ++v) totalVBO.push_back(g_ScratchVbo[v]);
+                            for(uint32_t e=0; e<eIdx; ++e) totalEBO.push_back(g_ScratchEbo[e] + offset);
+                        }
+                        cgltf_free(data);
+                    }
                 }
             }
-            if (t->rendererResources) { glBindVertexArray(t->rendererResources->vao); glDrawElements(GL_TRIANGLES, t->rendererResources->count, GL_UNSIGNED_INT, 0); g_TotalFrustumVertices += (uint64_t)t->rendererResources->count; }
-        }
-
-        if (frameIdx % 100 == 0) {
-            uint32_t activePayloads = 0; for(int i=0; i<PAYLOAD_POOL_SIZE; ++i) if(g_PayloadPool[i].inUse) activePayloads++;
-            uint32_t activeResources = 0; for(int i=0; i<RESOURCE_POOL_SIZE; ++i) if(g_ResourcePool[i].inUse) activeResources++;
-            printf("[GEPR] Frame %u, Depth: %u, RenderList: %u, Payloads: %u/%d, Resources: %u/%d\n", frameIdx, g_MaxDepthReached, g_Tileset.renderListCount, activePayloads, PAYLOAD_POOL_SIZE, activeResources, RESOURCE_POOL_SIZE);
-            fflush(stdout);
-        }
-
-        if (frameIdx == 2000) {
-            unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
-            stbi_flip_vertically_on_write(1);
-            stbi_write_png("production_framebuffer_macro_final.png", w, h, 3, px, w*3);
-            free(px);
-            uint32_t activePayloads = 0; for(int i=0; i<PAYLOAD_POOL_SIZE; ++i) if(g_PayloadPool[i].inUse) activePayloads++;
-            printf("[STRESS_TEST] Final Depth: %u, Payloads: %u/%d\n", g_MaxDepthReached, activePayloads, PAYLOAD_POOL_SIZE);
-            fflush(stdout);
+            char binPath[256]; snprintf(binPath, 256, "cache_gepr_loc%d_view%d.bin", g_CurrentLocationIndex, g_CurrentViewIndex);
+            FILE* f = fopen(binPath, "wb");
+            if (f) {
+                uint32_t vCount = (uint32_t)totalVBO.size(), iCount = (uint32_t)totalEBO.size();
+                fwrite(&vCount, sizeof(uint32_t), 1, f); fwrite(&iCount, sizeof(uint32_t), 1, f);
+                fwrite(totalVBO.data(), sizeof(float), vCount, f); fwrite(totalEBO.data(), sizeof(uint32_t), iCount, f); fclose(f);
+            }
+            g_CurrentState = STATE_LOAD_CACHED; g_StateFrameStart = frameIdx;
+            printf("[Test] View %d AGGREGATE Complete. Proceeding to LOAD_CACHED.\n", g_CurrentViewIndex); fflush(stdout);
+            
+        } else if (g_CurrentState == STATE_LOAD_CACHED) {
+            if (g_CachedVAO == 0) {
+                char binPath[256]; snprintf(binPath, 256, "cache_gepr_loc%d_view%d.bin", g_CurrentLocationIndex, g_CurrentViewIndex);
+                FILE* f = fopen(binPath, "rb");
+                if (f) {
+                    uint32_t vCount, iCount; fread(&vCount, sizeof(uint32_t), 1, f); fread(&iCount, sizeof(uint32_t), 1, f);
+                    std::vector<float> vbo(vCount); std::vector<uint32_t> ebo(iCount);
+                    fread(vbo.data(), sizeof(float), vCount, f); fread(ebo.data(), sizeof(uint32_t), iCount, f); fclose(f);
+                    glGenVertexArrays(1, &g_CachedVAO); glBindVertexArray(g_CachedVAO);
+                    glGenBuffers(1, &g_CachedVBO); glGenBuffers(1, &g_CachedEBO);
+                    glBindBuffer(GL_ARRAY_BUFFER, g_CachedVBO); glBufferData(GL_ARRAY_BUFFER, vbo.size()*4, vbo.data(), GL_STATIC_DRAW);
+                    glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, 0);
+                    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_CachedEBO); glBufferData(GL_ELEMENT_ARRAY_BUFFER, ebo.size()*4, ebo.data(), GL_STATIC_DRAW);
+                    g_CachedCount = (int)iCount;
+                }
+            }
+            if (g_CachedVAO) { glBindVertexArray(g_CachedVAO); glDrawElements(GL_TRIANGLES, g_CachedCount, GL_UNSIGNED_INT, 0); }
+            if (frameIdx - g_StateFrameStart > 10) {
+                unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
+                stbi_flip_vertically_on_write(1); 
+                char path[256]; snprintf(path, 256, "cached_gepr_loc%d_view%d.png", g_CurrentLocationIndex, g_CurrentViewIndex);
+                stbi_write_png(path, w, h, 3, px, w*3); free(px);
+                g_CurrentState = STATE_VERIFY; g_StateFrameStart = frameIdx;
+                printf("[Test] View %d LOAD_CACHED Complete. Proceeding to VERIFY.\n", g_CurrentViewIndex); fflush(stdout);
+            }
+            
+        } else if (g_CurrentState == STATE_VERIFY) {
+            char p1[256], p2[256]; 
+            snprintf(p1, 256, "streamed_gepr_loc%d_view%d.png", g_CurrentLocationIndex, g_CurrentViewIndex);
+            snprintf(p2, 256, "cached_gepr_loc%d_view%d.png", g_CurrentLocationIndex, g_CurrentViewIndex);
+            int w1, h1, c1, w2, h2, c2;
+            uint8_t *img1 = stbi_load(p1, &w1, &h1, &c1, 3), *img2 = stbi_load(p2, &w2, &h2, &c2, 3);
+            if (img1 && img2) {
+                float score = evaluateStructuralFit(img1, img2, w1, h1);
+                printf("[Verify] Cached GEPR Loc %d View %d F1 Score: %.4f\n", g_CurrentLocationIndex, g_CurrentViewIndex, score);
+                stbi_image_free(img1); stbi_image_free(img2);
+            } else {
+                printf("[Verify] Error loading images for verification.\n");
+            }
+            
+            FILE* outJson = fopen("output.json", "a");
+            if (outJson) {
+                if (g_CurrentLocationIndex > 0 || g_CurrentViewIndex > 0) fprintf(outJson, ",\n");
+                fprintf(outJson, "    {\n");
+                fprintf(outJson, "      \"image\": \"%s\",\n", p1);
+                fprintf(outJson, "      \"location\": \"%s\",\n", g_Locations[g_CurrentLocationIndex].name);
+                fprintf(outJson, "      \"lat\": %.6f,\n", g_Locations[g_CurrentLocationIndex].lat);
+                fprintf(outJson, "      \"lon\": %.6f,\n", g_Locations[g_CurrentLocationIndex].lon);
+                fprintf(outJson, "      \"alt\": %.1f,\n", g_Locations[g_CurrentLocationIndex].alt);
+                fprintf(outJson, "      \"semantic_criteria\": \"%s\",\n", g_Locations[g_CurrentLocationIndex].semantic);
+                fprintf(outJson, "      \"camera\": {\n");
+                fprintf(outJson, "        \"focusPoint\": [%.1f, %.1f, %.1f],\n", g_Views[g_CurrentViewIndex].focusPoint.x, g_Views[g_CurrentViewIndex].focusPoint.y, g_Views[g_CurrentViewIndex].focusPoint.z);
+                fprintf(outJson, "        \"distance\": %.1f,\n", g_Views[g_CurrentViewIndex].distance);
+                fprintf(outJson, "        \"pitch\": %.2f,\n", g_Views[g_CurrentViewIndex].pitch);
+                fprintf(outJson, "        \"yaw\": %.2f,\n", g_Views[g_CurrentViewIndex].yaw);
+                fprintf(outJson, "        \"fov\": %.1f\n", av->fov);
+                fprintf(outJson, "      }\n");
+                fprintf(outJson, "    }");
+                fclose(outJson);
+            }
+            
+            // Clean up cached VAO for the next view
+            glDeleteVertexArrays(1, &g_CachedVAO); glDeleteBuffers(1, &g_CachedVBO); glDeleteBuffers(1, &g_CachedEBO);
+            g_CachedVAO = 0; g_CachedVBO = 0; g_CachedEBO = 0; g_CachedCount = 0;
+            
+            g_CurrentViewIndex++;
+            if (g_CurrentViewIndex < 4) {
+                g_CurrentState = STATE_STREAMING; g_StateFrameStart = frameIdx;
+                av->camera.focusPoint = g_Views[g_CurrentViewIndex].focusPoint; 
+                av->camera.distance = g_Views[g_CurrentViewIndex].distance;
+                av->camera.pitch = g_Views[g_CurrentViewIndex].pitch;
+                av->camera.yaw = g_Views[g_CurrentViewIndex].yaw;
+                printf("[GEPR] Camera Update to View %d\n", g_CurrentViewIndex); fflush(stdout);
+            } else {
+                g_CurrentState = STATE_DONE; g_StateFrameStart = frameIdx;
+            }
+            
+        } else if (g_CurrentState == STATE_DONE) {
+            printf("[Test] Loc %d GEPR ALL 4 VIEWS Caching verification complete.\n", g_CurrentLocationIndex); fflush(stdout);
+            g_CurrentLocationIndex++;
+            if (g_CurrentLocationIndex < g_Locations.size()) {
+                g_CurrentState = STATE_STREAMING;
+                g_StateFrameStart = frameIdx;
+                g_CurrentViewIndex = 0;
+                
+                // Full cleanup of memory to reload new location
+                for(int i=0; i<RESOURCE_POOL_SIZE; ++i) if(g_ResourcePool[i].inUse) { freeResource(&g_ResourcePool[i]); }
+                for(int i=0; i<PAYLOAD_POOL_SIZE; ++i) { g_PayloadPool[i].inUse = false; }
+                
+                Alice::g_Arena.offset = 0; 
+                g_Tileset.init(); // Re-allocate root pointers cleanly
+                loadTilesetForCurrentLocation();
+                
+                AliceViewer* av = AliceViewer::instance();
+                av->camera.focusPoint = g_Views[0].focusPoint; 
+                av->camera.distance = g_Views[0].distance;
+                av->camera.pitch = g_Views[0].pitch;
+                av->camera.yaw = g_Views[0].yaw;
+            } else {
+                FILE* outJson = fopen("output.json", "a");
+                if (outJson) {
+                    fprintf(outJson, "\n  ]\n}\n");
+                    fclose(outJson);
+                }
+                printf("[Test] ALL LOCATIONS VERIFIED. Exiting.\n"); fflush(stdout);
+                exit(0);
+            }
         }
     }
 }

@@ -8,8 +8,11 @@
       "semantic_criteria": "A massive domed cathedral surrounded by dense central London architecture.",
       "image_description": "highly detailed view of the dome of St Pauls",
       "export_3dm": true,
+      "export_framebuffer": true,
+      "export_stencils": false,
+      "load_gepr": false,
+      "load_osm": true,
       "views": [
-        {"focusPoint": [0.0, 0.0, 50.0], "distance": 150.0, "pitch": 0.20, "yaw": 0.00},
         {"focusPoint": [0.0, 0.0, 50.0], "distance": 250.0, "pitch": 0.40, "yaw": 1.57}
       ]
     }

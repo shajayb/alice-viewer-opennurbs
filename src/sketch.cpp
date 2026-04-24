@@ -6,7 +6,7 @@ namespace Alice {
     LinearArena g_Arena; 
     LinearArena g_JsonArena;
 }
-#include "CesiumGEPR.h"
+#include "cesium_gepr_and_osm.h"
 #else
 
 #include "AliceViewer.h"

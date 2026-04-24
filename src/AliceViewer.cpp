@@ -1089,23 +1089,20 @@ void AliceViewer::captureHighResStencils(const char* prefix)
     float coverage = (float)nonBackgroundCount / (float)pixelCount * 100.0f;
     printf("[AliceViewer] High-res Pixel Coverage: %.4f%%\n", coverage);
     
-    m_pendingCaptures++;
     int w = m_offscreen.width;
     int h = m_offscreen.height;
     std::string prefixStr = prefix;
     
-    std::thread([colorData, segData, depth8, w, h, prefixStr, this]() {
-        stbi_flip_vertically_on_write(true);
-        char path[512];
-        snprintf(path, 512, "%s_beauty.png", prefixStr.c_str());
-        stbi_write_png(path, w, h, 3, colorData->data(), w * 3);
-        snprintf(path, 512, "%s_seg.png", prefixStr.c_str());
-        stbi_write_png(path, w, h, 3, segData->data(), w * 3);
-        snprintf(path, 512, "%s_depth.png", prefixStr.c_str());
-        stbi_write_png(path, w, h, 1, depth8->data(), w);
-        printf("[AliceViewer] Async capture complete: %s (Root: ./%s_beauty.png)\n", prefixStr.c_str(), prefixStr.c_str());
-        m_pendingCaptures--;
-    }).detach();
+    // Execute synchronously to avoid thread stack overflow or race conditions
+    stbi_flip_vertically_on_write(true);
+    char path[512];
+    snprintf(path, 512, "%s_beauty.png", prefixStr.c_str());
+    stbi_write_png(path, w, h, 3, colorData->data(), w * 3);
+    snprintf(path, 512, "%s_seg.png", prefixStr.c_str());
+    stbi_write_png(path, w, h, 3, segData->data(), w * 3);
+    snprintf(path, 512, "%s_depth.png", prefixStr.c_str());
+    stbi_write_png(path, w, h, 1, depth8->data(), w);
+    printf("[AliceViewer] Async capture complete: %s (Root: ./%s_beauty.png)\n", prefixStr.c_str(), prefixStr.c_str());
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     m_isRenderingOffscreen = false;

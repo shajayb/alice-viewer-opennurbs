@@ -8,6 +8,8 @@
 #include <type_traits>
 #include "AliceMemory.h"
 
+namespace Alice { extern LinearArena g_JsonArena; }
+
 // --- Custom JSON Parser (Zero-Heap, DOD) ---
 namespace AliceJson {
     enum JsonType { J_NULL, J_OBJECT, J_ARRAY, J_STRING, J_NUMBER, J_BOOL };
@@ -94,7 +96,7 @@ namespace AliceJson {
         p++; const char* start = p;
         while (*p && *p != '\"') { if (*p == '\\') p++; p++; }
         size_t len = p - start;
-        char* str = (char*)Alice::g_Arena.allocate(len + 1);
+        char* str = (char*)Alice::g_JsonArena.allocate(len + 1);
         memcpy(str, start, len); str[len] = '\0';
         if (*p == '\"') p++; return str;
     }
@@ -105,9 +107,9 @@ namespace AliceJson {
             if (*count_p == '\"') { skip_value(count_p); skip_ws(count_p); if (*count_p == ':') { count_p++; skip_value(count_p); count++; } }
             skip_ws(count_p); if (*count_p == ',') count_p++; skip_ws(count_p);
         }
-        JsonValue* obj = (JsonValue*)Alice::g_Arena.allocate(sizeof(JsonValue));
+        JsonValue* obj = (JsonValue*)Alice::g_JsonArena.allocate(sizeof(JsonValue));
         obj->type = J_OBJECT; obj->object.count = count; p++; skip_ws(p);
-        obj->object.pairs = (JsonKeyValuePair*)Alice::g_Arena.allocate(sizeof(JsonKeyValuePair) * count);
+        obj->object.pairs = (JsonKeyValuePair*)Alice::g_JsonArena.allocate(sizeof(JsonKeyValuePair) * count);
         for (uint32_t i = 0; i < count; ++i) {
             obj->object.pairs[i].key = parse_string_raw(p); skip_ws(p);
             if (*p == ':') p++; skip_ws(p);
@@ -120,9 +122,9 @@ namespace AliceJson {
         if (*p != '[') return nullptr;
         const char* count_p = p + 1; uint32_t count = 0; skip_ws(count_p);
         while (*count_p && *count_p != ']') { skip_value(count_p); count++; skip_ws(count_p); if (*count_p == ',') count_p++; skip_ws(count_p); }
-        JsonValue* arr = (JsonValue*)Alice::g_Arena.allocate(sizeof(JsonValue));
+        JsonValue* arr = (JsonValue*)Alice::g_JsonArena.allocate(sizeof(JsonValue));
         arr->type = J_ARRAY; arr->array.count = count; p++; skip_ws(p);
-        arr->array.values = (JsonValue**)Alice::g_Arena.allocate(sizeof(JsonValue*) * count);
+        arr->array.values = (JsonValue**)Alice::g_JsonArena.allocate(sizeof(JsonValue*) * count);
         for (uint32_t i = 0; i < count; ++i) { arr->array.values[i] = parse_value(p); skip_ws(p); if (*p == ',') p++; skip_ws(p); }
         if (*p == ']') p++; return arr;
     }
@@ -132,22 +134,22 @@ namespace AliceJson {
         if (*p == '{') return parse_object(p);
         if (*p == '[') return parse_array(p);
         if (*p == '\"') {
-            JsonValue* val = (JsonValue*)Alice::g_Arena.allocate(sizeof(JsonValue));
+            JsonValue* val = (JsonValue*)Alice::g_JsonArena.allocate(sizeof(JsonValue));
             val->type = J_STRING; char* s = parse_string_raw(p);
             val->string.ptr = s; val->string.len = strlen(s); return val;
         }
         if ((*p >= '0' && *p <= '9') || *p == '-') {
-            JsonValue* val = (JsonValue*)Alice::g_Arena.allocate(sizeof(JsonValue));
+            JsonValue* val = (JsonValue*)Alice::g_JsonArena.allocate(sizeof(JsonValue));
             val->type = J_NUMBER; char* end; val->number = strtod(p, &end); p = end; return val;
         }
-        if (strncmp(p, "true", 4) == 0) { JsonValue* val = (JsonValue*)Alice::g_Arena.allocate(sizeof(JsonValue)); val->type = J_BOOL; val->boolean = true; p += 4; return val; }
-        if (strncmp(p, "false", 5) == 0) { JsonValue* val = (JsonValue*)Alice::g_Arena.allocate(sizeof(JsonValue)); val->type = J_BOOL; val->boolean = false; p += 5; return val; }
-        if (strncmp(p, "null", 4) == 0) { JsonValue* val = (JsonValue*)Alice::g_Arena.allocate(sizeof(JsonValue)); val->type = J_NULL; p += 4; return val; }
-        JsonValue* nv = (JsonValue*)Alice::g_Arena.allocate(sizeof(JsonValue)); nv->type = J_NULL; return nv;
+        if (strncmp(p, "true", 4) == 0) { JsonValue* val = (JsonValue*)Alice::g_JsonArena.allocate(sizeof(JsonValue)); val->type = J_BOOL; val->boolean = true; p += 4; return val; }
+        if (strncmp(p, "false", 5) == 0) { JsonValue* val = (JsonValue*)Alice::g_JsonArena.allocate(sizeof(JsonValue)); val->type = J_BOOL; val->boolean = false; p += 5; return val; }
+        if (strncmp(p, "null", 4) == 0) { JsonValue* val = (JsonValue*)Alice::g_JsonArena.allocate(sizeof(JsonValue)); val->type = J_NULL; p += 4; return val; }
+        JsonValue* nv = (JsonValue*)Alice::g_JsonArena.allocate(sizeof(JsonValue)); nv->type = J_NULL; return nv;
     }
 
     static JsonValue parse(const uint8_t* data, size_t size) {
-        char* buf = (char*)Alice::g_Arena.allocate(size + 1);
+        char* buf = (char*)Alice::g_JsonArena.allocate(size + 1);
         memcpy(buf, data, size); buf[size] = '\0';
         const char* p = buf; JsonValue* val = parse_value(p);
         return val ? *val : JsonValue();

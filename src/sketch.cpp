@@ -1,9 +1,11 @@
 #define ALICE_TEST_CESIUM_GEPR
 
 #ifdef ALICE_TEST_CESIUM_GEPR
-#define CESIUM_GEPR_RUN_TEST
 #include "AliceMemory.h"
-namespace Alice { LinearArena g_Arena; }
+namespace Alice { 
+    LinearArena g_Arena; 
+    LinearArena g_JsonArena;
+}
 #include "CesiumGEPR.h"
 #else
 
@@ -16,7 +18,10 @@ namespace Alice { LinearArena g_Arena; }
 #include <cmath>
 #include <algorithm>
 
-namespace Alice { LinearArena g_Arena; }
+namespace Alice { 
+    LinearArena g_Arena; 
+    LinearArena g_JsonArena;
+}
 
 static int frameCount = 0;
 static int captureCount = 0;

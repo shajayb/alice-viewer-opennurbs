@@ -434,12 +434,18 @@ namespace CesiumGEPROSM {
 
             // --- Dynamic Frustum Culling ---
             AABB testBox = node->localAABB.initialized ? node->localAABB : node->boundingAABB;
-            bool visible = currentFrustum.intersects(testBox);
+            bool visible = (depth < 4) ? true : currentFrustum.intersects(testBox);
 
             // MANDATE: Christ the Redeemer (origin {0,0,0} in ENU) must NEVER be culled.
             if (testBox.initialized) {
                 float d2 = testBox.center().x * testBox.center().x + testBox.center().y * testBox.center().y + testBox.center().z * testBox.center().z;
                 if (d2 < 40000.0f) visible = true; // 200m radius
+                
+                float dx = std::max(0.0f, std::max(testBox.m_min.x, -testBox.m_max.x));
+                float dy = std::max(0.0f, std::max(testBox.m_min.y, -testBox.m_max.y));
+                float dz = std::max(0.0f, std::max(testBox.m_min.z, -testBox.m_max.z));
+                float distToBox2 = dx*dx + dy*dy + dz*dz;
+                if (depth > 4 && distToBox2 > 25000000.0f) return 1; // HARD CULL BEYOND 5KM
             }
             if (!visible) return 1;
 
@@ -684,6 +690,7 @@ namespace CesiumGEPROSM {
                         for(int v=0; v<4; ++v) loc.views.push_back(g_Views[v]);
                     }
                     g_Locations.push_back(loc);
+                    printf("[GEPR] Location Loaded. GEPR: %d, OSM: %d\n", loc.load_gepr, loc.load_osm);
                 }
             }
             Alice::g_JsonArena.reset();
@@ -699,6 +706,7 @@ namespace CesiumGEPROSM {
         double lon = g_Locations[g_CurrentLocationIndex].lon * 0.0174532925;
         double alt = g_Locations[g_CurrentLocationIndex].alt;
         g_OriginEcef = lla_to_ecef(lat, lon, alt); 
+        printf("[GEPR] Origin ECEF: %f, %f, %f\n", g_OriginEcef.x, g_OriginEcef.y, g_OriginEcef.z);
         denu_matrix(g_EnuMatrix, lat, lon);
         
         char ionToken[2048];
@@ -773,7 +781,7 @@ namespace CesiumGEPROSM {
             "    vec3 N = normalize(cross(dFdx(vVP), dFdy(vVP)));\n"
             "    if(!gl_FrontFacing) N = -N;\n"
             "    float d = max(dot(N, normalize(vec3(0.5, 0.8, 0.6))), 0.2);\n"
-            "    f_Color = vec4(vec3(0.85) * d, 1.0);\n"
+            "    f_Color = vec4(1.0, 1.0, 1.0, 1.0);\n"
             "    f_Seg = vec4(1.0, 1.0, 1.0, 1.0);\n"
             "    float near = 0.1;\n"
             "    float far = 5000.0;\n"
@@ -786,10 +794,16 @@ namespace CesiumGEPROSM {
         g_Program=glCreateProgram(); glAttachShader(g_Program,v); glAttachShader(g_Program,f); glLinkProgram(g_Program);
     }
 
-    static void processNode(cgltf_node* node, const DMat4& tileTransform, const DMat4& gltfTransform, const DVec3& rtcCenter, float* vbo, uint32_t* ebo, uint32_t& vIdx, uint32_t& eIdx) {
-        DMat4 m = gltfTransform;
-        if (node->has_matrix) { DMat4 nm; for(int i=0;i<16;++i) nm.m[i] = (double)node->matrix[i]; m = dmat4_mul(gltfTransform, nm); }
-        else {
+    static void processNode(cgltf_node* node, const DMat4& transform, const DVec3& rtcCenter, float* vbo, uint32_t* ebo, uint32_t& vIdx, uint32_t& eIdx) {
+        DMat4 m = transform;
+        if (node->has_matrix) { 
+            DMat4 nm; for(int i=0;i<16;++i) nm.m[i] = (double)node->matrix[i]; 
+            m = dmat4_mul(transform, nm); 
+            static bool loggedM = false; if (!loggedM) {
+                printf("[GEPR] Final Matrix m: "); for(int i=0;i<16;++i) printf("%f ", m.m[i]); printf("\n");
+                loggedM = true;
+            }
+        } else {
             if (node->has_translation) m = dmat4_translate(m, {(double)node->translation[0], (double)node->translation[1], (double)node->translation[2]});
             if (node->has_rotation) m = dmat4_mul(m, dmat4_from_quat((double*)node->rotation));
             if (node->has_scale) m = dmat4_scale(m, {(double)node->scale[0], (double)node->scale[1], (double)node->scale[2]});
@@ -803,20 +817,19 @@ namespace CesiumGEPROSM {
                 uint32_t offset = vIdx;
                 for (size_t k=0; k<pa->count; ++k) {
                     float pos[3]; cgltf_accessor_read_float(pa, k, pos, 3);
-                    DVec4 lp = dmat4_mul_vec4(m, {(double)pos[0], (double)pos[1], (double)pos[2], 1.0});
-                    
-                    // glTF is Y-Up by default, 3D Tiles is Z-Up.
-                    // Y_UP_TO_Z_UP: x -> x, y -> -z, z -> y
-                    double up_x = lp.x;
-                    double up_y = -lp.z;
-                    double up_z = lp.y;
-                    
-                    DVec4 wp = dmat4_mul_vec4(tileTransform, {up_x + rtcCenter.x, up_y + rtcCenter.y, up_z + rtcCenter.z, 1.0});
+                    static bool loggedPos = false; if (!loggedPos) {
+                        printf("[GEPR] Raw Node Translation: %f, %f, %f\n", node->translation[0], node->translation[1], node->translation[2]);
+                        printf("[GEPR] Raw Vertex 0 Pos: %f, %f, %f\n", pos[0], pos[1], pos[2]);
+                        printf("[GEPR] Transform[12-14]: %f, %f, %f\n", transform.m[12], transform.m[13], transform.m[14]);
+                        loggedPos = true;
+                    }
+                    DVec4 wp = dmat4_mul_vec4(m, {(double)pos[0] + rtcCenter.x, (double)pos[1] + rtcCenter.y, (double)pos[2] + rtcCenter.z, 1.0});
                     double dx = wp.x - g_OriginEcef.x, dy = wp.y - g_OriginEcef.y, dz = wp.z - g_OriginEcef.z;
                     float ex = (float)(g_EnuMatrix[0]*dx + g_EnuMatrix[1]*dy + g_EnuMatrix[2]*dz);
                     float ny = (float)(g_EnuMatrix[4]*dx + g_EnuMatrix[5]*dy + g_EnuMatrix[6]*dz);
                     float uz = (float)(g_EnuMatrix[8]*dx + g_EnuMatrix[9]*dy + g_EnuMatrix[10]*dz);
                     vbo[vIdx*6+0] = ex; vbo[vIdx*6+1] = ny; vbo[vIdx*6+2] = uz; 
+                    vbo[vIdx*6+3] = 0.0f; vbo[vIdx*6+4] = 0.0f; vbo[vIdx*6+5] = 0.0f;
                     vIdx++;
                 }
                 if (p->type == cgltf_primitive_type_triangle_strip) {
@@ -836,7 +849,7 @@ namespace CesiumGEPROSM {
                 }
             }
         }
-        for (size_t i=0; i<node->children_count; ++i) processNode(node->children[i], tileTransform, m, rtcCenter, vbo, ebo, vIdx, eIdx);
+        for (size_t i=0; i<node->children_count; ++i) processNode(node->children[i], m, rtcCenter, vbo, ebo, vIdx, eIdx);
     }
 
     static void setup() {
@@ -930,9 +943,10 @@ namespace CesiumGEPROSM {
             glClearBufferfv(GL_COLOR, 2, zero);
             glClearDepth(0.0f); glClear(GL_DEPTH_BUFFER_BIT);
         } else {
-            glClearColor(0.0f, 1.0f, 0.0f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+            glClearColor(1.0f, 0.0f, 0.0f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         }
-        glEnable(GL_DEPTH_TEST); glDepthFunc(GL_GEQUAL);
+        glEnable(GL_DEPTH_TEST); glDepthFunc(GL_ALWAYS);
+        glDisable(GL_CULL_FACE);
         int w, h; glfwGetFramebufferSize(av->window, &w, &h);
         M4 v = av->camera.getViewMatrix(), p = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 0.1f);
         float mvp[16]; for(int i=0;i<4;++i)for(int j=0;j<4;++j){mvp[i+j*4]=0;for(int k=0;k<4;++k)mvp[i+j*4]+=p.m[i+k*4]*v.m[k+j*4];}
@@ -957,6 +971,7 @@ namespace CesiumGEPROSM {
                             if (ft.contains("RTC_CENTER")) {
                                 auto rtc = ft["RTC_CENTER"];
                                 rtcCenter = {(double)rtc[0], (double)rtc[1], (double)rtc[2]};
+                                static bool loggedRtc = false; if (!loggedRtc) { printf("[GEPR] Parsed RTC_CENTER: %f, %f, %f\n", rtcCenter.x, rtcCenter.y, rtcCenter.z); loggedRtc = true; }
                             }
                         }
                         uint32_t headerLen = 28 + ftj + ftb + btj + btb;
@@ -967,7 +982,9 @@ namespace CesiumGEPROSM {
                         RenderResources* res = allocResource();
                         if (res && g_ScratchVbo && g_ScratchEbo) {
                             uint32_t vIdx=0, eIdx=0;
-                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
+                            DMat4 yup = {1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1};
+                            DMat4 mTransform = dmat4_mul(t->transform, yup);
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], mTransform, rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
                             for (uint32_t vIdx2 = 0; vIdx2 < vIdx; ++vIdx2) t->localAABB.expand({g_ScratchVbo[vIdx2*6+0], g_ScratchVbo[vIdx2*6+1], g_ScratchVbo[vIdx2*6+2]});
                             glGenVertexArrays(1, &res->vao); glBindVertexArray(res->vao);
                             glGenBuffers(1, &res->vbo); glBindBuffer(GL_ARRAY_BUFFER, res->vbo); glBufferData(GL_ARRAY_BUFFER, vIdx*6*4, g_ScratchVbo, GL_STATIC_DRAW);
@@ -1001,7 +1018,12 @@ namespace CesiumGEPROSM {
             if (frameIdx % 100 == 0) {
                 uint32_t activePayloads = 0; for(int i=0; i<PAYLOAD_POOL_SIZE; ++i) if(g_PayloadPool[i].inUse) activePayloads++;
                 uint32_t activeResources = 0; for(int i=0; i<RESOURCE_POOL_SIZE; ++i) if(g_ResourcePool[i].inUse) activeResources++;
-                printf("[GEPR] Frame %u, Depth: %u, RenderList: %u, Payloads: %u/%d, Resources: %u/%d\n", frameIdx, g_MaxDepthReached, g_Tileset.renderListCount, activePayloads, PAYLOAD_POOL_SIZE, activeResources, RESOURCE_POOL_SIZE);
+                printf("[GEPR] Frame %u, Depth: %u, RenderList: %u, Vertices: %llu, Payloads: %u/%d, Resources: %u/%d\n", frameIdx, g_MaxDepthReached, g_Tileset.renderListCount, g_TotalFrustumVertices, activePayloads, PAYLOAD_POOL_SIZE, activeResources, RESOURCE_POOL_SIZE);
+                for (uint32_t i=0; i<std::min((uint32_t)5, g_Tileset.renderListCount); ++i) {
+                    Tile* t = g_Tileset.renderList[i];
+                    AABB& b = t->localAABB.initialized ? t->localAABB : t->boundingAABB;
+                    printf("[GEPR] Tile %u (URI: %s) AABB: min(%f, %f, %f) max(%f, %f, %f)\n", i, (t->contentUri[0] != '\0') ? t->contentUri : "null", b.m_min.x, b.m_min.y, b.m_min.z, b.m_max.x, b.m_max.y, b.m_max.z);
+                }
                 fflush(stdout);
             }
             
@@ -1056,7 +1078,15 @@ namespace CesiumGEPROSM {
                         cgltf_load_buffers(&opt, data, 0);
                         if (g_ScratchVbo && g_ScratchEbo) {
                             uint32_t vIdx=0, eIdx=0;
-                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
+                            DMat4 mTransform;
+                            DMat4 yup = {1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1};
+                            DMat4 invYup = {1,0,0,0, 0,0,-1,0, 0,1,0,0, 0,0,0,1};
+                            if (g_Locations[g_CurrentLocationIndex].load_osm) {
+                                mTransform = invYup;
+                            } else {
+                                mTransform = dmat4_mul(t->transform, yup);
+                            }
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], mTransform, {0,0,0}, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
                             uint32_t offset = (uint32_t)(totalVBO.size()/6);
                             for(uint32_t v=0; v<vIdx*6; ++v) totalVBO.push_back(g_ScratchVbo[v]);
                             for(uint32_t e=0; e<eIdx; ++e) totalEBO.push_back(g_ScratchEbo[e] + offset);
@@ -1115,7 +1145,7 @@ namespace CesiumGEPROSM {
                         cgltf_load_buffers(&opt, data, 0);
                         if (g_ScratchVbo && g_ScratchEbo) {
                             uint32_t vIdx=0, eIdx=0;
-                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, {0,0,0}, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
                             uint32_t offset = (uint32_t)(exportVBO.size()/6);
                             for(uint32_t v=0; v<vIdx*6; ++v) exportVBO.push_back(g_ScratchVbo[v]);
                             for(uint32_t e=0; e<eIdx; ++e) exportEBO.push_back(g_ScratchEbo[e] + offset);

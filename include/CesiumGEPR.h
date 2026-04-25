@@ -242,6 +242,8 @@ namespace CesiumGEPR {
         char semantic[256];
         char image_description[512];
         bool export_3dm;
+        bool export_framebuffer;
+        bool export_stencils;
         std::vector<TestView> views;
     };
     static std::vector<TestLocation> g_Locations;
@@ -667,6 +669,8 @@ namespace CesiumGEPR {
                         loc.image_description[0] = '\0';
                     }
                     loc.export_3dm = locs[(uint32_t)i].contains("export_3dm") && locs[(uint32_t)i]["export_3dm"].type == AliceJson::J_BOOL ? locs[(uint32_t)i]["export_3dm"].boolean : false;
+                    loc.export_framebuffer = locs[(uint32_t)i].contains("export_framebuffer") && locs[(uint32_t)i]["export_framebuffer"].type == AliceJson::J_BOOL ? locs[(uint32_t)i]["export_framebuffer"].boolean : true;
+                    loc.export_stencils = locs[(uint32_t)i].contains("export_stencils") && locs[(uint32_t)i]["export_stencils"].type == AliceJson::J_BOOL ? locs[(uint32_t)i]["export_stencils"].boolean : true;
                     if (locs[(uint32_t)i].contains("views") && locs[(uint32_t)i]["views"].type == AliceJson::J_ARRAY) {
                         auto vws = locs[(uint32_t)i]["views"];
                         for(size_t v=0; v<vws.size(); ++v) {
@@ -999,16 +1003,22 @@ namespace CesiumGEPR {
             
             // Checking for silence to transition
             if (g_CurrentState == STATE_STREAMING && frameIdx - g_StateFrameStart > 400 && CesiumNetwork::g_AsyncRequests.size() == 0 && g_Tileset.renderListCount > 0) {
-                unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
-                stbi_flip_vertically_on_write(1); 
-                char path[256]; snprintf(path, 256, "build/bin/OUTPUT/GEPR_loc%d_view%d_stream_framebuffer.png", g_CurrentLocationIndex, g_CurrentViewIndex);
-                stbi_write_png(path, w, h, 3, px, w*3); free(px);
+                if (g_Locations[g_CurrentLocationIndex].export_framebuffer) {
+                    unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
+                    stbi_flip_vertically_on_write(1); 
+                    char path[256]; snprintf(path, 256, "build/bin/OUTPUT/GEPR_loc%d_view%d_stream_framebuffer.png", g_CurrentLocationIndex, g_CurrentViewIndex);
+                    stbi_write_png(path, w, h, 3, px, w*3); free(px);
+                }
                 
-                g_CurrentState = STATE_STREAMING_STENCIL_WAIT; g_StateFrameStart = frameIdx;
-                char prefix[256]; snprintf(prefix, 256, "build/bin/OUTPUT/GEPR_loc%d_view%d_stream_stencil", g_CurrentLocationIndex, g_CurrentViewIndex);
-                av->captureHighResStencils(prefix);
+                if (g_Locations[g_CurrentLocationIndex].export_stencils) {
+                    g_CurrentState = STATE_STREAMING_STENCIL_WAIT; g_StateFrameStart = frameIdx;
+                    char prefix[256]; snprintf(prefix, 256, "build/bin/OUTPUT/GEPR_loc%d_view%d_stream_stencil", g_CurrentLocationIndex, g_CurrentViewIndex);
+                    av->captureHighResStencils(prefix);
+                } else {
+                    g_CurrentState = STATE_AGGREGATE; g_StateFrameStart = frameIdx;
+                }
                 
-                printf("[Test] View %d STREAMING Complete. Proceeding to STREAMING_STENCIL_WAIT.\n", g_CurrentViewIndex); fflush(stdout);
+                printf("[Test] View %d STREAMING Complete. Proceeding to %s.\n", g_CurrentViewIndex, g_Locations[g_CurrentLocationIndex].export_stencils ? "STREAMING_STENCIL_WAIT" : "AGGREGATE"); fflush(stdout);
             }
         } 
         
@@ -1160,16 +1170,22 @@ namespace CesiumGEPR {
                 glDisable(GL_POLYGON_OFFSET_FILL);
             }
             if (g_CurrentState == STATE_LOAD_CACHED && frameIdx - g_StateFrameStart > 10) {
-                unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
-                stbi_flip_vertically_on_write(1); 
-                char path[256]; snprintf(path, 256, "build/bin/OUTPUT/GEPR_loc%d_view%d_cache_framebuffer.png", g_CurrentLocationIndex, g_CurrentViewIndex);
-                stbi_write_png(path, w, h, 3, px, w*3); free(px);
+                if (g_Locations[g_CurrentLocationIndex].export_framebuffer) {
+                    unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
+                    stbi_flip_vertically_on_write(1); 
+                    char path[256]; snprintf(path, 256, "build/bin/OUTPUT/GEPR_loc%d_view%d_cache_framebuffer.png", g_CurrentLocationIndex, g_CurrentViewIndex);
+                    stbi_write_png(path, w, h, 3, px, w*3); free(px);
+                }
                 
-                g_CurrentState = STATE_CACHED_STENCIL_WAIT; g_StateFrameStart = frameIdx;
-                char prefix[256]; snprintf(prefix, 256, "build/bin/OUTPUT/GEPR_loc%d_view%d_cache_stencil", g_CurrentLocationIndex, g_CurrentViewIndex);
-                av->captureHighResStencils(prefix);
+                if (g_Locations[g_CurrentLocationIndex].export_stencils) {
+                    g_CurrentState = STATE_CACHED_STENCIL_WAIT; g_StateFrameStart = frameIdx;
+                    char prefix[256]; snprintf(prefix, 256, "build/bin/OUTPUT/GEPR_loc%d_view%d_cache_stencil", g_CurrentLocationIndex, g_CurrentViewIndex);
+                    av->captureHighResStencils(prefix);
+                } else {
+                    g_CurrentState = STATE_VERIFY; g_StateFrameStart = frameIdx;
+                }
                 
-                printf("[Test] View %d LOAD_CACHED Complete. Proceeding to CACHED_STENCIL_WAIT.\n", g_CurrentViewIndex); fflush(stdout);
+                printf("[Test] View %d LOAD_CACHED Complete. Proceeding to %s.\n", g_CurrentViewIndex, g_Locations[g_CurrentLocationIndex].export_stencils ? "CACHED_STENCIL_WAIT" : "VERIFY"); fflush(stdout);
             }
         } 
         

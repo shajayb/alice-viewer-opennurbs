@@ -1089,8 +1089,19 @@ namespace CesiumGEPROSM {
 
             for (uint32_t i = 0; i < g_Tileset.renderListCount; ++i) {
                 Tile* t = g_Tileset.renderList[i];
+                if (!t->payload) continue;
+                
+                float distToOrigin = 0.0f;
+                if (t->boundingAABB.initialized) {
+                    distToOrigin = sqrtf(t->boundingAABB.center().x * t->boundingAABB.center().x + 
+                                         t->boundingAABB.center().y * t->boundingAABB.center().y + 
+                                         t->boundingAABB.center().z * t->boundingAABB.center().z);
+                }
+                if (distToOrigin > 1500.0f) continue;
+                
+                printf("[Filter] PASSED Tile %s, dist: %f, center: %f, %f, %f\n", t->contentUri, distToOrigin, t->boundingAABB.center().x, t->boundingAABB.center().y, t->boundingAABB.center().z);
+                
                 tilesProcessed++;
-                if (t->payload) {
                     tilesWithPayload++;
                     cgltf_data* data = 0;
                     uint8_t* glbPayload = t->payload; size_t glbSize = t->payloadSize;
@@ -1137,7 +1148,6 @@ namespace CesiumGEPROSM {
                     } else {
                         printf("[Aggregate] cgltf_parse FAILED: %d for tile %u\n", (int)res, i);
                     }
-                }
             }
             printf("[Aggregate] Processed: %u, WithPayload: %u, CGLTFSuccess: %u, TotalVerts: %zu\n", tilesProcessed, tilesWithPayload, cgltfSuccesses, totalVBO.size()/6);
             if (g_Locations[g_CurrentLocationIndex].export_bin) {
@@ -1151,7 +1161,7 @@ namespace CesiumGEPROSM {
             }
             
             if (g_CurrentViewIndex == (int)g_Locations[g_CurrentLocationIndex].views.size() - 1 && g_Locations[g_CurrentLocationIndex].export_3dm) {
-                char dmpPath[256]; snprintf(dmpPath, 256, "build/bin/OUTPUT/GEPR_loc%d_3dm.3dm", g_CurrentLocationIndex);
+                char dmpPath[256]; snprintf(dmpPath, 256, "build/bin/OUTPUT/GEPR_loc%d_3dm_v3.3dm", g_CurrentLocationIndex);
                 ONX_Model model;
                 ON_Mesh* mesh = new ON_Mesh();
                 

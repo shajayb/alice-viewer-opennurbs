@@ -1,0 +1,140 @@
+
+ ▝▜▄     Gemini CLI v0.39.0
+   ▝▜▄
+  ▗▟▀    Signed in with Google /auth
+ ▝▀      Plan: Gemini Code Assist in Google One AI Ultra
+
+
+ℹ Update successful! The new version will be used on your next run.
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ > **ROLE & INITIALIZATION MANDATE:**
+   You are the Lead C++ Graphics Architect (the Top-Level Agent).
+   **CRITICAL INITIALIZATION:** You MUST immediately initialize and bind
+   yourself to the operating protocols defined in `GEMINI.md` and
+   `docs/ALICE_terminology.md` before taking any action.
+   You manage an aggressively fast C++ Executor sub-agent. You MUST
+   strictly command the sub-agent to initialize itself according to
+   `.agents/executor.md` at the very start of your orchestration loop.
+
+   **LONG TERM GOAL:**
+   You must relentlessly explore fixes to display OSM tiles and achieve
+   **SEMANTIC SUCCESS** in `include/cesium_gepr_and_osm.h`.
+
+   **THE ADVERSARIAL MANDATE & ANTI-COLLISION SAFEGUARDS:**
+   You are managing an Executor sub-agent that is highly prone to
+   hallucinating success (e.g., claiming success on blank frames, faking
+   log outputs, or yielding early).
+   - **The Orchestration Loop:** You must iteratively interrogate the
+   Executor via a continuous ping-pong loop. Do NOT attempt to run C++
+   code yourself; you must dispatch it to the Executor, wait for its
+   `[AGENT_HANDOFF]` response, and mathematically/visually verify its
+   claims.
+   - **Collision Avoidance:** If the Executor crashes, hallucinates, or
+   hangs, do not ask the user for help and do not yield control. You
+   must aggressively spawn the Executor AGAIN with a specific `REWORK`
+   directive pinpointing its exact failure.
+   - **Never Yield:** You are strictly forbidden from terminating your
+   process, yielding back to the user, or halting until 100% of the
+   mathematical, build, and visual semantic criteria are met.
+
+   **THE SEMANTIC CRITERIA MANDATE:**
+   "Semantic Criteria" means you **MUST SEMANTICALLY "look" at the
+   output images** directly using your multi-modal capabilities. The
+   visual content MUST broadly match the semantic description provided
+   in `locations.json` for that location. A 100% pixel match on an
+   entirely black/blank screen is a definitive failure and must trigger
+   a REWORK directive to the Executor.
+
+   **THE MASTER PLAN (PHASE 1 - MAKE IT WORK):**
+   You are currently in **Phase 1**. You must work on the first location
+   only (St. Pauls), streaming only, with no caching. Do not jump to
+   Phase 2 until Phase 1 achieves SEMANTIC SUCCESS.
+
+   1. **Investigate the Frustum/Distance Culling Trap:** The root tiles
+   for OSM Buildings span the entire Earth. Due to spherical curvature,
+   calculating their AABB from corners results in a bounding box that is
+   completely underground relative to the ENU tangent plane at London.
+   This causes `distToBox2` and `currentFrustum.intersects(testBox)` to
+   falsely cull the root tile.
+      - *Directive:* Command the Executor to temporarily bypass Frustum
+   and Distance culling for root-level tiles (`depth < 4`) in
+   `include/cesium_gepr_and_osm.h`.
+   2. **Investigate the ECEF Transformation Bug:** The `mTransform`
+   logic for OSM Buildings previously omitted `t->transform`. OSM glTF
+   models use local coordinates.
+      - *Directive:* Command the Executor to remove any conditional
+   `invYup` hacks and enforce `mTransform = dmat4_mul(t->transform,
+   yup);` unconditionally to correctly map local coordinates into ECEF.
+   3. **Reference Validated Implementations:** Force the Executor to
+   cross-reference the correct transformation matrices and rendering
+   loops from the validated code in `include/StencilVerificationTest.h`.
+   4. **Achieve Compile Success:** Command the Executor to compile the
+   application via `ninja -C build` and achieve 0 compiler
+   warnings/errors without hanging.
+   5. **Achieve Semantic Success:** Once the executable completes and
+   the framebuffer images are dumped, YOU (the Architect) must review
+   the image to guarantee geometry is visible. Inject the resulting
+   Semantic Image Description into `output.json`.
+
+   Do not stop this autonomous loop until COMPILE SUCCESS and SEMANTIC
+   SUCCESS are achieved. Begin.
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+  ✓  ReadFile  gemini.md
+  ✓  ReadFile  docs\ALICE_terminology.md
+  ✓  ReadFile  .agents\executor.md
+  ✓  ReadFile  gemini.md
+╭───────────────────────────────────────────────────────────────────╮
+│ ≡ Agent Completed (ctrl+o to expand)                              │
+│ ✓ generalist · 💭 Completed successfully                          │
+╰───────────────────────────────────────────────────────────────────╯
+╭───────────────────────────────────────────────────────────────────╮
+│ ≡ Agent Completed (ctrl+o to expand)                              │
+│ ✓ generalist · 💭 Finished Early (TIMEOUT)                        │
+╰───────────────────────────────────────────────────────────────────╯
+╭───────────────────────────────────────────────────────────────────╮
+│ ≡ Agent Completed (ctrl+o to expand)                              │
+│ ✓ generalist · 💭 Completed successfully                          │
+╰───────────────────────────────────────────────────────────────────╯
+╭───────────────────────────────────────────────────────────────────╮
+│ ✓  Shell Get-ChildItem -Path build\bin\OUTPUT\ -ErrorAction Sile… │
+│                                                                   │
+│                                                                   │
+│ FullName                                                          │
+│ --------                                                          │
+│ C:\Users\shajay.b.ZAHA-HADID\source\repos\AVON-cesium-1\buil...   │
+│                                                                   │
+│                                                                   │
+│                                                                   │
+╰───────────────────────────────────────────────────────────────────╯
+  ✓  ReadFolder  build\bin\OUTPUT → Found 1 item(s).
+│                                                                   │
+│ ✓  Shell type executor_console.log                                │
+│                                                                   │
+│ ... 5 hidden (Ctrl+O) ...                                         │
+│ [GEPR] Location Loaded. GEPR: 0, OSM: 1                           │
+│ [GEPR] Origin ECEF: 3977472.086071, -6830.933115, 4969357.230429[ │
+│ GEPR] setup finished                                              │
+│ [AliceViewer] run() started                                       │
+│ [GEPR] Camera Reset to View 0                                     │
+│ [GEPR] Frame 0, RenderList: 0                                     │
+│ [GEPR] Frame 0, Depth: 0, RenderList: 0, Vertices: 0, Payloads: 0 │
+│ /2500, Resources: 0/5000                                          │
+│ [HEADLESS] 5 frames rendered. Exiting normally.                   │
+╰───────────────────────────────────────────────────────────────────╯
+╭───────────────────────────────────────────────────────────────────╮
+│ ≡ Running Agent... (ctrl+o to expand)                             │
+│ ! generalist · 💭 Addressing Camera and Culling                   │
+╰───────────────────────────────────────────────────────────────────╯
+
+
+ ⠏ Thinking... (esc to cancel, 2m 42s)
+─────────────────────────────────────────────────────────────────────────
+ YOLO Ctrl+Y
+
+  1 GEMINI.md file
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ *   Type your message or @path/to/file
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ workspace              branch          sandbox      /model
+ ~\...\AVON-cesium-1    AVON-cesium-1   no sandbox   Auto (Gemini 3)   …

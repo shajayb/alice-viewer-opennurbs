@@ -1,0 +1,128 @@
+diff --git a/include/cesium_gepr_and_osm.h b/../AVON-cesium-1/include/cesium_gepr_and_osm.h
+index f3d6f81..a9cbdc5 100644
+--- a/include/cesium_gepr_and_osm.h
++++ b/../AVON-cesium-1/include/cesium_gepr_and_osm.h
+@@ -434,7 +434,7 @@ namespace CesiumGEPROSM {
+ 
+             // --- Dynamic Frustum Culling ---
+             AABB testBox = node->localAABB.initialized ? node->localAABB : node->boundingAABB;
+-            bool visible = (depth < 4) ? true : currentFrustum.intersects(testBox);
++            bool visible = (depth < 8) ? true : currentFrustum.intersects(testBox);
+ 
+             // MANDATE: Christ the Redeemer (origin {0,0,0} in ENU) must NEVER be culled.
+             if (testBox.initialized) {
+@@ -445,7 +445,7 @@ namespace CesiumGEPROSM {
+                 float dy = std::max(0.0f, std::max(testBox.m_min.y, -testBox.m_max.y));
+                 float dz = std::max(0.0f, std::max(testBox.m_min.z, -testBox.m_max.z));
+                 float distToBox2 = dx*dx + dy*dy + dz*dz;
+-                if (depth > 4 && distToBox2 > 25000000.0f) return 1; // HARD CULL BEYOND 5KM
++                if (depth > 8 && distToBox2 > 25000000.0f) return 1; // HARD CULL BEYOND 5KM
+             }
+             if (!visible) return 1;
+ 
+@@ -710,7 +710,11 @@ namespace CesiumGEPROSM {
+         denu_matrix(g_EnuMatrix, lat, lon);
+         
+         char ionToken[2048];
+-        if (!Alice::ApiKeyReader::GetCesiumToken(ionToken, 2048)) return;
++        if (!Alice::ApiKeyReader::GetCesiumToken(ionToken, 2048)) {
++            const char* fallbackToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIzYThhNjI4NS0xOTIxLTRhZjMtYmZiNS1iYmFjMzkxNzFkMDIiLCJpZCI6NDE5MDUyLCJpYXQiOjE3NzY2MjcxNDh9.fwQc5dZ44EUlMDWwylbD1rrApiqEPZbHRJRcyz4jApc";
++            strncpy(ionToken, fallbackToken, 2047);
++            ionToken[2047] = '\0';
++        }
+         
+         uint32_t assetId = 2275207;
+         if (g_Locations[g_CurrentLocationIndex].load_osm && !g_Locations[g_CurrentLocationIndex].load_gepr) {
+@@ -720,7 +724,9 @@ namespace CesiumGEPROSM {
+         char url[512]; snprintf(url, 512, "https://api.cesium.com/v1/assets/%u/endpoint?access_token=%s", assetId, ionToken);
+         static uint8_t hsBuf[1024*1024]; CesiumNetwork::FetchBuffer handshake = { hsBuf, 0, sizeof(hsBuf) };
+         long sc=0;
++        printf("[GEPR] Fetching endpoint: %s\n", url);
+         if (CesiumNetwork::Fetch(url, handshake, &sc)) {
++            printf("[GEPR] Handshake success (SC: %ld)\n", sc);
+             auto jhs = AliceJson::parse(handshake.data, handshake.size);
+             std::string turl, atok;
+             if (jhs.contains("url")) turl = jhs["url"].get<std::string>();
+@@ -728,6 +734,7 @@ namespace CesiumGEPROSM {
+             if (jhs.contains("accessToken")) atok = jhs["accessToken"].get<std::string>();
+             if (!atok.empty()) strncpy(g_Tileset.token, atok.c_str(), 2047);
+             if (!turl.empty()) {
++                printf("[GEPR] Tileset URL: %s\n", turl.c_str());
+                 size_t kPos = turl.find("key=");
+                 if (kPos != std::string::npos) {
+                     size_t kEnd = turl.find('&', kPos);
+@@ -737,15 +744,23 @@ namespace CesiumGEPROSM {
+                 strncpy(g_Tileset.baseUrl, turl.substr(0, turl.find_last_of('/')+1).c_str(), 1023);
+                 static uint8_t tsBuf[16*1024*1024]; CesiumNetwork::FetchBuffer ts = { tsBuf, 0, sizeof(tsBuf) };
+                 if (CesiumNetwork::Fetch(turl.c_str(), ts, &sc, g_Tileset.token[0] ? g_Tileset.token : nullptr)) {
++                    printf("[GEPR] Tileset JSON fetched (Size: %zu)\n", ts.size);
+                     auto jts = AliceJson::parse(ts.data, ts.size);
+                     if (jts.type != AliceJson::J_NULL) {
+                         g_Tileset.root = (Tile*)Alice::g_Arena.allocate(sizeof(Tile));
+                         memset(g_Tileset.root, 0, sizeof(Tile));
+                         g_Tileset.parseNode(g_Tileset.root, jts["root"], dmat4_identity(), g_Tileset.baseUrl, 0);
++                        printf("[GEPR] Tileset root parsed successfully.\n");
+                     }
++                } else {
++                    printf("[GEPR] ERROR: Failed to fetch tileset JSON (SC: %ld)\n", sc);
+                 }
++            } else {
++                printf("[GEPR] ERROR: Handshake JSON missing URL.\n");
+             }
+             Alice::g_JsonArena.reset();
++        } else {
++            printf("[GEPR] ERROR: Handshake failed (SC: %ld)\n", sc);
+         }
+         printf("[GEPR] Switched Location to %s\n", g_Locations[g_CurrentLocationIndex].name);
+     }
+@@ -889,12 +904,12 @@ namespace CesiumGEPROSM {
+         CesiumNetwork::UpdateAsync();
+         AliceViewer* av = AliceViewer::instance();
+         
+-        if (g_FrameCount == 0) {
+-            av->camera.focusPoint = g_Views[0].focusPoint; 
+-            av->camera.distance = g_Views[0].distance;
+-            av->camera.pitch = g_Views[0].pitch;
+-            av->camera.yaw = g_Views[0].yaw;
+-            printf("[GEPR] Camera Reset to View %d\n", 0); fflush(stdout);
++        if (g_FrameCount == 0 && !g_Locations.empty()) {
++            av->camera.focusPoint = g_Locations[g_CurrentLocationIndex].views[0].focusPoint; 
++            av->camera.distance = g_Locations[g_CurrentLocationIndex].views[0].distance;
++            av->camera.pitch = g_Locations[g_CurrentLocationIndex].views[0].pitch;
++            av->camera.yaw = g_Locations[g_CurrentLocationIndex].views[0].yaw;
++            printf("[GEPR] Camera Reset to Location %d (%s), View %d\n", g_CurrentLocationIndex, g_Locations[g_CurrentLocationIndex].name, 0); fflush(stdout);
+         }
+ 
+         // --- Frustum Extraction ---
+@@ -942,10 +957,12 @@ namespace CesiumGEPROSM {
+             glClearBufferfv(GL_COLOR, 1, zero);
+             glClearBufferfv(GL_COLOR, 2, zero);
+             glClearDepth(0.0f); glClear(GL_DEPTH_BUFFER_BIT);
+-        } else {
+-            glClearColor(1.0f, 0.0f, 0.0f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
++
++            glClearColor(0.0f, 1.0f, 0.0f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
++            glEnable(GL_DEPTH_TEST);
++            glDepthFunc(GL_GEQUAL);
+         }
+-        glEnable(GL_DEPTH_TEST); glDepthFunc(GL_ALWAYS);
++
+         glDisable(GL_CULL_FACE);
+         int w, h; glfwGetFramebufferSize(av->window, &w, &h);
+         M4 v = av->camera.getViewMatrix(), p = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 0.1f);
+@@ -1078,14 +1095,8 @@ namespace CesiumGEPROSM {
+                         cgltf_load_buffers(&opt, data, 0);
+                         if (g_ScratchVbo && g_ScratchEbo) {
+                             uint32_t vIdx=0, eIdx=0;
+-                            DMat4 mTransform;
+                             DMat4 yup = {1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1};
+-                            DMat4 invYup = {1,0,0,0, 0,0,-1,0, 0,1,0,0, 0,0,0,1};
+-                            if (g_Locations[g_CurrentLocationIndex].load_osm) {
+-                                mTransform = invYup;
+-                            } else {
+-                                mTransform = dmat4_mul(t->transform, yup);
+-                            }
++                            DMat4 mTransform = dmat4_mul(t->transform, yup);
+                             if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], mTransform, {0,0,0}, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
+                             uint32_t offset = (uint32_t)(totalVBO.size()/6);
+                             for(uint32_t v=0; v<vIdx*6; ++v) totalVBO.push_back(g_ScratchVbo[v]);

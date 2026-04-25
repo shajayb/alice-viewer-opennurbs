@@ -347,6 +347,7 @@ namespace CesiumGEPROSM {
         RenderResources* rendererResources;
         uint32_t lastAccessedFrame;
         bool isRefined;
+        uint8_t refineMode; // 0 = REPLACE, 1 = ADD
     };
 
     static uint32_t g_TilesLoadedThisFrame = 0;
@@ -510,7 +511,7 @@ namespace CesiumGEPROSM {
                             if (buffer.size > 0 && buffer.data[0] == '{') {
                                 auto j = AliceJson::parse(buffer.data, buffer.size);
                                 if (j.type != AliceJson::J_NULL) {
-                                    parseNode(node, j["root"], node->transform, nextBaseStr.c_str(), depth);
+                                    parseNode(node, j["root"], node->transform, nextBaseStr.c_str(), depth, node->refineMode);
                                 }
                                 Alice::g_JsonArena.reset();
                             } else {
@@ -538,7 +539,7 @@ namespace CesiumGEPROSM {
             } else {
                 childrenLoaded = false;
             }
-            node->isRefined = shouldRefine && childrenLoaded;
+            node->isRefined = shouldRefine && childrenLoaded && (node->refineMode == 0);
 
             if (node->isLoaded && node->payload && !node->isRefined) {
                 if (renderListCount < 8192) renderList[renderListCount++] = node;
@@ -553,7 +554,7 @@ namespace CesiumGEPROSM {
             return 0;
         }
 
-        void parseNode(Tile* tile, const AliceJson::JsonValue& jNode, DMat4 parentTransform, const char* currentBase, int depth) {
+        void parseNode(Tile* tile, const AliceJson::JsonValue& jNode, DMat4 parentTransform, const char* currentBase, int depth, uint8_t parentRefineMode) {
             if (depth > 100) return;
             memset(tile, 0, sizeof(Tile));
             strncpy(tile->baseUrl, currentBase, 511); tile->baseUrl[511] = '\0';          tile->localAABB = AABB();
@@ -639,6 +640,14 @@ namespace CesiumGEPROSM {
             } else {
                 tile->isLoaded = true; // No content node
             }
+            
+            if (jNode.contains("refine")) {
+                std::string ref = jNode["refine"].get<std::string>();
+                if (ref == "ADD") tile->refineMode = 1;
+                else tile->refineMode = 0;
+            } else {
+                tile->refineMode = parentRefineMode;
+            }
             if (jNode.contains("children")) {
                 auto childrenArr = jNode["children"];
                 tile->children = (Tile**)Alice::g_Arena.allocate(childrenArr.size() * sizeof(Tile*));
@@ -649,7 +658,7 @@ namespace CesiumGEPROSM {
                         tile->children[i] = (Tile*)Alice::g_Arena.allocate(sizeof(Tile));
                         if (tile->children[i]) {
                             memset(tile->children[i], 0, sizeof(Tile));
-                            parseNode(tile->children[i], childrenArr[i], tile->transform, tile->baseUrl, depth + 1);
+                            parseNode(tile->children[i], childrenArr[i], tile->transform, tile->baseUrl, depth + 1, tile->refineMode);
                         }
                     }
                 } else {
@@ -763,7 +772,7 @@ namespace CesiumGEPROSM {
                     if (jts.type != AliceJson::J_NULL) {
                         g_Tileset.root = (Tile*)Alice::g_Arena.allocate(sizeof(Tile));
                         memset(g_Tileset.root, 0, sizeof(Tile));
-                        g_Tileset.parseNode(g_Tileset.root, jts["root"], dmat4_identity(), g_Tileset.baseUrl, 0);
+                        g_Tileset.parseNode(g_Tileset.root, jts["root"], dmat4_identity(), g_Tileset.baseUrl, 0, 0);
                         printf("[GEPR] Tileset root parsed successfully.\n");
                     }
                 } else {
@@ -1091,15 +1100,16 @@ namespace CesiumGEPROSM {
                 Tile* t = g_Tileset.renderList[i];
                 if (!t->payload) continue;
                 
-                float distToOrigin = 0.0f;
+                float distToBox = 0.0f;
                 if (t->boundingAABB.initialized) {
-                    distToOrigin = sqrtf(t->boundingAABB.center().x * t->boundingAABB.center().x + 
-                                         t->boundingAABB.center().y * t->boundingAABB.center().y + 
-                                         t->boundingAABB.center().z * t->boundingAABB.center().z);
+                    float dx = std::max(0.0f, std::max(t->boundingAABB.m_min.x, -t->boundingAABB.m_max.x));
+                    float dy = std::max(0.0f, std::max(t->boundingAABB.m_min.y, -t->boundingAABB.m_max.y));
+                    float dz = std::max(0.0f, std::max(t->boundingAABB.m_min.z, -t->boundingAABB.m_max.z));
+                    distToBox = sqrtf(dx*dx + dy*dy + dz*dz);
                 }
-                if (distToOrigin > 1500.0f) continue;
+                if (distToBox > 1500.0f) continue;
                 
-                printf("[Filter] PASSED Tile %s, dist: %f, center: %f, %f, %f\n", t->contentUri, distToOrigin, t->boundingAABB.center().x, t->boundingAABB.center().y, t->boundingAABB.center().z);
+                printf("[Filter] PASSED Tile %s, distToBox: %f, center: %f, %f, %f\n", t->contentUri, distToBox, t->boundingAABB.center().x, t->boundingAABB.center().y, t->boundingAABB.center().z);
                 
                 tilesProcessed++;
                     tilesWithPayload++;

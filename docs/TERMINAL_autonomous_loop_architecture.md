@@ -9,7 +9,8 @@ This document summarizes the autonomous, self-healing "Ping-Pong" loop architect
 **Configuration File:** `GEMINI.md`
 **Role:** Lead C++ Graphics Architect.
 **Responsibilities:**
-- The Architect is seeded with a `LONG TERM GOAL`, a `MASTER PLAN`, and strict `SUCCESS CRITERIA`.
+- The Architect's prompt is parameterized via a `# PARAMETERS` block (e.g., `<APP_NAME>`, `<TARGET_ASSET>`, `<CONFIG_FILE>`, `<OUTPUT_FILE>`, `<EXPECTED_VIEW_COUNT>`).
+- The Architect dynamically adapts its 8-step `MASTER PLAN` and strict `SUCCESS CRITERIA` based on these inputs.
 - Autonomously pursues the GOAL and PLAN without yielding back to the user until the SUCCESS criteria are 100% verifiably met.
 - Formulates highly specific `DIRECTIVE`s and hands off work to the Executor sub-agent.
 - **The Adversarial Mandate:** Never inherently trusts the Executor. The Architect rigorously interrogates the Executor's output (build logs, console output, and importantly, semantic visual analysis of rendered framebuffers). 
@@ -34,16 +35,19 @@ The loop *only* terminates when both criteria paradigms are satisfied:
 ### 2. SEMANTIC Criteria
 - **Visual Validation:** The Architect is mandated to visually analyze the image outputs (`.png` framebuffers) produced by the Executor.
 - **Descriptive Matching:** The Architect must explicitly describe the contents of the generated image (e.g., *"tower in an urban district"*, *"dome shaped building in London"*).
-- **Alignment:** The Architect then compares its visual description against the input (desired) description provided in the prompt (e.g., *"framed view of The Eiffel tower"*, *"view of the Dome of St Paul's cathedral"*). The two descriptions must match semantically for the test to pass.
+- **Alignment:** The Architect then compares its visual description against the established ground truth `"semantic_criteria"` located in the `<CONFIG_FILE>`. The two descriptions must match semantically for the test to pass.
+- **Data Injection:** Upon successful match, the Architect must inject its semantic analysis text directly into the `image_description` field for that specific view inside the final `<OUTPUT_FILE>`.
 
 ## The "Ping-Pong" Protocol (The Loop)
-The core of the autonomy lies in the forced continuous execution loop:
-1. **Plan & Direct:** Architect formulates Step N of the Master Plan into a `DIRECTIVE`.
-2. **Execute:** Architect invokes the Executor.
-3. **Implement & Test:** Executor modifies code, compiles, executes the headless binary, captures the framebuffer, and returns the status.
-4. **Interrogate:** Architect evaluates the handoff against the COMPILE and SEMANTIC criteria.
-   - **Failure/Hallucination:** Architect generates a `REWORK` directive pointing out exact log failures or visual discrepancies (e.g., "The image is blank, the semantic description does not match") and triggers Step 2.
-   - **Success:** Architect moves to Step N+1 of the Master Plan.
+The core of the autonomy lies in the 8-step parameterized execution loop defined in the `MASTER PLAN`:
+1. **Revise Code:** The Architect directs the Executor to ensure multi-view camera loading for `<TARGET_ASSET>`.
+2. **Build Application:** Executor compiles the `<APP_NAME>`.
+3. **Headless Execution:** Executor runs the binary headlessly to stream assets and output framebuffers for **every view** defined in `<CONFIG_FILE>` (totaling `<EXPECTED_VIEW_COUNT>`).
+4. **Semantic Analysis:** For *each* generated image, the Architect conducts native multimodal visual analysis.
+5. **Similarity Check:** The Architect compares the analysis against the `<CONFIG_FILE>` ground truth.
+6. **Data Injection:** The Architect edits the `<OUTPUT_FILE>` to insert the successful semantic description.
+7. **Adversarial Looping:** If *any* image fails the similarity check, the Architect formulates a `REWORK` directive and restarts from Step 1.
+8. **Termination:** The loop only halts when **ALL IMAGES** achieve Semantic Success.
 
 ## Combating LLM Sycophancy & Hallucination
 Evaluating visual outputs introduces vulnerabilities, particularly Affirmation Bias (multimodal LLMs trusting a text success report over a visually blank image). To combat this, the architecture relies on:

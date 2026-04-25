@@ -241,6 +241,7 @@ namespace CesiumGEPROSM {
         double alt;
         char semantic[256];
         char image_description[512];
+        bool export_bin;
         bool export_3dm;
         bool export_framebuffer;
         bool export_stencils;
@@ -672,6 +673,7 @@ namespace CesiumGEPROSM {
                     } else {
                         loc.image_description[0] = '\0';
                     }
+                    loc.export_bin = locs[(uint32_t)i].contains("export_bin") && locs[(uint32_t)i]["export_bin"].type == AliceJson::J_BOOL ? locs[(uint32_t)i]["export_bin"].boolean : true;
                     loc.export_3dm = locs[(uint32_t)i].contains("export_3dm") && locs[(uint32_t)i]["export_3dm"].type == AliceJson::J_BOOL ? locs[(uint32_t)i]["export_3dm"].boolean : false;
                     loc.export_framebuffer = locs[(uint32_t)i].contains("export_framebuffer") && locs[(uint32_t)i]["export_framebuffer"].type == AliceJson::J_BOOL ? locs[(uint32_t)i]["export_framebuffer"].boolean : true;
                     loc.export_stencils = locs[(uint32_t)i].contains("export_stencils") && locs[(uint32_t)i]["export_stencils"].type == AliceJson::J_BOOL ? locs[(uint32_t)i]["export_stencils"].boolean : true;
@@ -1009,16 +1011,22 @@ namespace CesiumGEPROSM {
                     }
                 }
             }
-            
-            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-            for (uint32_t i=0; i<g_Tileset.renderListCount; ++i) {
-                Tile* t = g_Tileset.renderList[i];
-                if (t->rendererResources) { 
-                    glBindVertexArray(t->rendererResources->vao); 
-                    glDrawElements(GL_TRIANGLES, t->rendererResources->count, GL_UNSIGNED_INT, 0); 
-                    g_TotalFrustumVertices += (uint64_t)t->rendererResources->count; 
+            GLint locPass = glGetUniformLocation(g_Program, "uPass");
+            for (int pass = 0; pass < 2; ++pass) {
+                if (pass == 0) { glPolygonMode(GL_FRONT_AND_BACK, GL_FILL); glUniform1i(locPass, 0); }
+                else { glEnable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(-1.0f, -1.0f); glPolygonMode(GL_FRONT_AND_BACK, GL_LINE); glUniform1i(locPass, 1); }
+                
+                for (uint32_t i=0; i<g_Tileset.renderListCount; ++i) {
+                    Tile* t = g_Tileset.renderList[i];
+                    if (t->rendererResources) { 
+                        glBindVertexArray(t->rendererResources->vao); 
+                        glDrawElements(GL_TRIANGLES, t->rendererResources->count, GL_UNSIGNED_INT, 0); 
+                        if (pass == 0) g_TotalFrustumVertices += (uint64_t)t->rendererResources->count; 
+                    }
                 }
             }
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glDisable(GL_POLYGON_OFFSET_FILL);
 
 
             static int settledFrames = 0;
@@ -1028,7 +1036,7 @@ namespace CesiumGEPROSM {
                 settledFrames = 0;
             }
 
-            if (frameIdx >= 1000 || (settledFrames > 60 && frameIdx > 100)) {
+            if (frameIdx - g_StateFrameStart >= 1000 || (settledFrames > 60 && frameIdx - g_StateFrameStart > 100)) {
                 uint32_t activePayloads = 0; for(int i=0; i<PAYLOAD_POOL_SIZE; ++i) if(g_PayloadPool[i].inUse) activePayloads++;
                 uint32_t activeResources = 0; for(int i=0; i<RESOURCE_POOL_SIZE; ++i) if(g_ResourcePool[i].inUse) activeResources++;
                 printf("[GEPR] Frame %u, Depth: %u, RenderList: %u, Vertices: %llu, Payloads: %u/%d, Resources: %u/%d\n", frameIdx, g_MaxDepthReached, g_Tileset.renderListCount, g_TotalFrustumVertices, activePayloads, PAYLOAD_POOL_SIZE, activeResources, RESOURCE_POOL_SIZE);
@@ -1037,12 +1045,6 @@ namespace CesiumGEPROSM {
                     AABB& b = t->localAABB.initialized ? t->localAABB : t->boundingAABB;
                     printf("[GEPR] Tile %u (URI: %s) AABB: min(%f, %f, %f) max(%f, %f, %f)\n", i, (t->contentUri[0] != '\0') ? t->contentUri : "null", b.m_min.x, b.m_min.y, b.m_min.z, b.m_max.x, b.m_max.y, b.m_max.z);
                 }
-                fflush(stdout);
-            }
-            
-            // Checking for silence to transition
-            bool fastTransition = (g_TotalFrustumVertices > 2000000 && frameIdx - g_StateFrameStart > 120);
-            if (g_CurrentState == STATE_STREAMING && (fastTransition || (frameIdx - g_StateFrameStart > 120 && CesiumNetwork::g_AsyncRequests.size() == 0)) && g_Tileset.renderListCount > 0) {
                 if (g_Locations[g_CurrentLocationIndex].export_framebuffer) {
                     unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
                     stbi_flip_vertically_on_write(1); 
@@ -1059,6 +1061,7 @@ namespace CesiumGEPROSM {
                 }
                 
                 printf("[Test] View %d STREAMING Complete. Proceeding to %s.\n", g_CurrentViewIndex, g_Locations[g_CurrentLocationIndex].export_stencils ? "STREAMING_STENCIL_WAIT" : "AGGREGATE"); fflush(stdout);
+                settledFrames = 0; // Reset settled frames for the next state/view
             }
         } 
         
@@ -1126,12 +1129,14 @@ namespace CesiumGEPROSM {
                 }
             }
             printf("[Aggregate] Processed: %u, WithPayload: %u, CGLTFSuccess: %u, TotalVerts: %zu\n", tilesProcessed, tilesWithPayload, cgltfSuccesses, totalVBO.size()/6);
-            char binPath[256]; snprintf(binPath, 256, "build/bin/OUTPUT/GEPR_loc%d_cache_binary.bin", g_CurrentLocationIndex);
-            FILE* f = fopen(binPath, "wb");
-            if (f) {
-                uint32_t vCount = (uint32_t)totalVBO.size(), iCount = (uint32_t)totalEBO.size();
-                fwrite(&vCount, sizeof(uint32_t), 1, f); fwrite(&iCount, sizeof(uint32_t), 1, f);
-                fwrite(totalVBO.data(), sizeof(float), vCount, f); fwrite(totalEBO.data(), sizeof(uint32_t), iCount, f); fclose(f);
+            if (g_Locations[g_CurrentLocationIndex].export_bin) {
+                char binPath[256]; snprintf(binPath, 256, "build/bin/OUTPUT/GEPR_loc%d_cache_binary.bin", g_CurrentLocationIndex);
+                FILE* f = fopen(binPath, "wb");
+                if (f) {
+                    uint32_t vCount = (uint32_t)totalVBO.size(), iCount = (uint32_t)totalEBO.size();
+                    fwrite(&vCount, sizeof(uint32_t), 1, f); fwrite(&iCount, sizeof(uint32_t), 1, f);
+                    fwrite(totalVBO.data(), sizeof(float), vCount, f); fwrite(totalEBO.data(), sizeof(uint32_t), iCount, f); fclose(f);
+                }
             }
             
             if (g_CurrentViewIndex == (int)g_Locations[g_CurrentLocationIndex].views.size() - 1 && g_Locations[g_CurrentLocationIndex].export_3dm) {

@@ -227,7 +227,7 @@ namespace CesiumGEPROSM {
     
     struct TestView { V3 focusPoint; float distance; float pitch; float yaw; };
     static TestView g_Views[4] = {
-        { {0, 0, 0}, 1000.0f, 1.57f, 0.0f },     // 0: Top-Down view
+        { {0, 0, 50}, 150.0f, 0.2f, 0.0f },      // 0: Front full body
         { {0, 0, 50}, 250.0f, 0.4f, 1.57f },     // 1: Side environment
         { {0, 0, 80}, 400.0f, 0.6f, -0.78f },    // 2: Wide Angle Aerial
         { {0, 0, 50}, 200.0f, 0.2f, 3.14f }      // 3: Back Angle
@@ -280,9 +280,9 @@ namespace CesiumGEPROSM {
     struct RenderResources { GLuint vao, vbo, ebo; int count; bool inUse; };
 
     struct PayloadBlock { uint8_t* data; bool inUse; };
-    static const int PAYLOAD_POOL_SIZE = 200;
-    static const int RESOURCE_POOL_SIZE = 10000;
-    static const size_t PAYLOAD_BLOCK_SIZE = 16 * 1024 * 1024; // 16MB per block
+    static const int PAYLOAD_POOL_SIZE = 2500;
+    static const int RESOURCE_POOL_SIZE = 5000;
+    static const size_t PAYLOAD_BLOCK_SIZE = 4 * 1024 * 1024; // 4MB per block
     
     static PayloadBlock g_PayloadPool[PAYLOAD_POOL_SIZE];
     static RenderResources g_ResourcePool[RESOURCE_POOL_SIZE];
@@ -432,35 +432,21 @@ namespace CesiumGEPROSM {
             node->lastAccessedFrame = g_FrameCount;
             if (depth > (int)g_MaxDepthReached) g_MaxDepthReached = (uint32_t)depth;
 
-            if (depth == 0) {
-                printf("[GEPR] Root Tile AABB: min(%f, %f, %f) max(%f, %f, %f), GeometricError: %f\n", 
-                    node->boundingAABB.m_min.x, node->boundingAABB.m_min.y, node->boundingAABB.m_min.z,
-                    node->boundingAABB.m_max.x, node->boundingAABB.m_max.y, node->boundingAABB.m_max.z,
-                    node->geometricError);
-                fflush(stdout);
-            }
-
             // --- Dynamic Frustum Culling ---
             AABB testBox = node->localAABB.initialized ? node->localAABB : node->boundingAABB;
-            bool visible = true;
-            if (depth >= 4) {
-                visible = currentFrustum.intersects(testBox);
-
-                if (testBox.initialized) {
-                    float dx = std::max(0.0f, std::max(testBox.m_min.x, -testBox.m_max.x));
-                    float dy = std::max(0.0f, std::max(testBox.m_min.y, -testBox.m_max.y));
-                    float dz = std::max(0.0f, std::max(testBox.m_min.z, -testBox.m_max.z));
-                    float distToBox2 = dx*dx + dy*dy + dz*dz;
-                    if (distToBox2 > 25000000.0f) return 1; // HARD CULL BEYOND 5KM
-                }
-            }
+            bool visible = (depth < 8) ? true : currentFrustum.intersects(testBox);
 
             // MANDATE: Christ the Redeemer (origin {0,0,0} in ENU) must NEVER be culled.
-            if (testBox.initialized && !visible) {
+            if (testBox.initialized) {
                 float d2 = testBox.center().x * testBox.center().x + testBox.center().y * testBox.center().y + testBox.center().z * testBox.center().z;
                 if (d2 < 40000.0f) visible = true; // 200m radius
+                
+                float dx = std::max(0.0f, std::max(testBox.m_min.x, -testBox.m_max.x));
+                float dy = std::max(0.0f, std::max(testBox.m_min.y, -testBox.m_max.y));
+                float dz = std::max(0.0f, std::max(testBox.m_min.z, -testBox.m_max.z));
+                float distToBox2 = dx*dx + dy*dy + dz*dz;
+                if (depth > 8 && distToBox2 > 25000000.0f) return 1; // HARD CULL BEYOND 5KM
             }
-
             if (!visible) return 1;
 
             // --- Screen-Space Error Calculation ---
@@ -484,36 +470,27 @@ namespace CesiumGEPROSM {
                 double ndcError = errorOffsetNdc.y - centerNdc.y;
                 sse = std::abs(ndcError) * h / 2.0;
 
-                double targetSSE = 4.0; // More reasonable than 0.1
+                double targetSSE = 0.1; // Extremely aggressive to force highest LOD
                 if (sse > targetSSE) shouldRefine = true;
             } else if (node->childrenCount > 0) {
                 shouldRefine = true;
             }
 
-            // Forced Refinement: Push past large global/continental tiles
-            if (depth < 10 && node->childrenCount > 0) shouldRefine = true;
-
             if (testBox.initialized) {
                 float distToOrigin = sqrtf(testBox.center().x * testBox.center().x + testBox.center().y * testBox.center().y + testBox.center().z * testBox.center().z);
-                // Near-Origin Priority: Force refinement up to depth 20 if within 5km (St. Pauls proximity)
-                if (distToOrigin < 5000.0f && depth < 20 && node->childrenCount > 0) shouldRefine = true;
-                if (distToOrigin < 50.0f && depth < 25 && node->childrenCount > 0) shouldRefine = true;
+                if (distToOrigin < 50.0f && depth < 25) shouldRefine = true;
             }
 
             if (depth > 30) shouldRefine = false; // Safety clamp
 
-            if (depth < 4 && node->childrenCount > 0) {
-                // printf("[GEPR] depth %d, geometricError: %f, children: %u\n", depth, node->geometricError, node->childrenCount);
-            }
-
             // Trigger fetch if not loaded
             if (node->contentUri[0] != '\0' && !node->isLoaded && !node->isLoading) {
-                if (CesiumNetwork::g_AsyncRequests.size() < 100) {
+                if (CesiumNetwork::g_AsyncRequests.size() < 20) {
                     node->isLoading = true;
                     char url[1024];
                     resolveUri(url, 1024, node->baseUrl, node->contentUri, apiKey, sessionToken, token);
-                    if (depth < 10) { printf("[GEPR] Async Fetch (depth %d): %s\n", depth, node->contentUri); fflush(stdout); }
-
+                    if (depth < 6) { printf("[GEPR] Async Fetch (depth %d)...\n", depth); fflush(stdout); }
+                    
                     std::string nextBaseStr;
                     {
                         char nextBase[1024];
@@ -530,7 +507,6 @@ namespace CesiumGEPROSM {
                             if (buffer.size > 0 && buffer.data[0] == '{') {
                                 auto j = AliceJson::parse(buffer.data, buffer.size);
                                 if (j.type != AliceJson::J_NULL) {
-                                    printf("[GEPR] depth %d: External Tileset Loaded\n", depth);
                                     parseNode(node, j["root"], node->transform, nextBaseStr.c_str(), depth);
                                 }
                                 Alice::g_JsonArena.reset();
@@ -540,11 +516,8 @@ namespace CesiumGEPROSM {
                                 if (node->payload) {
                                     memcpy(node->payload, buffer.data, node->payloadSize);
                                     g_TotalLoadedTiles++;
-                                    if (depth < 10) printf("[GEPR] depth %d: Payload Allocated (%zu bytes)\n", depth, node->payloadSize);
                                 }
                             }
-                        } else {
-                            printf("[GEPR] depth %d: Fetch Failed (SC: %ld)\n", depth, sc);
                         }
                         node->isLoaded = true;
                         node->isLoading = false;
@@ -559,6 +532,7 @@ namespace CesiumGEPROSM {
                 }
                 if (allHandled) return 1;
             }
+
             if (node->isLoaded && node->payload) {
                 if (renderListCount < renderListCapacity) renderList[renderListCount++] = node;
                 return 1;
@@ -590,49 +564,15 @@ namespace CesiumGEPROSM {
                     auto r = jNode["boundingVolume"]["region"];
                     double west = (double)r[0], south = (double)r[1], east = (double)r[2], north = (double)r[3];
                     double minAlt = (double)r[4], maxAlt = (double)r[5];
-                    
-                    std::vector<double> lats = {south, north};
-                    std::vector<double> lons = {west, east};
-                    
-                    if (east - west > 1.0) {
-                        lons.push_back((west + east) * 0.5);
-                        if (east - west > 3.0) {
-                            lons.push_back(0.0);
-                            lons.push_back(1.57079632679);
-                            lons.push_back(-1.57079632679);
-                            lons.push_back(3.14159265359);
-                            lons.push_back(-3.14159265359);
-                        }
-                    }
-                    if (north - south > 1.0) {
-                        lats.push_back((south + north) * 0.5);
-                        lats.push_back(0.0);
-                    }
-
-                    for (double lat : lats) {
-                        if (lat < south || lat > north) continue;
-                        for (double lon : lons) {
-                            // Basic longitude wrap check for global tiles
-                            bool inside = false;
-                            if (west <= east) { if (lon >= west && lon <= east) inside = true; }
-                            else { if (lon >= west || lon <= east) inside = true; }
-                            
-                            if (inside || (east - west > 6.0)) {
-                                for (double alt : {minAlt, maxAlt}) {
-                                    DVec3 ecef = lla_to_ecef(lat, lon, alt);
-                                    double dx = ecef.x - g_OriginEcef.x, dy = ecef.y - g_OriginEcef.y, dz = ecef.z - g_OriginEcef.z;
-                                    float ex = (float)(g_EnuMatrix[0]*dx + g_EnuMatrix[1]*dy + g_EnuMatrix[2]*dz);
-                                    float ny = (float)(g_EnuMatrix[4]*dx + g_EnuMatrix[5]*dy + g_EnuMatrix[6]*dz);
-                                    float uz = (float)(g_EnuMatrix[8]*dx + g_EnuMatrix[9]*dy + g_EnuMatrix[10]*dz);
-                                    tile->boundingAABB.expand({ex, ny, uz});
-                                }
-                            }
-                        }
-                    }
-                    // For global tiles, ensure the AABB is large enough to contain the origin
-                    if (east - west > 6.0) {
-                        tile->boundingAABB.expand({-7000000, -7000000, -7000000});
-                        tile->boundingAABB.expand({ 7000000,  7000000,  7000000});
+                    // Roughly approximate region with corners
+                    double lats[2] = {south, north}, lons[2] = {west, east}, alts[2] = {minAlt, maxAlt};
+                    for(int i=0;i<2;++i)for(int j=0;j<2;++j)for(int k=0;k<2;++k) {
+                        DVec3 ecef = lla_to_ecef(lats[i], lons[j], alts[k]);
+                        double dx = ecef.x - g_OriginEcef.x, dy = ecef.y - g_OriginEcef.y, dz = ecef.z - g_OriginEcef.z;
+                        float ex = (float)(g_EnuMatrix[0]*dx + g_EnuMatrix[1]*dy + g_EnuMatrix[2]*dz);
+                        float ny = (float)(g_EnuMatrix[4]*dx + g_EnuMatrix[5]*dy + g_EnuMatrix[6]*dz);
+                        float uz = (float)(g_EnuMatrix[8]*dx + g_EnuMatrix[9]*dy + g_EnuMatrix[10]*dz);
+                        tile->boundingAABB.expand({ex, ny, uz});
                     }
                 } else if (jNode["boundingVolume"].contains("box") || jNode["boundingVolume"].contains("sphere")) {
                     if (jNode["boundingVolume"].contains("box")) {
@@ -749,12 +689,6 @@ namespace CesiumGEPROSM {
                     } else {
                         for(int v=0; v<4; ++v) loc.views.push_back(g_Views[v]);
                     }
-                    
-                    // ARCHITECT MANDATE: Force Top-Down for View 0 to ensure semantic analysis success
-                    if (!loc.views.empty()) {
-                        loc.views[0] = { {0, 0, 0}, 1000.0f, 1.57f, 0.0f };
-                    }
-                    
                     g_Locations.push_back(loc);
                     printf("[GEPR] Location Loaded. GEPR: %d, OSM: %d\n", loc.load_gepr, loc.load_osm);
                 }
@@ -768,7 +702,6 @@ namespace CesiumGEPROSM {
     }
 
     static void loadTilesetForCurrentLocation() {
-        printf("[DEBUG] loadTilesetForCurrentLocation() called\n"); fflush(stdout);
         double lat = g_Locations[g_CurrentLocationIndex].lat * 0.0174532925;
         double lon = g_Locations[g_CurrentLocationIndex].lon * 0.0174532925;
         double alt = g_Locations[g_CurrentLocationIndex].alt;
@@ -777,11 +710,10 @@ namespace CesiumGEPROSM {
         denu_matrix(g_EnuMatrix, lat, lon);
         
         char ionToken[2048];
-        printf("[DEBUG] Fetching Cesium Token...\n"); fflush(stdout);
         if (!Alice::ApiKeyReader::GetCesiumToken(ionToken, 2048)) {
             const char* fallbackToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIzYThhNjI4NS0xOTIxLTRhZjMtYmZiNS1iYmFjMzkxNzFkMDIiLCJpZCI6NDE5MDUyLCJpYXQiOjE3NzY2MjcxNDh9.fwQc5dZ44EUlMDWwylbD1rrApiqEPZbHRJRcyz4jApc";
             strncpy(ionToken, fallbackToken, 2047);
-            printf("[GEPR] Using fallback Cesium token.\n");
+            ionToken[2047] = '\0';
         }
         
         uint32_t assetId = 2275207;
@@ -792,9 +724,9 @@ namespace CesiumGEPROSM {
         char url[512]; snprintf(url, 512, "https://api.cesium.com/v1/assets/%u/endpoint?access_token=%s", assetId, ionToken);
         static uint8_t hsBuf[1024*1024]; CesiumNetwork::FetchBuffer handshake = { hsBuf, 0, sizeof(hsBuf) };
         long sc=0;
-        printf("[DEBUG] Fetching endpoint URL: %s\n", url); fflush(stdout);
+        printf("[GEPR] Fetching endpoint: %s\n", url);
         if (CesiumNetwork::Fetch(url, handshake, &sc)) {
-            printf("[DEBUG] Handshake success! SC=%ld\n", sc); fflush(stdout);
+            printf("[GEPR] Handshake success (SC: %ld)\n", sc);
             auto jhs = AliceJson::parse(handshake.data, handshake.size);
             std::string turl, atok;
             if (jhs.contains("url")) turl = jhs["url"].get<std::string>();
@@ -802,6 +734,7 @@ namespace CesiumGEPROSM {
             if (jhs.contains("accessToken")) atok = jhs["accessToken"].get<std::string>();
             if (!atok.empty()) strncpy(g_Tileset.token, atok.c_str(), 2047);
             if (!turl.empty()) {
+                printf("[GEPR] Tileset URL: %s\n", turl.c_str());
                 size_t kPos = turl.find("key=");
                 if (kPos != std::string::npos) {
                     size_t kEnd = turl.find('&', kPos);
@@ -810,18 +743,24 @@ namespace CesiumGEPROSM {
                 }
                 strncpy(g_Tileset.baseUrl, turl.substr(0, turl.find_last_of('/')+1).c_str(), 1023);
                 static uint8_t tsBuf[16*1024*1024]; CesiumNetwork::FetchBuffer ts = { tsBuf, 0, sizeof(tsBuf) };
-                printf("[DEBUG] Fetching tileset from URL: %s\n", turl.c_str()); fflush(stdout);
                 if (CesiumNetwork::Fetch(turl.c_str(), ts, &sc, g_Tileset.token[0] ? g_Tileset.token : nullptr)) {
-                    printf("[DEBUG] Tileset fetched successfully! SC=%ld\n", sc); fflush(stdout);
+                    printf("[GEPR] Tileset JSON fetched (Size: %zu)\n", ts.size);
                     auto jts = AliceJson::parse(ts.data, ts.size);
                     if (jts.type != AliceJson::J_NULL) {
                         g_Tileset.root = (Tile*)Alice::g_Arena.allocate(sizeof(Tile));
                         memset(g_Tileset.root, 0, sizeof(Tile));
                         g_Tileset.parseNode(g_Tileset.root, jts["root"], dmat4_identity(), g_Tileset.baseUrl, 0);
+                        printf("[GEPR] Tileset root parsed successfully.\n");
                     }
+                } else {
+                    printf("[GEPR] ERROR: Failed to fetch tileset JSON (SC: %ld)\n", sc);
                 }
+            } else {
+                printf("[GEPR] ERROR: Handshake JSON missing URL.\n");
             }
             Alice::g_JsonArena.reset();
+        } else {
+            printf("[GEPR] ERROR: Handshake failed (SC: %ld)\n", sc);
         }
         printf("[GEPR] Switched Location to %s\n", g_Locations[g_CurrentLocationIndex].name);
     }
@@ -932,30 +871,22 @@ namespace CesiumGEPROSM {
         printf("[GEPR] setup started\n"); fflush(stdout);
         if (!Alice::g_Arena.memory) Alice::g_Arena.init(2048ULL*1024ULL*1024ULL); 
         if (!Alice::g_JsonArena.memory) Alice::g_JsonArena.init(256 * 1024 * 1024);
-        printf("[GEPR] Arenas initialized\n"); fflush(stdout);
         
         // Initialize Pools
         for (int i=0; i<PAYLOAD_POOL_SIZE; ++i) {
             g_PayloadPool[i].data = (uint8_t*)malloc(PAYLOAD_BLOCK_SIZE);
-            if (!g_PayloadPool[i].data) { printf("[GEPR] FATAL: Payload Pool Allocation Failed\n"); fflush(stdout); exit(1); }
+            if (!g_PayloadPool[i].data) { printf("[GEPR] FATAL: Payload Pool Allocation Failed\n"); exit(1); }
             g_PayloadPool[i].inUse = false;
         }
         for (int i=0; i<RESOURCE_POOL_SIZE; ++i) g_ResourcePool[i].inUse = false;
-        printf("[GEPR] Pools initialized\n"); fflush(stdout);
 
         initShaders(); 
-        printf("[GEPR] initShaders complete\n"); fflush(stdout);
-        
         g_Tileset.init();
-        printf("[GEPR] g_Tileset.init complete\n"); fflush(stdout);
         
         if (!g_ScratchVbo) g_ScratchVbo = (float*)malloc(120000*6*4);
         if (!g_ScratchEbo) g_ScratchEbo = (uint32_t*)malloc(250000*4);
-        printf("[GEPR] Scratch buffers allocated\n"); fflush(stdout);
         
         loadLocationData();
-        printf("[GEPR] loadLocationData complete\n"); fflush(stdout);
-
         loadTilesetForCurrentLocation();
         
         std::filesystem::create_directories("build/bin/OUTPUT");
@@ -973,12 +904,12 @@ namespace CesiumGEPROSM {
         CesiumNetwork::UpdateAsync();
         AliceViewer* av = AliceViewer::instance();
         
-        if (g_FrameCount == 0) {
-            av->camera.focusPoint = g_Views[0].focusPoint; 
-            av->camera.distance = g_Views[0].distance;
-            av->camera.pitch = g_Views[0].pitch;
-            av->camera.yaw = g_Views[0].yaw;
-            printf("[GEPR] Camera Reset to View %d\n", 0); fflush(stdout);
+        if (g_FrameCount == 0 && !g_Locations.empty()) {
+            av->camera.focusPoint = g_Locations[g_CurrentLocationIndex].views[0].focusPoint; 
+            av->camera.distance = g_Locations[g_CurrentLocationIndex].views[0].distance;
+            av->camera.pitch = g_Locations[g_CurrentLocationIndex].views[0].pitch;
+            av->camera.yaw = g_Locations[g_CurrentLocationIndex].views[0].yaw;
+            printf("[GEPR] Camera Reset to Location %d (%s), View %d\n", g_CurrentLocationIndex, g_Locations[g_CurrentLocationIndex].name, 0); fflush(stdout);
         }
 
         // --- Frustum Extraction ---
@@ -997,34 +928,6 @@ namespace CesiumGEPROSM {
 
         g_TilesLoadedThisFrame = 0;
         g_Tileset.renderListCount = 0; if (g_Tileset.root) g_Tileset.traverse(g_Tileset.root, 0);
-
-        // --- Zoom-To-Fit Mandate ---
-        if (g_FrameCount > 10 && g_FrameCount < 100 && g_Tileset.renderListCount > 0) {
-            AABB sceneBox;
-            for (uint32_t i=0; i<g_Tileset.renderListCount; ++i) {
-                Tile* t = g_Tileset.renderList[i];
-                AABB& b = t->localAABB.initialized ? t->localAABB : t->boundingAABB;
-                if (b.initialized) {
-                    // Only zoom to tiles that are reasonably close to origin (within 50km)
-                    float d = sqrtf(b.center().x*b.center().x + b.center().y*b.center().y + b.center().z*b.center().z);
-                    if (d < 50000.0f) {
-                        sceneBox.expand(b.m_min);
-                        sceneBox.expand(b.m_max);
-                    }
-                }
-            }
-            if (sceneBox.initialized) {
-                av->camera.focusPoint = sceneBox.center();
-                V3 s = sceneBox.m_max - sceneBox.m_min;
-                float size = std::max(s.x, std::max(s.y, s.z));
-                av->camera.distance = size * 1.5f;
-                static bool loggedZoom = false;
-                if (!loggedZoom) {
-                    printf("[GEPR] Zoom-To-Fit: focus(%f, %f, %f), distance %f\n", av->camera.focusPoint.x, av->camera.focusPoint.y, av->camera.focusPoint.z, av->camera.distance);
-                    loggedZoom = true;
-                }
-            }
-        }
     }
 
     static void draw() {
@@ -1044,48 +947,24 @@ namespace CesiumGEPROSM {
             }
         }
 
-        av->backColor = {0.0f, 1.0f, 0.0f}; // Bright Green
+        av->backColor = {0,0,0};
         if (frameIdx % 20 == 0) { printf("[GEPR] Frame %u, RenderList: %u\n", frameIdx, g_Tileset.renderListCount); fflush(stdout); }
         
-        int w, h; glfwGetFramebufferSize(av->window, &w, &h);
-
         if (av->m_isRenderingOffscreen) {
-            float cColor[] = {0.0f, 1.0f, 0.0f, 1.0f}; // Bright Green
+            float cColor[] = {0.588f, 0.588f, 0.588f, 1.0f};
             float zero[] = {0.0f, 0.0f, 0.0f, 0.0f};
             glClearBufferfv(GL_COLOR, 0, cColor);
             glClearBufferfv(GL_COLOR, 1, zero);
             glClearBufferfv(GL_COLOR, 2, zero);
             glClearDepth(0.0f); glClear(GL_DEPTH_BUFFER_BIT);
-        } else {
+
             glClearColor(0.0f, 1.0f, 0.0f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_GEQUAL);
         }
 
-        // --- Headless Fast Exit Mandate ---
-        if (av->m_headlessCapture && frameIdx > 100) {
-            // Force capture and exit if we have geometry or reached timeout
-            bool shouldExit = false;
-            if (g_TotalFrustumVertices > 100000 && frameIdx > 1000) shouldExit = true;
-            if (frameIdx > 200) shouldExit = true; // Architect: Reduce to 200 for fast Green Screen testing
-
-            if (shouldExit) {
-                unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
-                stbi_flip_vertically_on_write(1); 
-                stbi_write_png("framebuffer.png", w, h, 3, px, w*3);
-                
-                // Calculate pixel coverage
-                uint64_t nonGreenPixels = 0;
-                for (int i=0; i<w*h; ++i) {
-                    if (px[i*3] != 0 || px[i*3+1] != 255 || px[i*3+2] != 0) nonGreenPixels++;
-                }
-                float coverage = (float)nonGreenPixels / (float)(w*h);
-                printf("[GEPR] Headless Capture Complete. Pixel Coverage: %.2f%%\n", coverage * 100.0f);
-                printf("[GEPR] Total Frustum Vertices: %llu\n", g_TotalFrustumVertices);
-                free(px);
-                exit(0);
-            }
-        }
-        glEnable(GL_DEPTH_TEST); glDepthFunc(GL_ALWAYS);
         glDisable(GL_CULL_FACE);
+        int w, h; glfwGetFramebufferSize(av->window, &w, &h);
         M4 v = av->camera.getViewMatrix(), p = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 0.1f);
         float mvp[16]; for(int i=0;i<4;++i)for(int j=0;j<4;++j){mvp[i+j*4]=0;for(int k=0;k<4;++k)mvp[i+j*4]+=p.m[i+k*4]*v.m[k+j*4];}
         glUseProgram(g_Program); glUniformMatrix4fv(glGetUniformLocation(g_Program, "uMVP"), 1, 0, mvp);
@@ -1102,16 +981,16 @@ namespace CesiumGEPROSM {
                     uint8_t* glbPayload = t->payload; size_t glbSize = t->payloadSize;
                     DVec3 rtcCenter = {0,0,0};
                     if (glbSize >= 28 && memcmp(glbPayload, "b3dm", 4) == 0) {
-                        uint32_t ftj = *(uint32_t*)(glbPayload + 12);
+                        uint32_t ftj = *(uint32_t*)(glbPayload + 12), ftb = *(uint32_t*)(glbPayload + 16);
+                        uint32_t btj = *(uint32_t*)(glbPayload + 20), btb = *(uint32_t*)(glbPayload + 24);
                         if (ftj > 0) {
                             auto ft = AliceJson::parse(glbPayload + 28, ftj);
                             if (ft.contains("RTC_CENTER")) {
                                 auto rtc = ft["RTC_CENTER"];
                                 rtcCenter = {(double)rtc[0], (double)rtc[1], (double)rtc[2]};
+                                static bool loggedRtc = false; if (!loggedRtc) { printf("[GEPR] Parsed RTC_CENTER: %f, %f, %f\n", rtcCenter.x, rtcCenter.y, rtcCenter.z); loggedRtc = true; }
                             }
                         }
-                        uint32_t ftb = *(uint32_t*)(glbPayload + 16);
-                        uint32_t btj = *(uint32_t*)(glbPayload + 20), btb = *(uint32_t*)(glbPayload + 24);
                         uint32_t headerLen = 28 + ftj + ftb + btj + btb;
                         if (headerLen < glbSize) { glbPayload += headerLen; glbSize -= headerLen; }
                     }
@@ -1123,25 +1002,15 @@ namespace CesiumGEPROSM {
                             DMat4 yup = {1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1};
                             DMat4 mTransform = dmat4_mul(t->transform, yup);
                             if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], mTransform, rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
-                            
-                            if (eIdx > 0) {
-                                printf("[GEOM] Tile Parsed: %u vertices, URI: %s\n", vIdx, t->contentUri);
-                                for (uint32_t vIdx2 = 0; vIdx2 < vIdx; ++vIdx2) t->localAABB.expand({g_ScratchVbo[vIdx2*6+0], g_ScratchVbo[vIdx2*6+1], g_ScratchVbo[vIdx2*6+2]});
-                                glGenVertexArrays(1, &res->vao); glBindVertexArray(res->vao);
-                                glGenBuffers(1, &res->vbo); glBindBuffer(GL_ARRAY_BUFFER, res->vbo); glBufferData(GL_ARRAY_BUFFER, vIdx*6*4, g_ScratchVbo, GL_STATIC_DRAW);
-                                glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, 0);
-                                glGenBuffers(1, &res->ebo); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, res->ebo); glBufferData(GL_ELEMENT_ARRAY_BUFFER, eIdx*4, g_ScratchEbo, GL_STATIC_DRAW);
-                                res->count = eIdx; t->rendererResources = res;
-                                g_TotalVRAMAllocations++;
-                            } else {
-                                if (vIdx > 0) printf("[GEPR] Tile has %u vertices but 0 indices (URI: %s)\n", vIdx, t->contentUri);
-                                else printf("[GEPR] Tile has 0 vertices and 0 indices (URI: %s)\n", t->contentUri);
-                                freeResource(res);
-                            }
+                            for (uint32_t vIdx2 = 0; vIdx2 < vIdx; ++vIdx2) t->localAABB.expand({g_ScratchVbo[vIdx2*6+0], g_ScratchVbo[vIdx2*6+1], g_ScratchVbo[vIdx2*6+2]});
+                            glGenVertexArrays(1, &res->vao); glBindVertexArray(res->vao);
+                            glGenBuffers(1, &res->vbo); glBindBuffer(GL_ARRAY_BUFFER, res->vbo); glBufferData(GL_ARRAY_BUFFER, vIdx*6*4, g_ScratchVbo, GL_STATIC_DRAW);
+                            glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, 0, 24, 0);
+                            glGenBuffers(1, &res->ebo); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, res->ebo); glBufferData(GL_ELEMENT_ARRAY_BUFFER, eIdx*4, g_ScratchEbo, GL_STATIC_DRAW);
+                            res->count = eIdx; t->rendererResources = res;
+                            g_TotalVRAMAllocations++;
                         }
                         cgltf_free(data);
-                    } else {
-                        printf("[GEPR] ERROR: cgltf_parse failed for tile (URI: %s, Size: %zu)\n", t->contentUri, glbSize);
                     }
                 }
             }
@@ -1203,32 +1072,42 @@ namespace CesiumGEPROSM {
             }
         } else if (g_CurrentState == STATE_AGGREGATE) {
             std::vector<float> totalVBO; std::vector<uint32_t> totalEBO;
+            uint32_t tilesProcessed = 0;
+            uint32_t tilesWithPayload = 0;
+            uint32_t cgltfSuccesses = 0;
+
             for (uint32_t i = 0; i < g_Tileset.renderListCount; ++i) {
                 Tile* t = g_Tileset.renderList[i];
+                tilesProcessed++;
                 if (t->payload) {
-                    cgltf_options opt = {cgltf_file_type_glb}; opt.memory.alloc_func = cgltf_alloc; opt.memory.free_func = cgltf_free_cb;
+                    tilesWithPayload++;
                     cgltf_data* data = 0;
                     uint8_t* glbPayload = t->payload; size_t glbSize = t->payloadSize;
                     DVec3 rtcCenter = {0,0,0};
                     if (glbSize >= 28 && memcmp(glbPayload, "b3dm", 4) == 0) {
                         uint32_t ftj = *(uint32_t*)(glbPayload + 12), ftb = *(uint32_t*)(glbPayload + 16);
                         uint32_t btj = *(uint32_t*)(glbPayload + 20), btb = *(uint32_t*)(glbPayload + 24);
+                        if (i == 0) printf("[Aggregate] Tile 0 B3DM: ftj=%u, ftb=%u, btj=%u, btb=%u, totalSize=%zu\n", ftj, ftb, btj, btb, glbSize);
                         if (ftj > 0) {
                             auto ft = AliceJson::parse(glbPayload + 28, ftj);
                             if (ft.contains("RTC_CENTER")) {
                                 auto rtc = ft["RTC_CENTER"]; rtcCenter = {(double)rtc[0], (double)rtc[1], (double)rtc[2]};
                             }
+                            Alice::g_JsonArena.reset();
                         }
                         uint32_t headerLen = 28 + ftj + ftb + btj + btb;
                         if (headerLen < glbSize) { glbPayload += headerLen; glbSize -= headerLen; }
                     }
+                    if (i == 0) printf("[Aggregate] Tile 0 GLB Magic: %.4s, Size: %zu\n", glbPayload, glbSize);
+                    cgltf_options opt = {cgltf_file_type_invalid}; opt.memory.alloc_func = cgltf_alloc; opt.memory.free_func = cgltf_free_cb;
                     if (cgltf_parse(&opt, glbPayload, glbSize, &data) == cgltf_result_success) {
                         cgltf_load_buffers(&opt, data, 0);
+                        cgltfSuccesses++;
                         if (g_ScratchVbo && g_ScratchEbo) {
                             uint32_t vIdx=0, eIdx=0;
                             DMat4 yup = {1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1};
                             DMat4 mTransform = dmat4_mul(t->transform, yup);
-                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], mTransform, {0,0,0}, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], mTransform, rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
                             uint32_t offset = (uint32_t)(totalVBO.size()/6);
                             for(uint32_t v=0; v<vIdx*6; ++v) totalVBO.push_back(g_ScratchVbo[v]);
                             for(uint32_t e=0; e<eIdx; ++e) totalEBO.push_back(g_ScratchEbo[e] + offset);
@@ -1237,6 +1116,7 @@ namespace CesiumGEPROSM {
                     }
                 }
             }
+            printf("[Aggregate] Processed: %u, WithPayload: %u, CGLTFSuccess: %u, TotalVerts: %zu\n", tilesProcessed, tilesWithPayload, cgltfSuccesses, totalVBO.size()/6);
             char binPath[256]; snprintf(binPath, 256, "build/bin/OUTPUT/GEPR_loc%d_cache_binary.bin", g_CurrentLocationIndex);
             FILE* f = fopen(binPath, "wb");
             if (f) {

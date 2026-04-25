@@ -876,6 +876,7 @@ void AliceViewer::run()
         camera.update(window, dt);
         int w, h; 
         glfwGetFramebufferSize(window, &w, &h);
+        if (m_headlessCapture && (w == 0 || h == 0)) { w = 1280; h = 720; }
         if (w > 0 && h > 0) 
         {
             glViewport(0, 0, w, h);

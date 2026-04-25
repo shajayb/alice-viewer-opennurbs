@@ -346,6 +346,7 @@ namespace CesiumGEPROSM {
         AABB localAABB;
         RenderResources* rendererResources;
         uint32_t lastAccessedFrame;
+        bool isRefined;
     };
 
     static uint32_t g_TilesLoadedThisFrame = 0;
@@ -529,7 +530,17 @@ namespace CesiumGEPROSM {
                 }
             }
 
-            if (node->isLoaded && node->payload) {
+            bool childrenLoaded = true;
+            if (node->childrenCount > 0) {
+                for (uint32_t i = 0; i < node->childrenCount; ++i) {
+                    if (!node->children[i] || !node->children[i]->isLoaded) childrenLoaded = false;
+                }
+            } else {
+                childrenLoaded = false;
+            }
+            node->isRefined = shouldRefine && childrenLoaded;
+
+            if (node->isLoaded && node->payload && !node->isRefined) {
                 if (renderListCount < 8192) renderList[renderListCount++] = node;
             }
 
@@ -1144,62 +1155,17 @@ namespace CesiumGEPROSM {
                 ONX_Model model;
                 ON_Mesh* mesh = new ON_Mesh();
                 
-                std::vector<float> exportVBO; std::vector<uint32_t> exportEBO;
-                
-                for (uint32_t i = 0; i < g_Tileset.renderListCount; ++i) {
-                    Tile* t = g_Tileset.renderList[i];
-                    if (!t->payload) continue;
-                    
-                    float distToOrigin = 0.0f;
-                    if (t->boundingAABB.initialized) {
-                        distToOrigin = sqrtf(t->boundingAABB.center().x * t->boundingAABB.center().x + 
-                                             t->boundingAABB.center().y * t->boundingAABB.center().y + 
-                                             t->boundingAABB.center().z * t->boundingAABB.center().z);
-                    }
-                    
-                    // Filter: Only include high resolution tiles near the POI
-                    if (distToOrigin > 1500.0f) continue;
-                    if (t->geometricError > 50.0) continue;
-                    
-                    cgltf_options opt = {cgltf_file_type_glb}; opt.memory.alloc_func = cgltf_alloc; opt.memory.free_func = cgltf_free_cb;
-                    cgltf_data* data = 0;
-                    uint8_t* glbPayload = t->payload; size_t glbSize = t->payloadSize;
-                    DVec3 rtcCenter = {0,0,0};
-                    if (glbSize >= 28 && memcmp(glbPayload, "b3dm", 4) == 0) {
-                        uint32_t ftj = *(uint32_t*)(glbPayload + 12), ftb = *(uint32_t*)(glbPayload + 16);
-                        uint32_t btj = *(uint32_t*)(glbPayload + 20), btb = *(uint32_t*)(glbPayload + 24);
-                        if (ftj > 0) {
-                            auto ft = AliceJson::parse(glbPayload + 28, ftj);
-                            if (ft.contains("RTC_CENTER")) {
-                                auto rtc = ft["RTC_CENTER"]; rtcCenter = {(double)rtc[0], (double)rtc[1], (double)rtc[2]};
-                            }
-                        }
-                        uint32_t headerLen = 28 + ftj + ftb + btj + btb;
-                        if (headerLen < glbSize) { glbPayload += headerLen; glbSize -= headerLen; }
-                    }
-                    if (cgltf_parse(&opt, glbPayload, glbSize, &data) == cgltf_result_success) {
-                        cgltf_load_buffers(&opt, data, 0);
-                        if (g_ScratchVbo && g_ScratchEbo) {
-                            uint32_t vIdx=0, eIdx=0;
-                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
-                            uint32_t offset = (uint32_t)(exportVBO.size()/6);
-                            size_t oldVSize = exportVBO.size();
-                            exportVBO.resize(oldVSize + vIdx * 6);
-                            memcpy(exportVBO.data() + oldVSize, g_ScratchVbo, vIdx * 6 * sizeof(float));
-                            size_t oldESize = exportEBO.size();
-                            exportEBO.resize(oldESize + eIdx);
-                            for(uint32_t e=0; e<eIdx; ++e) exportEBO[oldESize + e] = g_ScratchEbo[e] + offset;
-                        }
-                        cgltf_free(data);
-                    }
+                int vCount = (int)(totalVBO.size() / 6);
+                mesh->m_V.Reserve(vCount);
+                for (int i=0; i<vCount; i++) {
+                    mesh->SetVertex(i, ON_3dPoint(totalVBO[i*6+0], totalVBO[i*6+1], totalVBO[i*6+2]));
                 }
                 
-                int vCount = exportVBO.size() / 6;
-                mesh->m_V.Reserve(vCount);
-                for (int i=0; i<vCount; i++) mesh->SetVertex(i, ON_3dPoint(exportVBO[i*6], exportVBO[i*6+1], exportVBO[i*6+2]));
-                int fCount = exportEBO.size() / 3;
+                int fCount = (int)(totalEBO.size() / 3);
                 mesh->m_F.Reserve(fCount);
-                for (int i=0; i<fCount; i++) mesh->SetTriangle(i, exportEBO[i*3], exportEBO[i*3+1], exportEBO[i*3+2]);
+                for (int i=0; i<fCount; i++) {
+                    mesh->SetTriangle(i, totalEBO[i*3], totalEBO[i*3+1], totalEBO[i*3+2]);
+                }
                 mesh->ComputeVertexNormals();
                 model.AddManagedModelGeometryComponent(mesh, nullptr);
                 model.Write(dmpPath, 7, nullptr);

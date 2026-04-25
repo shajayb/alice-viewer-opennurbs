@@ -1,55 +1,20 @@
 {
   "locations": [
     {
-      "name": "St Pauls Cathedral, London",
+      "name": "St. Paul's Cathedral, London",
       "lat": 51.5138,
       "lon": -0.0984,
       "alt": 50.0,
-      "semantic_criteria": "The image is a high-angle, 3D architectural render of central London, with St. Paul's Cathedral prominently featured in the center. The scene is rendered using solid, untextured gray meshes with directional shading against a stark black background. St. Paul's Cathedral itself is rendered with a notably high Level of Detail (LOD). Its iconic architectural features are clearly defined, including the massive central dome with its ribbed structure, the lantern and cross at the peak, the distinct cross-shaped footprint of the nave and transepts, and the intricate twin towers (campaniles) on the western facade. In stark contrast, the surrounding urban fabric is rendered at a much lower LOD. The adjacent buildings are represented as simplistic, blocky, prismatic extrusions that capture the general massing and street layout but lack any specific architectural articulation or roof details. In the upper right quadrant, the River Thames is visible as a wide, black, un-rendered void winding through the dense cityscape.",
-      "image_description": "A high-angle view focusing on the central dome, lantern, transepts, and twin front campaniles of St Paul's Cathedral, rendered in smooth, highly-detailed solid gray geometry without wireframes. The detailed cathedral is surrounded by a dense urban context of simpler, blocky geometric building extrusions. The background is black, with the dark path of the River Thames visible cutting through the upper right of the sprawling cityscape.",
-      "export_bin": false,
-      "export_3dm": true,
-      "export_framebuffer": true,
-      "export_stencils": true,
-      "load_gepr": true,
-      "load_osm": false,
-      "views": [
-        {"focusPoint": [0.0, -40.0, 60.0], "distance": 450.0, "pitch": 0.55, "yaw": 4.2},
-        {"focusPoint": [0.0, 0.0, 40.0], "distance": 300.0, "pitch": 0.15, "yaw": 1.0}
-      ]
-    },
-    {
-      "name": "Eiffel Tower, Paris",
-      "lat": 48.8584,
-      "lon": 2.2945,
-      "alt": 50.0,
-      "semantic_criteria": "A highly detailed, intricate lattice iron structure of the Eiffel Tower viewed from a high angle, rising above the surrounding Paris cityscape.",
+      "semantic_criteria": "A wide-angle aerial render centering on St. Paul's Cathedral, distinctly showing its iconic dome and twin towers, while prominently featuring the sprawling surrounding urban context of London, including the adjacent street grids, neighboring building blocks, and the broader metropolitan layout.",
       "image_description": "PENDING SEMANTIC ANALYSIS",
       "export_bin": false,
-      "export_3dm": true,
+      "export_3dm": false,
       "export_framebuffer": true,
-      "export_stencils": true,
+      "export_stencils": false,
       "load_gepr": true,
       "load_osm": false,
       "views": [
-        {"focusPoint": [0.0, 0.0, 100.0], "distance": 600.0, "pitch": 0.4, "yaw": 2.0}
-      ]
-    },
-    {
-      "name": "Light Benghazi, Benghazi",
-      "lat": 32.1167,
-      "lon": 20.0667,
-      "alt": 50.0,
-      "semantic_criteria": "A high-angle view of the urban layout and infrastructure in Benghazi, featuring dense architectural forms and potentially distinct local landmarks like the lighthouse.",
-      "image_description": "PENDING SEMANTIC ANALYSIS",
-      "export_bin": false,
-      "export_3dm": true,
-      "export_framebuffer": true,
-      "export_stencils": true,
-      "load_gepr": true,
-      "load_osm": false,
-      "views": [
-        {"focusPoint": [0.0, 0.0, 50.0], "distance": 400.0, "pitch": 0.5, "yaw": 1.5}
+        {"focusPoint": [0.0, 0.0, 80.0], "distance": 1000.0, "pitch": 0.8, "yaw": -0.78}
       ]
     }
   ]

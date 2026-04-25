@@ -473,23 +473,35 @@ namespace CesiumGEPROSM {
                 double ndcError = errorOffsetNdc.y - centerNdc.y;
                 sse = std::abs(ndcError) * h / 2.0;
 
-                double targetSSE = 0.0; // Extremely aggressive to force highest LOD
+                double targetSSE = 16.0; // Base coarse detail for far surroundings
+                if (testBox.initialized) {
+                    float dx = std::max(0.0f, std::max(testBox.m_min.x, -testBox.m_max.x));
+                    float dy = std::max(0.0f, std::max(testBox.m_min.y, -testBox.m_max.y));
+                    float dz = std::max(0.0f, std::max(testBox.m_min.z, -testBox.m_max.z));
+                    float distToBox = sqrtf(dx*dx + dy*dy + dz*dz);
+                    if (distToBox < 800.0f) targetSSE = 0.1; // Extreme architectural detail near the focus point
+                    else if (distToBox < 2000.0f) targetSSE = 0.5; // High detail for adjacent blocks
+                }
                 if (sse > targetSSE) shouldRefine = true;
+                if (!shouldRefine && node->contentUri[0] != '\0') {
+                    static int prints = 0;
+                    if (prints++ < 10) {
+                        printf("[Traverse Debug] Tile %s NOT refined. distToBox: %f, sse: %f, targetSSE: %f\n", node->contentUri, testBox.initialized ? sqrtf(std::max(0.0f, std::max(testBox.m_min.x, -testBox.m_max.x))*std::max(0.0f, std::max(testBox.m_min.x, -testBox.m_max.x)) + std::max(0.0f, std::max(testBox.m_min.y, -testBox.m_max.y))*std::max(0.0f, std::max(testBox.m_min.y, -testBox.m_max.y)) + std::max(0.0f, std::max(testBox.m_min.z, -testBox.m_max.z))*std::max(0.0f, std::max(testBox.m_min.z, -testBox.m_max.z))) : -1.0f, sse, targetSSE);
+                        printf("                 -> testBox min(%f, %f, %f) max(%f, %f, %f)\n", testBox.m_min.x, testBox.m_min.y, testBox.m_min.z, testBox.m_max.x, testBox.m_max.y, testBox.m_max.z);
+                    }
+                }
             } else if (node->childrenCount > 0) {
                 shouldRefine = true;
             }
 
-            if (testBox.initialized) {
-                float distToOrigin = sqrtf(testBox.center().x * testBox.center().x + testBox.center().y * testBox.center().y + testBox.center().z * testBox.center().z);
-                if (distToOrigin < 2000.0f) shouldRefine = true;
-            }
+            // Unified LOD Strategy: Rely purely on targetSSE for refinement
+            // Removed unconditional depth and distToOrigin forcing to prevent GEPR traversal bombs.
 
             if (depth > 30) shouldRefine = false; // Safety clamp
 
             // Trigger fetch if not loaded
             if (node->contentUri[0] != '\0' && !node->isLoaded && !node->isLoading) {
-                if (depth == 0 && g_FrameCount % 100 == 0) printf("[GEPR] Depth 0 fetching %s\n", node->contentUri); fflush(stdout);
-                if (CesiumNetwork::g_AsyncRequests.size() < 20) {
+                if (CesiumNetwork::g_AsyncRequests.size() < 128) {
                     node->isLoading = true;
                     char url[1024];
                     resolveUri(url, 1024, node->baseUrl, node->contentUri, apiKey, sessionToken, token);
@@ -542,13 +554,15 @@ namespace CesiumGEPROSM {
             node->isRefined = shouldRefine && childrenLoaded && (node->refineMode == 0);
 
             if (node->isLoaded && node->payload && !node->isRefined) {
-                if (renderListCount < 8192) renderList[renderListCount++] = node;
+                if (renderListCount < renderListCapacity) renderList[renderListCount++] = node;
             }
 
             if (shouldRefine) {
+                int allHandled = 1;
                 for (uint32_t i = 0; i < node->childrenCount; ++i) {
-                    traverse(node->children[i], depth + 1);
+                    if (traverse(node->children[i], depth + 1) == 0) allHandled = 0;
                 }
+                if (allHandled && node->refineMode == 0) return 1;
             }
 
             return 0;
@@ -813,7 +827,7 @@ namespace CesiumGEPROSM {
             "    vec3 N = normalize(cross(dFdx(vVP), dFdy(vVP)));\n"
             "    if(!gl_FrontFacing) N = -N;\n"
             "    float d = max(dot(N, normalize(vec3(0.5, 0.8, 0.6))), 0.2);\n"
-            "    f_Color = vec4(vec3(0.85) * d, 1.0);\n"
+            "    float h = clamp(vVP.z / 150.0, 0.0, 1.0); vec3 baseColor = mix(vec3(0.2, 0.6, 0.2), vec3(0.8, 0.3, 0.2), h); f_Color = vec4(baseColor * d, 1.0);\n"
             "    f_Seg = vec4(1.0, 1.0, 1.0, 1.0);\n"
             "    float near = 0.1;\n"
             "    float far = 5000.0;\n"
@@ -826,15 +840,11 @@ namespace CesiumGEPROSM {
         g_Program=glCreateProgram(); glAttachShader(g_Program,v); glAttachShader(g_Program,f); glLinkProgram(g_Program);
     }
 
-    static void processNode(cgltf_node* node, const DMat4& transform, const DVec3& rtcCenter, float* vbo, uint32_t* ebo, uint32_t& vIdx, uint32_t& eIdx) {
-        DMat4 m = transform;
+    static void processNode(cgltf_node* node, const DMat4& tileTransform, const DMat4& gltfTransform, const DVec3& rtcCenter, float* vbo, uint32_t* ebo, uint32_t& vIdx, uint32_t& eIdx) {
+        DMat4 m = gltfTransform;
         if (node->has_matrix) { 
             DMat4 nm; for(int i=0;i<16;++i) nm.m[i] = (double)node->matrix[i]; 
-            m = dmat4_mul(transform, nm); 
-            static bool loggedM = false; if (!loggedM) {
-                printf("[GEPR] Final Matrix m: "); for(int i=0;i<16;++i) printf("%f ", m.m[i]); printf("\n");
-                loggedM = true;
-            }
+            m = dmat4_mul(gltfTransform, nm); 
         } else {
             if (node->has_translation) m = dmat4_translate(m, {(double)node->translation[0], (double)node->translation[1], (double)node->translation[2]});
             if (node->has_rotation) m = dmat4_mul(m, dmat4_from_quat((double*)node->rotation));
@@ -849,13 +859,13 @@ namespace CesiumGEPROSM {
                 uint32_t offset = vIdx;
                 for (size_t k=0; k<pa->count; ++k) {
                     float pos[3]; cgltf_accessor_read_float(pa, k, pos, 3);
-                    static bool loggedPos = false; if (!loggedPos) {
-                        printf("[GEPR] Raw Node Translation: %f, %f, %f\n", node->translation[0], node->translation[1], node->translation[2]);
-                        printf("[GEPR] Raw Vertex 0 Pos: %f, %f, %f\n", pos[0], pos[1], pos[2]);
-                        printf("[GEPR] Transform[12-14]: %f, %f, %f\n", transform.m[12], transform.m[13], transform.m[14]);
-                        loggedPos = true;
-                    }
-                    DVec4 wp = dmat4_mul_vec4(m, {(double)pos[0] + rtcCenter.x, (double)pos[1] + rtcCenter.y, (double)pos[2] + rtcCenter.z, 1.0});
+                    DVec4 lp = dmat4_mul_vec4(m, {(double)pos[0], (double)pos[1], (double)pos[2], 1.0});
+                    // glTF is Y-Up by default, 3D Tiles is Z-Up.
+                    double up_x = lp.x;
+                    double up_y = -lp.z;
+                    double up_z = lp.y;
+                    
+                    DVec4 wp = dmat4_mul_vec4(tileTransform, {up_x + rtcCenter.x, up_y + rtcCenter.y, up_z + rtcCenter.z, 1.0});
                     double dx = wp.x - g_OriginEcef.x, dy = wp.y - g_OriginEcef.y, dz = wp.z - g_OriginEcef.z;
                     float ex = (float)(g_EnuMatrix[0]*dx + g_EnuMatrix[1]*dy + g_EnuMatrix[2]*dz);
                     float ny = (float)(g_EnuMatrix[4]*dx + g_EnuMatrix[5]*dy + g_EnuMatrix[6]*dz);
@@ -881,7 +891,7 @@ namespace CesiumGEPROSM {
                 }
             }
         }
-        for (size_t i=0; i<node->children_count; ++i) processNode(node->children[i], m, rtcCenter, vbo, ebo, vIdx, eIdx);
+        for (size_t i=0; i<node->children_count; ++i) processNode(node->children[i], tileTransform, m, rtcCenter, vbo, ebo, vIdx, eIdx);
     }
 
     static void setup() {
@@ -964,23 +974,22 @@ namespace CesiumGEPROSM {
             }
         }
 
-        av->backColor = {0.0f, 0.0f, 0.0f};
-        if (frameIdx % 100 == 0) { printf("[GEPR] Frame %u, RenderList: %u\n", frameIdx, g_Tileset.renderListCount); fflush(stdout); }
+        av->backColor = {0.0f, 1.0f, 0.0f}; // Green Screen Protocol
         
         if (av->m_isRenderingOffscreen) {
-            float cColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
+            float cColor[] = {0.0f, 1.0f, 0.0f, 1.0f}; // Green Screen Offscreen
             float zero[] = {0.0f, 0.0f, 0.0f, 0.0f};
             glClearBufferfv(GL_COLOR, 0, cColor);
             glClearBufferfv(GL_COLOR, 1, zero);
             glClearBufferfv(GL_COLOR, 2, zero);
             glClearDepth(0.0f); glClear(GL_DEPTH_BUFFER_BIT);
 
-            glClearColor(0.0f, 0.0f, 0.0f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+            glClearColor(0.0f, 1.0f, 0.0f, 1.0f); glClearDepth(0.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_GEQUAL);
         }
 
-        glEnable(GL_CULL_FACE);
+        glDisable(GL_CULL_FACE); // ADVERSARIAL MANDATE: Prevent winding order culling
         int w, h; glfwGetFramebufferSize(av->window, &w, &h);
         M4 v = av->camera.getViewMatrix(), p = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 0.1f);
         float mvp[16]; for(int i=0;i<4;++i)for(int j=0;j<4;++j){mvp[i+j*4]=0;for(int k=0;k<4;++k)mvp[i+j*4]+=p.m[i+k*4]*v.m[k+j*4];}
@@ -1016,9 +1025,7 @@ namespace CesiumGEPROSM {
                         RenderResources* res = allocResource();
                         if (res && g_ScratchVbo && g_ScratchEbo) {
                             uint32_t vIdx=0, eIdx=0;
-                            DMat4 yup = {1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1};
-                            DMat4 mTransform = dmat4_mul(t->transform, yup);
-                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], mTransform, rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
                             for (uint32_t vIdx2 = 0; vIdx2 < vIdx; ++vIdx2) t->localAABB.expand({g_ScratchVbo[vIdx2*6+0], g_ScratchVbo[vIdx2*6+1], g_ScratchVbo[vIdx2*6+2]});
                             glGenVertexArrays(1, &res->vao); glBindVertexArray(res->vao);
                             glGenBuffers(1, &res->vbo); glBindBuffer(GL_ARRAY_BUFFER, res->vbo); glBufferData(GL_ARRAY_BUFFER, vIdx*6*4, g_ScratchVbo, GL_STATIC_DRAW);
@@ -1056,15 +1063,10 @@ namespace CesiumGEPROSM {
                 settledFrames = 0;
             }
 
-            if (frameIdx - g_StateFrameStart >= 1000 || (settledFrames > 60 && frameIdx - g_StateFrameStart > 100)) {
+            if (frameIdx - g_StateFrameStart >= 500 || (settledFrames > 2 && frameIdx - g_StateFrameStart > 5)) {
                 uint32_t activePayloads = 0; for(int i=0; i<PAYLOAD_POOL_SIZE; ++i) if(g_PayloadPool[i].inUse) activePayloads++;
                 uint32_t activeResources = 0; for(int i=0; i<RESOURCE_POOL_SIZE; ++i) if(g_ResourcePool[i].inUse) activeResources++;
                 printf("[GEPR] Frame %u, Depth: %u, RenderList: %u, Vertices: %llu, Payloads: %u/%d, Resources: %u/%d\n", frameIdx, g_MaxDepthReached, g_Tileset.renderListCount, g_TotalFrustumVertices, activePayloads, PAYLOAD_POOL_SIZE, activeResources, RESOURCE_POOL_SIZE);
-                for (uint32_t i=0; i<std::min((uint32_t)5, g_Tileset.renderListCount); ++i) {
-                    Tile* t = g_Tileset.renderList[i];
-                    AABB& b = t->localAABB.initialized ? t->localAABB : t->boundingAABB;
-                    printf("[GEPR] Tile %u (URI: %s) AABB: min(%f, %f, %f) max(%f, %f, %f)\n", i, (t->contentUri[0] != '\0') ? t->contentUri : "null", b.m_min.x, b.m_min.y, b.m_min.z, b.m_max.x, b.m_max.y, b.m_max.z);
-                }
                 if (g_Locations[g_CurrentLocationIndex].export_framebuffer) {
                     unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
                     stbi_flip_vertically_on_write(1); 
@@ -1138,9 +1140,7 @@ namespace CesiumGEPROSM {
                         cgltfSuccesses++;
                         if (g_ScratchVbo && g_ScratchEbo) {
                             uint32_t vIdx=0, eIdx=0;
-                            DMat4 yup = {1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1};
-                            DMat4 mTransform = dmat4_mul(t->transform, yup);
-                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], mTransform, rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
                             
                             uint32_t vCount = vIdx;
                             uint32_t eCount = eIdx;

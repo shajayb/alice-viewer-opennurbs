@@ -5,15 +5,16 @@
       "lat": 51.5138,
       "lon": -0.0984,
       "alt": 50.0,
-      "semantic_criteria": "A massive domed cathedral surrounded by dense central London architecture.",
-      "image_description": "highly detailed view of the dome of St Pauls",
+      "semantic_criteria": "The image is a high-angle, 3D architectural render of central London, with St. Paul's Cathedral prominently featured in the center. The scene is rendered using solid, untextured gray meshes with directional shading against a stark black background. St. Paul's Cathedral itself is rendered with a notably high Level of Detail (LOD). Its iconic architectural features are clearly defined, including the massive central dome with its ribbed structure, the lantern and cross at the peak, the distinct cross-shaped footprint of the nave and transepts, and the intricate twin towers (campaniles) on the western facade. In stark contrast, the surrounding urban fabric is rendered at a much lower LOD. The adjacent buildings are represented as simplistic, blocky, prismatic extrusions that capture the general massing and street layout but lack any specific architectural articulation or roof details. In the upper right quadrant, the River Thames is visible as a wide, black, un-rendered void winding through the dense cityscape.",
+      "image_description": "A high-angle view focusing on the central dome, lantern, transepts, and twin front campaniles of St Paul's Cathedral, rendered in smooth, highly-detailed solid gray geometry without wireframes. The detailed cathedral is surrounded by a dense urban context of simpler, blocky geometric building extrusions. The background is black, with the dark path of the River Thames visible cutting through the upper right of the sprawling cityscape.",
       "export_3dm": true,
       "export_framebuffer": true,
       "export_stencils": false,
       "load_gepr": false,
       "load_osm": true,
       "views": [
-        {"focusPoint": [0.0, 0.0, 50.0], "distance": 250.0, "pitch": 0.40, "yaw": 1.57}
+        {"focusPoint": [0.0, -40.0, 60.0], "distance": 450.0, "pitch": 0.55, "yaw": 4.2},
+        {"focusPoint": [0.0, 0.0, 40.0], "distance": 300.0, "pitch": 0.15, "yaw": 1.0}
       ]
     }
   ]

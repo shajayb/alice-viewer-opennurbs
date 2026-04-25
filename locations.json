@@ -11,11 +11,45 @@
       "export_3dm": true,
       "export_framebuffer": true,
       "export_stencils": true,
-      "load_gepr": false,
-      "load_osm": true,
+      "load_gepr": true,
+      "load_osm": false,
       "views": [
         {"focusPoint": [0.0, -40.0, 60.0], "distance": 450.0, "pitch": 0.55, "yaw": 4.2},
         {"focusPoint": [0.0, 0.0, 40.0], "distance": 300.0, "pitch": 0.15, "yaw": 1.0}
+      ]
+    },
+    {
+      "name": "Eiffel Tower, Paris",
+      "lat": 48.8584,
+      "lon": 2.2945,
+      "alt": 50.0,
+      "semantic_criteria": "A highly detailed, intricate lattice iron structure of the Eiffel Tower viewed from a high angle, rising above the surrounding Paris cityscape.",
+      "image_description": "PENDING SEMANTIC ANALYSIS",
+      "export_bin": false,
+      "export_3dm": true,
+      "export_framebuffer": true,
+      "export_stencils": true,
+      "load_gepr": true,
+      "load_osm": false,
+      "views": [
+        {"focusPoint": [0.0, 0.0, 100.0], "distance": 600.0, "pitch": 0.4, "yaw": 2.0}
+      ]
+    },
+    {
+      "name": "Light Benghazi, Benghazi",
+      "lat": 32.1167,
+      "lon": 20.0667,
+      "alt": 50.0,
+      "semantic_criteria": "A high-angle view of the urban layout and infrastructure in Benghazi, featuring dense architectural forms and potentially distinct local landmarks like the lighthouse.",
+      "image_description": "PENDING SEMANTIC ANALYSIS",
+      "export_bin": false,
+      "export_3dm": true,
+      "export_framebuffer": true,
+      "export_stencils": true,
+      "load_gepr": true,
+      "load_osm": false,
+      "views": [
+        {"focusPoint": [0.0, 0.0, 50.0], "distance": 400.0, "pitch": 0.5, "yaw": 1.5}
       ]
     }
   ]

@@ -1244,14 +1244,15 @@ namespace CesiumGEPROSM {
                 glDisable(GL_POLYGON_OFFSET_FILL);
             }
             if (g_CurrentState == STATE_LOAD_CACHED && frameIdx - g_StateFrameStart > 10) {
-                if (g_Locations[g_CurrentLocationIndex].export_framebuffer) {
+                if (g_Locations[g_CurrentLocationIndex].export_framebuffer && g_Locations[g_CurrentLocationIndex].export_bin) {
                     unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
                     stbi_flip_vertically_on_write(1); 
                     char path[256]; snprintf(path, 256, "build/bin/OUTPUT/GEPR_loc%d_view%d_cache_framebuffer.png", g_CurrentLocationIndex, g_CurrentViewIndex);
                     stbi_write_png(path, w, h, 3, px, w*3); free(px);
                 }
                 
-                if (g_Locations[g_CurrentLocationIndex].export_stencils) {
+                bool doStencils = g_Locations[g_CurrentLocationIndex].export_stencils && g_Locations[g_CurrentLocationIndex].export_bin;
+                if (doStencils) {
                     g_CurrentState = STATE_CACHED_STENCIL_WAIT; g_StateFrameStart = frameIdx;
                     char prefix[256]; snprintf(prefix, 256, "build/bin/OUTPUT/GEPR_loc%d_view%d_cache_stencil", g_CurrentLocationIndex, g_CurrentViewIndex);
                     av->captureHighResStencils(prefix);
@@ -1259,7 +1260,7 @@ namespace CesiumGEPROSM {
                     g_CurrentState = STATE_VERIFY; g_StateFrameStart = frameIdx;
                 }
                 
-                printf("[Test] View %d LOAD_CACHED Complete. Proceeding to %s.\n", g_CurrentViewIndex, g_Locations[g_CurrentLocationIndex].export_stencils ? "CACHED_STENCIL_WAIT" : "VERIFY"); fflush(stdout);
+                printf("[Test] View %d LOAD_CACHED Complete. Proceeding to %s.\n", g_CurrentViewIndex, doStencils ? "CACHED_STENCIL_WAIT" : "VERIFY"); fflush(stdout);
             }
         } 
         

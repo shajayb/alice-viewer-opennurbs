@@ -430,7 +430,7 @@ namespace CesiumGEPROSM {
             }
         }
 
-        int traverse(Tile* node, int depth) {
+        int traverse(Tile* node, int depth, bool parentRendering = false) {
             if (!node || depth > 100) return 1;
             node->lastAccessedFrame = g_FrameCount;
             if (depth > (int)g_MaxDepthReached) g_MaxDepthReached = (uint32_t)depth;
@@ -550,21 +550,35 @@ namespace CesiumGEPROSM {
             bool childrenLoaded = true;
             if (node->childrenCount > 0) {
                 for (uint32_t i = 0; i < node->childrenCount; ++i) {
-                    if (!node->children[i] || !node->children[i]->isLoaded) childrenLoaded = false;
+                    Tile* child = node->children[i];
+                    if (!child) { childrenLoaded = false; continue; }
+                    AABB testBoxChild = child->localAABB.initialized ? child->localAABB : child->boundingAABB;
+                    bool childVisible = (depth + 1 < 8) ? true : currentFrustum.intersects(testBoxChild);
+                    if (childVisible && !child->isLoaded) childrenLoaded = false;
                 }
             } else {
                 childrenLoaded = false;
             }
             node->isRefined = shouldRefine && childrenLoaded && (node->refineMode == 0);
 
-            if (node->isLoaded && node->payload && !node->isRefined) {
+            bool renderThisNode = false;
+            if (node->isLoaded && node->payload) {
+                if (node->refineMode == 0) {
+                    if (!parentRendering && !node->isRefined) renderThisNode = true;
+                } else {
+                    renderThisNode = true; // ADD mode
+                }
+            }
+
+            if (renderThisNode) {
                 if (renderListCount < renderListCapacity) renderList[renderListCount++] = node;
             }
 
             if (shouldRefine) {
                 int allHandled = 1;
+                bool passParentRendering = parentRendering || (renderThisNode && node->refineMode == 0);
                 for (uint32_t i = 0; i < node->childrenCount; ++i) {
-                    if (traverse(node->children[i], depth + 1) == 0) allHandled = 0;
+                    if (traverse(node->children[i], depth + 1, passParentRendering) == 0) allHandled = 0;
                 }
                 if (allHandled && node->refineMode == 0) return 1;
             }
@@ -830,27 +844,36 @@ namespace CesiumGEPROSM {
             "uniform mat4 uMVP;\n"
             "uniform mat4 uV;\n"
             "out vec3 vVP;\n"
+            "out vec3 vWorldPos;\n"
             "void main() {\n"
             "    vVP = (uV * vec4(p, 1.0)).xyz;\n"
+            "    vWorldPos = p;\n"
             "    gl_Position = uMVP * vec4(p, 1.0);\n"
             "}";
             
         const char* fs = 
             "#version 430 core\n"
-            "uniform int uPass;\n"
             "layout(location = 0) out vec4 f_Color;\n"
             "layout(location = 1) out vec4 f_Seg;\n"
             "layout(location = 2) out float f_Depth;\n"
             "in vec3 vVP;\n"
+            "in vec3 vWorldPos;\n"
             "void main() {\n"
-            "    vec3 N = normalize(cross(dFdx(vVP), dFdy(vVP)));\n"
+            "    vec3 N = cross(dFdx(vVP), dFdy(vVP));\n"
+            "    float len = length(N);\n"
+            "    if (len > 0.0001) N = N / len;\n"
+            "    else N = vec3(0.0, 0.0, 1.0);\n"
             "    if(!gl_FrontFacing) N = -N;\n"
-            "    float d = max(dot(N, normalize(vec3(0.3, 0.8, 0.4))), 0.2);\n"
-            "    f_Color = vec4(vec3(0.8) * d, 1.0);\n"
-            "    f_Seg = vec4(1.0, 1.0, 1.0, 1.0);\n"
+            "    float diffuse = max(dot(N, normalize(vec3(0.5, 0.8, 0.5))), 0.0);\n"
+            "    float height = clamp(vWorldPos.z / 150.0, 0.0, 1.0);\n"
+            "    vec3 baseColor = mix(vec3(0.4, 0.45, 0.5), vec3(0.85, 0.9, 0.95), height);\n"
+            "    vec3 color = baseColor * (0.5 + diffuse * 0.5);\n"
             "    float near = 0.1;\n"
             "    float far = 5000.0;\n"
             "    float dist = -vVP.z;\n"
+            "    float fog = clamp((dist - 1200.0) / 1000.0, 0.0, 1.0);\n"
+            "    f_Color = vec4(mix(color, vec3(0.8, 0.82, 0.85), fog), 1.0);\n"
+            "    f_Seg = vec4(1.0, 1.0, 1.0, 1.0);\n"
             "    f_Depth = clamp(1.0 - (dist - near) / (far - near), 0.0, 1.0);\n"
             "}";
             
@@ -1140,22 +1163,15 @@ namespace CesiumGEPROSM {
                     }
                 }
             }
-            GLint locPass = glGetUniformLocation(g_Program, "uPass");
-            for (int pass = 0; pass < 2; ++pass) {
-                if (pass == 0) { glPolygonMode(GL_FRONT_AND_BACK, GL_FILL); glUniform1i(locPass, 0); }
-                else { glEnable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(-1.0f, -1.0f); glPolygonMode(GL_FRONT_AND_BACK, GL_LINE); glUniform1i(locPass, 1); }
-                
-                for (uint32_t i=0; i<g_Tileset.renderListCount; ++i) {
-                    Tile* t = g_Tileset.renderList[i];
-                    if (t->rendererResources) { 
-                        glBindVertexArray(t->rendererResources->vao); 
-                        glDrawElements(GL_TRIANGLES, t->rendererResources->count, GL_UNSIGNED_INT, 0); 
-                        if (pass == 0) g_TotalFrustumVertices += (uint64_t)t->rendererResources->count; 
-                    }
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            for (uint32_t i=0; i<g_Tileset.renderListCount; ++i) {
+                Tile* t = g_Tileset.renderList[i];
+                if (t->rendererResources) { 
+                    glBindVertexArray(t->rendererResources->vao); 
+                    glDrawElements(GL_TRIANGLES, t->rendererResources->count, GL_UNSIGNED_INT, 0); 
+                    g_TotalFrustumVertices += (uint64_t)t->rendererResources->count; 
                 }
             }
-            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-            glDisable(GL_POLYGON_OFFSET_FILL);
 
 
             static int settledFrames = 0;

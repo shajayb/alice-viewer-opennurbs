@@ -74,3 +74,8 @@ A rigorous review of historical successful architectures (e.g. `anti_gravity_ces
 ### Trajectory 4: The Hard Horizon Cull (5KM Limit)
 - **The Issue:** Even with dynamic SSE, distant high-contrast geometry on the horizon can still trigger refinement, eating bandwidth.
 - **The Fix:** Implement a brute-force distance cull (e.g., `distToBox2 > 25000000.0f` for nodes deeper than depth 8) to explicitly prevent high-resolution textures from loading beyond 5 kilometers.
+
+### Trajectory 5: Display Improvement Tricks (Borrowed from Parallel Effort)
+A parallel architectural effort (`avon-ces-int-1`) successfully implemented two major visual fidelity improvements that surpass purely shader-based solutions:
+- **Dual-Pass `glPolygonOffset` Wireframe Overlay (`uPass`):** Rendering the geometry a second time with `GL_LINE` and a negative polygon offset pulls a highly precise, vector-like wireframe outline slightly forward in the depth buffer. This perfectly overlays a crisp CAD blueprint aesthetic over the solid geometry, maximizing architectural structural clarity.
+- **Explicit Pre-Transform Axis Normalization:** Implementing a strict coordinate swizzle (`sx = lp.x, sy = -lp.z, sz = lp.y`) inside `processNode` ensures a uniform Y-Up to Z-Up conversion *before* applying the local-to-world transform. This completely eliminates mismatched Up-axis bugs and guarantees a deterministic Z-up normal for downstream shader lighting and height gradients.

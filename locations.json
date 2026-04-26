@@ -5,7 +5,7 @@
       "lat": 51.5138,
       "lon": -0.0984,
       "alt": 50.0,
-      "semantic_criteria": "A wide-angle aerial render centering on St. Paul's Cathedral, distinctly showing its iconic dome and twin towers, while prominently featuring the sprawling surrounding urban context of London, including the adjacent street grids, neighboring building blocks, and the broader metropolitan layout.",
+      "semantic_criteria": "A grey, untextured 3D mesh rendering of London set against a bright green screen background, prominently featuring St. Paul's Cathedral in the center with its detailed dome and twin towers. The surrounding urban context is depicted as extruded low-poly block geometry with visible wireframe edges, including the Shard in the far left background, captured from a wide-angle aerial perspective.",
       "image_description": "PENDING SEMANTIC ANALYSIS",
       "export_bin": false,
       "export_3dm": false,

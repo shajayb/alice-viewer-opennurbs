@@ -449,6 +449,8 @@ namespace CesiumGEPROSM {
                 float dz = std::max(0.0f, std::max(testBox.m_min.z, -testBox.m_max.z));
                 float distToBox2 = dx*dx + dy*dy + dz*dz;
                 if (depth > 8 && distToBox2 > 25000000.0f) return 1; // HARD CULL BEYOND 5KM
+                float distToBox = sqrtf(distToBox2);
+                if (g_Locations[g_CurrentLocationIndex].load_gepr && distToBox > 10000.0f) return 1;
             }
             if (!visible) return 1;
 
@@ -464,7 +466,7 @@ namespace CesiumGEPROSM {
                 DMat4 vMat = {v_cam.m[0],v_cam.m[1],v_cam.m[2],v_cam.m[3],v_cam.m[4],v_cam.m[5],v_cam.m[6],v_cam.m[7],v_cam.m[8],v_cam.m[9],v_cam.m[10],v_cam.m[11],v_cam.m[12],v_cam.m[13],v_cam.m[14],v_cam.m[15]};
                 DVec4 viewPos = dmat4_mul_vec4(vMat, {bc.x, bc.y, bc.z, 1.0});
                 double distance = std::max(-viewPos.z, 1e-7);
-                M4 p_cam = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 0.1f);
+                M4 p_cam = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 2.0f);
                 DMat4 projMat = {p_cam.m[0],p_cam.m[1],p_cam.m[2],p_cam.m[3],p_cam.m[4],p_cam.m[5],p_cam.m[6],p_cam.m[7],p_cam.m[8],p_cam.m[9],p_cam.m[10],p_cam.m[11],p_cam.m[12],p_cam.m[13],p_cam.m[14],p_cam.m[15]};
                 DVec4 centerNdc = dmat4_mul_vec4(projMat, {0.0, 0.0, -distance, 1.0});
                 centerNdc.x /= centerNdc.w; centerNdc.y /= centerNdc.w; centerNdc.z /= centerNdc.w; centerNdc.w = 1.0;
@@ -473,23 +475,24 @@ namespace CesiumGEPROSM {
                 double ndcError = errorOffsetNdc.y - centerNdc.y;
                 sse = std::abs(ndcError) * h / 2.0;
 
-                double targetSSE = 16.0; // Base coarse detail for far surroundings
+                double targetSSE = 16.0; // Base coarse detail
                 if (testBox.initialized) {
-                    float dx = std::max(0.0f, std::max(testBox.m_min.x, -testBox.m_max.x));
-                    float dy = std::max(0.0f, std::max(testBox.m_min.y, -testBox.m_max.y));
-                    float dz = std::max(0.0f, std::max(testBox.m_min.z, -testBox.m_max.z));
-                    float distToBox = sqrtf(dx*dx + dy*dy + dz*dz);
-                    if (distToBox < 800.0f) targetSSE = 0.1; // Extreme architectural detail near the focus point
-                    else if (distToBox < 2000.0f) targetSSE = 0.5; // High detail for adjacent blocks
-                }
-                if (sse > targetSSE) shouldRefine = true;
-                if (!shouldRefine && node->contentUri[0] != '\0') {
-                    static int prints = 0;
-                    if (prints++ < 10) {
-                        printf("[Traverse Debug] Tile %s NOT refined. distToBox: %f, sse: %f, targetSSE: %f\n", node->contentUri, testBox.initialized ? sqrtf(std::max(0.0f, std::max(testBox.m_min.x, -testBox.m_max.x))*std::max(0.0f, std::max(testBox.m_min.x, -testBox.m_max.x)) + std::max(0.0f, std::max(testBox.m_min.y, -testBox.m_max.y))*std::max(0.0f, std::max(testBox.m_min.y, -testBox.m_max.y)) + std::max(0.0f, std::max(testBox.m_min.z, -testBox.m_max.z))*std::max(0.0f, std::max(testBox.m_min.z, -testBox.m_max.z))) : -1.0f, sse, targetSSE);
-                        printf("                 -> testBox min(%f, %f, %f) max(%f, %f, %f)\n", testBox.m_min.x, testBox.m_min.y, testBox.m_min.z, testBox.m_max.x, testBox.m_max.y, testBox.m_max.z);
+                    float dx = testBox.center().x;
+                    float dy = testBox.center().y;
+                    float dz = testBox.center().z;
+                    float distToOrigin = sqrtf(dx*dx + dy*dy + dz*dz);
+                    if (g_Locations[g_CurrentLocationIndex].load_gepr) {
+                        targetSSE = 8.0;
+                        if (distToOrigin < 2000.0f) targetSSE = 4.0;
+                        if (distToOrigin < 800.0f) targetSSE = 2.0;
+                        if (distToOrigin < 200.0f) targetSSE = 1.0;
+                        if (distToOrigin < 150.0f && depth < 20) shouldRefine = true;
+                    } else if (g_Locations[g_CurrentLocationIndex].load_osm) {
+                        if (distToOrigin < 800.0f) targetSSE = 0.1;
+                        else if (distToOrigin < 2000.0f) targetSSE = 0.5;
                     }
                 }
+                if (sse > targetSSE) shouldRefine = true;
             } else if (node->childrenCount > 0) {
                 shouldRefine = true;
             }
@@ -500,8 +503,9 @@ namespace CesiumGEPROSM {
             if (depth > 30) shouldRefine = false; // Safety clamp
 
             // Trigger fetch if not loaded
-            if (node->contentUri[0] != '\0' && !node->isLoaded && !node->isLoading) {
-                if (CesiumNetwork::g_AsyncRequests.size() < 128) {
+            bool skipFetch = shouldRefine && (node->childrenCount > 0);
+            if (!skipFetch && node->contentUri[0] != '\0' && !node->isLoaded && !node->isLoading) {
+                if (CesiumNetwork::g_AsyncRequests.size() < 256) {
                     node->isLoading = true;
                     char url[1024];
                     resolveUri(url, 1024, node->baseUrl, node->contentUri, apiKey, sessionToken, token);
@@ -570,8 +574,9 @@ namespace CesiumGEPROSM {
 
         void parseNode(Tile* tile, const AliceJson::JsonValue& jNode, DMat4 parentTransform, const char* currentBase, int depth, uint8_t parentRefineMode) {
             if (depth > 100) return;
-            memset(tile, 0, sizeof(Tile));
-            strncpy(tile->baseUrl, currentBase, 511); tile->baseUrl[511] = '\0';          tile->localAABB = AABB();
+            
+            strncpy(tile->baseUrl, currentBase, 511); tile->baseUrl[511] = '\0';
+            tile->localAABB = AABB();
             tile->boundingAABB = AABB();
             DMat4 localTransform = dmat4_identity();
             if (jNode.contains("transform")) {
@@ -586,9 +591,15 @@ namespace CesiumGEPROSM {
                 tile->geometricError = 0.0;
             }
             
+            if (depth == 0) {
+                printf("[RootDebug] Transform:\n");
+                for(int r=0; r<4; ++r) printf("  [%.4f %.4f %.4f %.4f]\n", tile->transform.m[r], tile->transform.m[r+4], tile->transform.m[r+8], tile->transform.m[r+12]);
+            }
+            
             if (jNode.contains("boundingVolume")) {
                 if (jNode["boundingVolume"].contains("region")) {
                     auto r = jNode["boundingVolume"]["region"];
+                    if (depth < 2) printf("[RegionDebug] depth %d: %.4f %.4f %.4f %.4f\n", depth, (double)r[0], (double)r[1], (double)r[2], (double)r[3]);
                     double west = (double)r[0], south = (double)r[1], east = (double)r[2], north = (double)r[3];
                     double minAlt = (double)r[4], maxAlt = (double)r[5];
                     // Roughly approximate region with corners
@@ -601,9 +612,17 @@ namespace CesiumGEPROSM {
                         float uz = (float)(g_EnuMatrix[8]*dx + g_EnuMatrix[9]*dy + g_EnuMatrix[10]*dz);
                         tile->boundingAABB.expand({ex, ny, uz});
                     }
+                    // Force AABB to include origin if region contains it
+                    double myLat = g_Locations[g_CurrentLocationIndex].lat * 0.0174532925;
+                    double myLon = g_Locations[g_CurrentLocationIndex].lon * 0.0174532925;
+                    if (myLat >= south && myLat <= north && myLon >= west && myLon <= east) {
+                        tile->boundingAABB.expand({0, 0, 0});
+                        if (depth < 4) printf("[RegionHit] depth %d contains London\n", depth);
+                    }
                 } else if (jNode["boundingVolume"].contains("box") || jNode["boundingVolume"].contains("sphere")) {
                     if (jNode["boundingVolume"].contains("box")) {
                         auto b = jNode["boundingVolume"]["box"];
+                        if (depth < 2) printf("[BoxDebug] depth %d center: %.1f %.1f %.1f\n", depth, (double)b[0], (double)b[1], (double)b[2]);
                         DVec3 center = {(double)b[0], (double)b[1], (double)b[2]};
                         DVec3 axes[3] = {{(double)b[3], (double)b[4], (double)b[5]}, {(double)b[6], (double)b[7], (double)b[8]}, {(double)b[9], (double)b[10], (double)b[11]}};
                         for (int i=0; i<8; ++i) {
@@ -826,8 +845,8 @@ namespace CesiumGEPROSM {
             "void main() {\n"
             "    vec3 N = normalize(cross(dFdx(vVP), dFdy(vVP)));\n"
             "    if(!gl_FrontFacing) N = -N;\n"
-            "    float d = max(dot(N, normalize(vec3(0.5, 0.8, 0.6))), 0.2);\n"
-            "    float h = clamp(vVP.z / 150.0, 0.0, 1.0); vec3 baseColor = mix(vec3(0.2, 0.6, 0.2), vec3(0.8, 0.3, 0.2), h); f_Color = vec4(baseColor * d, 1.0);\n"
+            "    float d = max(dot(N, normalize(vec3(0.3, 0.8, 0.4))), 0.2);\n"
+            "    f_Color = vec4(vec3(0.8) * d, 1.0);\n"
             "    f_Seg = vec4(1.0, 1.0, 1.0, 1.0);\n"
             "    float near = 0.1;\n"
             "    float far = 5000.0;\n"
@@ -840,7 +859,7 @@ namespace CesiumGEPROSM {
         g_Program=glCreateProgram(); glAttachShader(g_Program,v); glAttachShader(g_Program,f); glLinkProgram(g_Program);
     }
 
-    static void processNode(cgltf_node* node, const DMat4& tileTransform, const DMat4& gltfTransform, const DVec3& rtcCenter, float* vbo, uint32_t* ebo, uint32_t& vIdx, uint32_t& eIdx) {
+    static void processNode(cgltf_node* node, const DMat4& tileTransform, const DMat4& gltfTransform, const DVec3& rtcCenter, float* vbo, uint32_t* ebo, uint32_t& vIdx, uint32_t& eIdx, Tile* t, float distToBox) {
         DMat4 m = gltfTransform;
         if (node->has_matrix) { 
             DMat4 nm; for(int i=0;i<16;++i) nm.m[i] = (double)node->matrix[i]; 
@@ -857,22 +876,45 @@ namespace CesiumGEPROSM {
                 cgltf_accessor *pa=0; for (size_t k=0; k<p->attributes_count; ++k) if (p->attributes[k].type == cgltf_attribute_type_position) pa = p->attributes[k].data;
                 if (!pa) continue;
                 uint32_t offset = vIdx;
+                AABB nodeAABB;
                 for (size_t k=0; k<pa->count; ++k) {
                     float pos[3]; cgltf_accessor_read_float(pa, k, pos, 3);
                     DVec4 lp = dmat4_mul_vec4(m, {(double)pos[0], (double)pos[1], (double)pos[2], 1.0});
-                    // glTF is Y-Up by default, 3D Tiles is Z-Up.
-                    double up_x = lp.x;
-                    double up_y = -lp.z;
-                    double up_z = lp.y;
-                    
-                    DVec4 wp = dmat4_mul_vec4(tileTransform, {up_x + rtcCenter.x, up_y + rtcCenter.y, up_z + rtcCenter.z, 1.0});
+                    DVec4 wp = dmat4_mul_vec4(tileTransform, {lp.x + rtcCenter.x, -lp.z + rtcCenter.y, lp.y + rtcCenter.z, 1.0});
                     double dx = wp.x - g_OriginEcef.x, dy = wp.y - g_OriginEcef.y, dz = wp.z - g_OriginEcef.z;
                     float ex = (float)(g_EnuMatrix[0]*dx + g_EnuMatrix[1]*dy + g_EnuMatrix[2]*dz);
                     float ny = (float)(g_EnuMatrix[4]*dx + g_EnuMatrix[5]*dy + g_EnuMatrix[6]*dz);
                     float uz = (float)(g_EnuMatrix[8]*dx + g_EnuMatrix[9]*dy + g_EnuMatrix[10]*dz);
                     vbo[vIdx*6+0] = ex; vbo[vIdx*6+1] = ny; vbo[vIdx*6+2] = uz; 
                     vbo[vIdx*6+3] = 0.0f; vbo[vIdx*6+4] = 0.0f; vbo[vIdx*6+5] = 0.0f;
+                    nodeAABB.expand({ex, ny, uz});
+
+                    if (vIdx < 10 && distToBox < 5.0f) {
+                        printf("[VertexDebug] Tile %s, v[%d]: %.2f, %.2f, %.2f (RTC: %.2f, %.2f, %.2f)\n", 
+                               t->contentUri, vIdx, ex, ny, uz, rtcCenter.x, rtcCenter.y, rtcCenter.z);
+                    }
+
                     vIdx++;
+                }
+                if (vIdx > 0 && distToBox < 2.0f) {
+                    float pos[3]; cgltf_accessor_read_float(pa, 0, pos, 3);
+                    DVec4 lp = dmat4_mul_vec4(m, {(double)pos[0], (double)pos[1], (double)pos[2], 1.0});
+                    DVec4 wp = dmat4_mul_vec4(tileTransform, {lp.x + rtcCenter.x, -lp.z + rtcCenter.y, lp.y + rtcCenter.z, 1.0});
+                    double dx = wp.x - g_OriginEcef.x, dy = wp.y - g_OriginEcef.y, dz = wp.z - g_OriginEcef.z;
+                    float ex = (float)(g_EnuMatrix[0]*dx + g_EnuMatrix[1]*dy + g_EnuMatrix[2]*dz);
+                    float ny = (float)(g_EnuMatrix[4]*dx + g_EnuMatrix[5]*dy + g_EnuMatrix[6]*dz);
+                    float uz = (float)(g_EnuMatrix[8]*dx + g_EnuMatrix[9]*dy + g_EnuMatrix[10]*dz);
+                    printf("[CoordDebug] lp: %.2f,%.2f,%.2f | RTC: %.2f,%.2f,%.2f | wp: %.2f,%.2f,%.2f | Origin: %.2f,%.2f,%.2f | ENU: %.2f,%.2f,%.2f\n", 
+                           lp.x, lp.y, lp.z, rtcCenter.x, rtcCenter.y, rtcCenter.z, wp.x, wp.y, wp.z, g_OriginEcef.x, g_OriginEcef.y, g_OriginEcef.z, ex, ny, uz);
+                }
+                if (distToBox < 10.0f) {
+                    static char lastPrintedUri[512] = "";
+                    if (strcmp(lastPrintedUri, t->contentUri) != 0) {
+                        printf("[Metrics] Tile %s ENU AABB: min(%.2f, %.2f, %.2f) max(%.2f, %.2f, %.2f)\n",
+                               t->contentUri, nodeAABB.m_min.x, nodeAABB.m_min.y, nodeAABB.m_min.z,
+                               nodeAABB.m_max.x, nodeAABB.m_max.y, nodeAABB.m_max.z);
+                        strncpy(lastPrintedUri, t->contentUri, 511);
+                    }
                 }
                 if (p->type == cgltf_primitive_type_triangle_strip) {
                     size_t icount = p->indices ? p->indices->count : pa->count;
@@ -891,7 +933,7 @@ namespace CesiumGEPROSM {
                 }
             }
         }
-        for (size_t i=0; i<node->children_count; ++i) processNode(node->children[i], tileTransform, m, rtcCenter, vbo, ebo, vIdx, eIdx);
+        for (size_t i=0; i<node->children_count; ++i) processNode(node->children[i], tileTransform, m, rtcCenter, vbo, ebo, vIdx, eIdx, t, distToBox);
     }
 
     static void setup() {
@@ -941,7 +983,7 @@ namespace CesiumGEPROSM {
 
         // --- Frustum Extraction ---
         int w, h; glfwGetFramebufferSize(av->window, &w, &h);
-        M4 v = av->camera.getViewMatrix(), p = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 0.1f);
+        M4 v = av->camera.getViewMatrix(), p = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 2.0f);
         float mvp[16]; for(int i=0;i<4;++i)for(int j=0;j<4;++j){mvp[i+j*4]=0;for(int k=0;k<4;++k)mvp[i+j*4]+=p.m[i+k*4]*v.m[k+j*4];}
         
         Frustum& f = g_Tileset.currentFrustum;
@@ -949,8 +991,8 @@ namespace CesiumGEPROSM {
         f.planes[1] = {mvp[3]-mvp[0], mvp[7]-mvp[4], mvp[11]-mvp[8], mvp[15]-mvp[12]}; // Right
         f.planes[2] = {mvp[3]+mvp[1], mvp[7]+mvp[5], mvp[11]+mvp[9], mvp[15]+mvp[13]}; // Bottom
         f.planes[3] = {mvp[3]-mvp[1], mvp[7]-mvp[5], mvp[11]-mvp[9], mvp[15]-mvp[13]}; // Top
-        f.planes[4] = {mvp[3]+mvp[2], mvp[7]+mvp[6], mvp[11]+mvp[10], mvp[15]+mvp[14]}; // Near
-        f.planes[5] = {mvp[3]-mvp[2], mvp[7]-mvp[6], mvp[11]-mvp[10], mvp[15]-mvp[14]}; // Far
+        f.planes[4] = {mvp[3]-mvp[2], mvp[7]-mvp[6], mvp[11]-mvp[10], mvp[15]-mvp[14]}; // Near (z=w in NDC)
+        f.planes[5] = {mvp[2], mvp[6], mvp[10], mvp[14]}; // Far (z=0 in NDC)
         for(int i=0; i<6; ++i) f.planes[i].normalize();
 
         g_TilesLoadedThisFrame = 0;
@@ -974,10 +1016,10 @@ namespace CesiumGEPROSM {
             }
         }
 
-        av->backColor = {0.0f, 1.0f, 0.0f}; // Green Screen Protocol
+        av->backColor = {0.0f, 1.0f, 0.0f}; 
         
         if (av->m_isRenderingOffscreen) {
-            float cColor[] = {0.0f, 1.0f, 0.0f, 1.0f}; // Green Screen Offscreen
+            float cColor[] = {0.0f, 1.0f, 0.0f, 1.0f}; 
             float zero[] = {0.0f, 0.0f, 0.0f, 0.0f};
             glClearBufferfv(GL_COLOR, 0, cColor);
             glClearBufferfv(GL_COLOR, 1, zero);
@@ -991,8 +1033,23 @@ namespace CesiumGEPROSM {
 
         glDisable(GL_CULL_FACE); // ADVERSARIAL MANDATE: Prevent winding order culling
         int w, h; glfwGetFramebufferSize(av->window, &w, &h);
-        M4 v = av->camera.getViewMatrix(), p = AliceViewer::makeInfiniteReversedZProjRH(av->fov, (float)w/h, 0.1f);
-        float mvp[16]; for(int i=0;i<4;++i)for(int j=0;j<4;++j){mvp[i+j*4]=0;for(int k=0;k<4;++k)mvp[i+j*4]+=p.m[i+k*4]*v.m[k+j*4];}
+        
+        float fovRad = av->fov;
+        if (fovRad > 3.14159f) fovRad *= 0.0174532925f;
+
+        M4 v = av->camera.getViewMatrix(), p = AliceViewer::makeInfiniteReversedZProjRH(fovRad, (float)w/h, 2.0f);
+        float mvp[16]; 
+        for(int i=0;i<4;++i) for(int j=0;j<4;++j) {
+            mvp[i+j*4]=0; for(int k=0;k<4;++k) mvp[i+j*4] += p.m[i+k*4] * v.m[k+j*4];
+        }
+
+        static bool mvpLogged = false;
+        if (!mvpLogged) {
+            printf("[DrawDebug] MVP Matrix:\n");
+            for(int row=0; row<4; ++row) printf("  [%.4f %.4f %.4f %.4f]\n", mvp[row], mvp[row+4], mvp[row+8], mvp[row+12]);
+            mvpLogged = true;
+        }
+
         glUseProgram(g_Program); glUniformMatrix4fv(glGetUniformLocation(g_Program, "uMVP"), 1, 0, mvp);
         glUniformMatrix4fv(glGetUniformLocation(g_Program, "uV"), 1, 0, v.m);
         
@@ -1014,18 +1071,63 @@ namespace CesiumGEPROSM {
                             if (ft.contains("RTC_CENTER")) {
                                 auto rtc = ft["RTC_CENTER"];
                                 rtcCenter = {(double)rtc[0], (double)rtc[1], (double)rtc[2]};
-                                static bool loggedRtc = false; if (!loggedRtc) { printf("[GEPR] Parsed RTC_CENTER: %f, %f, %f\n", rtcCenter.x, rtcCenter.y, rtcCenter.z); loggedRtc = true; }
+                                static bool loggedRtc = false; if (!loggedRtc) { printf("[GEPR] Parsed B3DM RTC_CENTER: %f, %f, %f\n", rtcCenter.x, rtcCenter.y, rtcCenter.z); loggedRtc = true; }
                             }
+                            Alice::g_JsonArena.reset();
                         }
+                        
                         uint32_t headerLen = 28 + ftj + ftb + btj + btb;
                         if (headerLen < glbSize) { glbPayload += headerLen; glbSize -= headerLen; }
                     }
+
+                    // Robust GLB/JSON parsing for CESIUM_RTC
+                    const uint8_t* jsonPtr = nullptr;
+                    uint32_t jsonLen = 0;
+
+                    if (glbSize >= 20 && memcmp(glbPayload, "glTF", 4) == 0) {
+                        jsonLen = *(uint32_t*)(glbPayload + 12);
+                        jsonPtr = glbPayload + 20;
+                    } else if (glbSize > 0 && glbPayload[0] == '{') {
+                        jsonLen = (uint32_t)glbSize;
+                        jsonPtr = glbPayload;
+                    }
+
+                    if (jsonPtr && jsonLen > 0) {
+                        static bool loggedSearch = false;
+                        if (!loggedSearch) {
+                            const char* found = nullptr;
+                            for (uint32_t s = 0; s < jsonLen - 12; ++s) {
+                                if (strncmp((const char*)jsonPtr + s, "CESIUM_RTC", 10) == 0) { found = (const char*)jsonPtr + s; break; }
+                            }
+                            if (found) printf("[JSON_DEBUG] Found CESIUM_RTC at offset %td\n", found - (const char*)jsonPtr);
+                            else printf("[JSON_DEBUG] CESIUM_RTC NOT FOUND in JSON chunk of length %u. First 32 chars: %.32s\n", jsonLen, (const char*)jsonPtr);
+                            loggedSearch = true;
+                        }
+                        
+                        auto gj = AliceJson::parse(jsonPtr, jsonLen);
+                        if (gj.contains("extensions") && gj["extensions"].contains("CESIUM_RTC")) {
+                            auto rtc = gj["extensions"]["CESIUM_RTC"]["center"];
+                            rtcCenter.x += (double)rtc[0];
+                            rtcCenter.y += (double)rtc[1];
+                            rtcCenter.z += (double)rtc[2];
+                            static bool loggedRtc = false; if (!loggedRtc) { printf("[RTC_DEBUG] Extracted CESIUM_RTC: %f, %f, %f\n", rtcCenter.x, rtcCenter.y, rtcCenter.z); loggedRtc = true; }
+                        }
+                        Alice::g_JsonArena.reset();
+                    }
+
                     if (cgltf_parse(&opt, glbPayload, glbSize, &data) == cgltf_result_success) {
                         cgltf_load_buffers(&opt, data, 0);
                         RenderResources* res = allocResource();
                         if (res && g_ScratchVbo && g_ScratchEbo) {
                             uint32_t vIdx=0, eIdx=0;
-                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
+                            float distToBox = 0.0f;
+                            if (t->boundingAABB.initialized) {
+                                float dx = std::max(0.0f, std::max(t->boundingAABB.m_min.x, -t->boundingAABB.m_max.x));
+                                float dy = std::max(0.0f, std::max(t->boundingAABB.m_min.y, -t->boundingAABB.m_max.y));
+                                float dz = std::max(0.0f, std::max(t->boundingAABB.m_min.z, -t->boundingAABB.m_max.z));
+                                distToBox = sqrtf(dx*dx + dy*dy + dz*dz);
+                            }
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx, t, distToBox);
                             for (uint32_t vIdx2 = 0; vIdx2 < vIdx; ++vIdx2) t->localAABB.expand({g_ScratchVbo[vIdx2*6+0], g_ScratchVbo[vIdx2*6+1], g_ScratchVbo[vIdx2*6+2]});
                             glGenVertexArrays(1, &res->vao); glBindVertexArray(res->vao);
                             glGenBuffers(1, &res->vbo); glBindBuffer(GL_ARRAY_BUFFER, res->vbo); glBufferData(GL_ARRAY_BUFFER, vIdx*6*4, g_ScratchVbo, GL_STATIC_DRAW);
@@ -1068,10 +1170,18 @@ namespace CesiumGEPROSM {
                 uint32_t activeResources = 0; for(int i=0; i<RESOURCE_POOL_SIZE; ++i) if(g_ResourcePool[i].inUse) activeResources++;
                 printf("[GEPR] Frame %u, Depth: %u, RenderList: %u, Vertices: %llu, Payloads: %u/%d, Resources: %u/%d\n", frameIdx, g_MaxDepthReached, g_Tileset.renderListCount, g_TotalFrustumVertices, activePayloads, PAYLOAD_POOL_SIZE, activeResources, RESOURCE_POOL_SIZE);
                 if (g_Locations[g_CurrentLocationIndex].export_framebuffer) {
-                    unsigned char* px = (unsigned char*)malloc(w*h*3); glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
+                    unsigned char* px = (unsigned char*)malloc(w*h*3); 
+                    glReadPixels(0,0,w,h,GL_RGB,GL_UNSIGNED_BYTE,px);
+                    uint64_t nonGreen = 0;
+                    for (int i=0; i<w*h; ++i) {
+                        if (px[i*3+1] < 240 || px[i*3+0] > 10 || px[i*3+2] > 10) nonGreen++;
+                    }
+                    float coverage = (float)nonGreen / (w*h);
+                    printf("[Metrics] Pixel Coverage: %.2f%% (%llu pixels)\n", coverage * 100.0f, nonGreen);
                     stbi_flip_vertically_on_write(1); 
                     char path[256]; snprintf(path, 256, "build/bin/OUTPUT/GEPR_loc%d_view%d_stream_framebuffer.png", g_CurrentLocationIndex, g_CurrentViewIndex);
-                    stbi_write_png(path, w, h, 3, px, w*3); free(px);
+                    stbi_write_png(path, w, h, 3, px, w*3); 
+                    free(px);
                 }
                 
                 if (g_Locations[g_CurrentLocationIndex].export_stencils) {
@@ -1140,7 +1250,7 @@ namespace CesiumGEPROSM {
                         cgltfSuccesses++;
                         if (g_ScratchVbo && g_ScratchEbo) {
                             uint32_t vIdx=0, eIdx=0;
-                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx);
+                            if (data->scene) for (size_t k=0; k<data->scene->nodes_count; ++k) processNode(data->scene->nodes[k], t->transform, dmat4_identity(), rtcCenter, g_ScratchVbo, g_ScratchEbo, vIdx, eIdx, t, distToBox);
                             
                             uint32_t vCount = vIdx;
                             uint32_t eCount = eIdx;

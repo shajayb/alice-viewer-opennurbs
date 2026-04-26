@@ -677,6 +677,8 @@ int AliceViewer::init(int argc, char** argv)
     glDepthFunc(GL_GREATER);
     glClearDepth(0.0);
     glEnable(GL_MULTISAMPLE);
+    glEnable(GL_SAMPLE_SHADING);
+    glMinSampleShading(1.0f);
 
     glGenQueries(1, &timerQuery);
     glGenQueries(1, &resolveTimerQuery);

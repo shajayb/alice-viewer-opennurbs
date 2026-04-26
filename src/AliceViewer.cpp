@@ -662,9 +662,9 @@ int AliceViewer::init(int argc, char** argv)
             return 1;
         }
     }
-    glfwMakeContextCurrent(window); 
-    printf("[AliceViewer] Loading GLAD...\n"); fflush(stdout);
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(0); // Disable V-Sync for unlimited headless throughput
+    printf("[AliceViewer] Loading GLAD...\n"); fflush(stdout);    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
         printf("[FATAL] GLAD Loading Failed\n");
         return 1;

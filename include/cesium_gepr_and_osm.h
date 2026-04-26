@@ -9,8 +9,6 @@
 #include <cstring>
 #include <vector>
 #include <string>
-#include <memory>
-#include <optional>
 #include <cmath>
 #include <algorithm>
 #include <fstream>
@@ -637,17 +635,19 @@ namespace CesiumGEPROSM {
             }
 
             if (jNode.contains("content")) {
-                std::string uri;
-                if (jNode["content"].contains("uri")) uri = jNode["content"]["uri"].get<std::string>();
-                else if (jNode["content"].contains("url")) uri = jNode["content"]["url"].get<std::string>();
-                if (!uri.empty()) {
-                    strncpy(tile->contentUri, uri.c_str(), 511);
+                const char* uri = "";
+                if (jNode["content"].contains("uri")) uri = jNode["content"]["uri"].string.ptr;
+                else if (jNode["content"].contains("url")) uri = jNode["content"]["url"].string.ptr;
+                if (uri && uri[0] != '\0') {
+                    strncpy(tile->contentUri, uri, 511);
                     if (sessionToken[0] == '\0') {
-                        size_t sPos = uri.find("session=");
-                        if (sPos != std::string::npos) {
-                            size_t sEnd = uri.find('&', sPos);
-                            std::string sess = uri.substr(sPos + 8, sEnd == std::string::npos ? std::string::npos : sEnd - (sPos + 8));
-                            strncpy(sessionToken, sess.c_str(), 1023);
+                        const char* sPos = strstr(uri, "session=");
+                        if (sPos) {
+                            const char* sEnd = strchr(sPos, '&');
+                            size_t len = sEnd ? (size_t)(sEnd - (sPos + 8)) : strlen(sPos + 8);
+                            if (len > 1023) len = 1023;
+                            strncpy(sessionToken, sPos + 8, len);
+                            sessionToken[len] = '\0';
                         }
                     }
                 } else {
@@ -658,8 +658,8 @@ namespace CesiumGEPROSM {
             }
             
             if (jNode.contains("refine")) {
-                std::string ref = jNode["refine"].get<std::string>();
-                if (ref == "ADD") tile->refineMode = 1;
+                const char* ref = jNode["refine"].string.ptr;
+                if (ref && strcmp(ref, "ADD") == 0) tile->refineMode = 1;
                 else tile->refineMode = 0;
             } else {
                 tile->refineMode = parentRefineMode;
@@ -958,7 +958,17 @@ namespace CesiumGEPROSM {
         for(int i=0; i<6; ++i) f.planes[i].normalize();
 
         g_TilesLoadedThisFrame = 0;
-        g_Tileset.renderListCount = 0; if (g_Tileset.root) g_Tileset.traverse(g_Tileset.root, 0);
+        g_Tileset.renderListCount = 0; 
+        
+        if (g_Tileset.root) {
+            auto start = std::chrono::high_resolution_clock::now();
+            g_Tileset.traverse(g_Tileset.root, 0);
+            auto end = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double, std::milli> elapsed = end - start;
+            if (g_FrameCount % 100 == 0) {
+                printf("[Metrics] traverse() time: %.3f ms\n", elapsed.count());
+            }
+        }
     }
 
     static void draw() {
